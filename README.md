@@ -1,8 +1,9 @@
 # rosita — `rosita`
 
 **direnv for AI coding agents.** `rosita` detects your project & runtime
-context, selects a profile via rules, renders an agent-specific instruction
-overlay, writes it safely, and (optionally) launches the agent.
+context, composes reusable **capabilities** from every matching profile (with
+optional live, trust-gated environment output), renders an agent-specific
+instruction overlay, writes it safely, and (optionally) launches the agent.
 
 > The repository/project is **rosita**; the CLI command it builds is **`rosita`**.
 
@@ -54,13 +55,17 @@ rosita run claude            # render, then launch `claude` (passes args through
 | Command | What it does |
 | --- | --- |
 | `rosita init [--global] [--force]` | Scaffold `.rosita/` (config + templates); `--global` also seeds `~/.config/rosita`. |
-| `rosita detect [--json]` | Detect and print the current context. |
+| `rosita detect [--json] [--probes]` | Detect and print the current context; `--probes` also runs environment providers (host/toolchain/ai-tools/tailnet/docker). |
 | `rosita render [--agent <id>\|all] [--override] [--force]` | Render the overlay(s) and wire them up. |
 | `rosita run <id> [args…] [--skip-render] [--override]` | Render for a launchable agent, then exec it (args passed through). |
 | `rosita explain [--agent <id>\|all] [--json]` | Explain selection, matched rules, and the write plan. |
 | `rosita refresh [--agent <id>\|all] [--force]` | Re-render already-initialized overlays (no-op if context unchanged). |
 | `rosita clean [--agent <id>\|all]` | Remove rosita-generated overlays + managed blocks (never touches committed files). |
-| `rosita doctor` | Diagnose environment, config, agents, templates, and overlay freshness. |
+| `rosita doctor` | Diagnose environment, config, agents, templates, overlay freshness, and public-config leaks. |
+| `rosita capabilities [list\|show <id>] [--json]` | List the capability library (active ones marked), or show one in detail. |
+| `rosita profiles [--json]` | List profiles and which match the current context. |
+| `rosita agents [--json]` | List configured agents and how each delivers the overlay. |
+| `rosita allow` / `deny` / `trust` | Trust / untrust / show trust for this repo's `command`-backed capabilities. |
 
 `<id>` is an agent id — built-ins are `claude`, `codex`, `gemini`, `opencode`,
 `copilot`, `generic` (plus any you add via `[[agents]]`). `--agent` defaults to
@@ -80,40 +85,66 @@ variables.
 
 ## Configuration (layered)
 
-Built-in defaults ← global ← repo. Repo wins.
+Built-in defaults ← global `config.toml` ← global `local.toml` ← repo
+`config.toml` ← repo `local.toml` (later wins).
 
 - Global: `~/.config/rosita/config.toml` (honors `$XDG_CONFIG_HOME`, and
   `$ROSITA_CONFIG_DIR` for tests/isolation).
 - Repo: `.rosita/config.toml`.
+- **`local.toml`** (global and/or repo) is the **private**, gitignored layer —
+  real hostnames, `[host_classes]` globs, and `[capability_params.<id>]` values.
+  `config.toml` is public/shareable; `rosita doctor` flags machine-specific
+  literals that belong in `local.toml`.
 - Templates: `.rosita/templates/` then `~/.config/rosita/templates/` then
   the embedded defaults.
-- Generated overlays: `.rosita/generated/` (gitignored).
-- Audit log: `.rosita/logs/events.jsonl` (gitignored).
+- Generated overlays: `.rosita/generated/`, probe cache: `.rosita/cache/`,
+  audit log: `.rosita/logs/events.jsonl` (all gitignored).
 
-See [`examples/config.toml`](examples/config.toml) for an annotated config.
+See [`examples/config.toml`](examples/config.toml) and
+[`examples/local.toml`](examples/local.toml) for annotated configs.
 
-### Profiles & rules
+### Profiles & capabilities
 
-A profile matches when **all** its `when` clauses match (AND). Among matches,
-the highest `priority` wins (ties → declaration order). A profile with no
-clauses always matches and is the fallback — the built-in `default` profile.
+A **capability** is a reusable unit of guidance (`rust-conventions`,
+`infra-caution`, "be terse", …). **Profiles compose capabilities**: a profile
+matches when **all** its `when` clauses match (AND), and selection is
+**additive** — *every* matching profile contributes, its capabilities unioned
+(deduped by id, priority-ordered, `requires`-resolved, per-capability `when`
+filtered, `exclude` applied). An `exclusive` profile replaces rather than adds.
+Inline `guidance` still works (back-compat). Inspect with `rosita capabilities`
+/ `rosita profiles`.
 
 ```toml
+[[capabilities]]
+id = "house-style"
+guidance = "Run the formatter and the linter before every commit."
+
 [[profiles]]
 name = "infra"
 priority = 50
 when = [{ field = "path", op = "starts_with", value = "infra/" }]
-guidance = "Infrastructure code — prefer plans over direct mutation."
+capabilities = ["infra-caution", "house-style"]
 ```
 
-- **Fields:** `stack`, `language`, `package_manager`, `path` (cwd relative to
-  repo root), `branch`, `repo`, `host_class`, `os`, `arch`.
+- **Rule fields:** `stack`, `language`, `package_manager`, `path` (cwd relative
+  to repo root), `branch`, `repo`, `host_class`, `os`, `arch`.
 - **Ops:** `equals`, `starts_with`, `contains`, `matches` (regex).
-- **`host_class`** is derived from `[host_classes]` hostname globs, e.g.
-  `work = ["*.corp.example.com", "work-*"]` → match `host_class equals "work"`.
+- **`host_class`** is derived from `[host_classes]` hostname globs (define them
+  in `local.toml`), then matched via `host_class equals "work"`.
 
 Built-in profiles (`rust`, `nextjs`, `node`, `go`, `python`, `infra`,
-`experimental`, `default`) are always present and can be overridden by name.
+`experimental`, `default`) and a built-in capability library are always present
+and overridable by name/id.
+
+### Dynamic capabilities & providers
+
+A capability may embed **live** environment output via a built-in `provider`
+(`host`/`toolchain`/`ai-tools`/`tailnet`/`docker`) or a shell `command`
+(`{{ provider.output }}` / `{{ provider.data }}` in scope, cache-backed). Output
+is redacted, kept out of the context hash, and lands only in the gitignored
+overlay. A repo-authored `command` is **refused until you `rosita allow`** the
+repo (direnv-style trust, re-locked when the config changes); built-in providers
+and global-authored commands are always trusted.
 
 ### Templates
 

@@ -238,20 +238,29 @@ first), clippy+fmt clean.
   capability renders embedded output; command provider from global layer runs
   without `allow`.
 
-## Phase 5 — Introspection & polish
+## Phase 5 — Introspection & polish ✅ done
 
 - `rosita capabilities [list|show <id>]`, `rosita profiles list`, `rosita agents
   list` — print the resolved/active sets (great for debugging composition).
 - Update `examples/` with a capabilities-based config and a `local.toml` example.
 - Update these docs' status markers as phases land.
 
+**Status:** landed. `src/commands/introspect.rs` adds `rosita capabilities`
+(`list` default, `show <id>`), `rosita profiles`, and `rosita agents`, each with
+`--json`; all run the real config-load + detection + composition so they mark
+which capabilities are **active** and which profiles **match** the current
+context. `examples/config.toml` is capabilities-based (with commented dynamic +
+`host_classes`-in-local notes) and `examples/local.toml` ships the private-layer
+stub. Docs' status markers updated across all phases. 126 tests, clippy+fmt
+clean. **All five phases complete.**
+
 ## Cross-cutting conventions (keep)
 
 - Best-effort everywhere; never panic on missing tools/files.
 - Pure parsing in free functions with unit tests; integration via `tests/cli.rs`.
 - `cargo test && cargo clippy --all-targets && cargo fmt --check` before "done".
-- Conventional Commits; one logical commit per phase; work on `feat/rosita-mvp`
-  or a child branch (never `main`); don't push/PR unless asked.
+- Conventional Commits; one logical commit per phase. (Pre-release, this project
+  commits directly to `main`, no PR; there is no remote yet.)
 - Anything rosita derives is gitignored/local; committed instruction files are
   never auto-edited; dry-run touches nothing.
 

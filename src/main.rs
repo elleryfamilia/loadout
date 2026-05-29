@@ -34,6 +34,9 @@ fn main() -> ExitCode {
         Command::Allow => commands::trust::allow(&rt),
         Command::Deny => commands::trust::deny(&rt),
         Command::Trust(_) => commands::trust::status(&rt),
+        Command::Capabilities(args) => commands::introspect::capabilities(&rt, args),
+        Command::Profiles(args) => commands::introspect::profiles(&rt, args),
+        Command::Agents(args) => commands::introspect::agents(&rt, args),
     };
 
     match result {

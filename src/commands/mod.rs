@@ -9,6 +9,7 @@ pub mod detect;
 pub mod doctor;
 pub mod explain;
 pub mod init;
+pub mod introspect;
 pub mod refresh;
 pub mod render;
 pub mod run;

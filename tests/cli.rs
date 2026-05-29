@@ -751,3 +751,70 @@ fn explain_lists_active_capabilities() {
         .stdout(predicate::str::contains("rust-conventions"))
         .stdout(predicate::str::contains("baseline"));
 }
+
+#[test]
+fn capabilities_list_marks_active_and_shows_one() {
+    let fx = Fixture::new();
+    fx.rust_project();
+
+    // `list` (default): the built-in library, with rust-conventions active on a
+    // rust repo and an unreferenced built-in (terse-comms) present but inactive.
+    fx.cmd()
+        .arg("capabilities")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Capabilities ("))
+        .stdout(predicate::str::contains("● rust-conventions"))
+        .stdout(predicate::str::contains("· terse-comms"));
+
+    // `show <id>`: full details including active-via-profile.
+    fx.cmd()
+        .args(["capabilities", "show", "rust-conventions"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Capability: rust-conventions"))
+        .stdout(predicate::str::contains("via profile 'rust'"));
+
+    // Unknown id errors.
+    fx.cmd()
+        .args(["capabilities", "show", "nope"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown capability 'nope'"));
+
+    // JSON form.
+    fx.cmd()
+        .args(["capabilities", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"active\""))
+        .stdout(predicate::str::contains("\"rust-conventions\""));
+}
+
+#[test]
+fn profiles_list_marks_matching() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.cmd()
+        .arg("profiles")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Profiles ("))
+        // rust matches (→) on a rust repo; nextjs does not.
+        .stdout(predicate::str::contains("→ rust"))
+        .stdout(predicate::str::contains("capabilities: rust-conventions"));
+}
+
+#[test]
+fn agents_list_shows_delivery() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.cmd()
+        .arg("agents")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Agents ("))
+        .stdout(predicate::str::contains("claude"))
+        .stdout(predicate::str::contains("import → CLAUDE.local.md"))
+        .stdout(predicate::str::contains("emit-only"));
+}

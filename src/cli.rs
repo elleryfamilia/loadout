@@ -66,6 +66,51 @@ pub enum Command {
     Deny,
     /// Show this repo's trust status (`rosita trust [status]`).
     Trust(TrustArgs),
+    /// List capabilities, or show one (`rosita capabilities [list|show <id>]`).
+    Capabilities(CapabilitiesArgs),
+    /// List configured profiles and which match the current context.
+    Profiles(ProfilesArgs),
+    /// List configured agents and how each delivers the overlay.
+    Agents(AgentsArgs),
+}
+
+/// `capabilities` options.
+#[derive(Debug, Args)]
+pub struct CapabilitiesArgs {
+    /// `list` (default) or `show <id>`.
+    #[command(subcommand)]
+    pub action: Option<CapabilitiesAction>,
+    /// Emit JSON instead of a human summary.
+    #[arg(long, global = true)]
+    pub json: bool,
+}
+
+/// `capabilities` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum CapabilitiesAction {
+    /// List every capability in the library (the default).
+    List,
+    /// Show one capability's full details.
+    Show {
+        /// Capability id.
+        id: String,
+    },
+}
+
+/// `profiles` options.
+#[derive(Debug, Args)]
+pub struct ProfilesArgs {
+    /// Emit JSON instead of a human summary.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `agents` options.
+#[derive(Debug, Args)]
+pub struct AgentsArgs {
+    /// Emit JSON instead of a human summary.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// `trust` options.
