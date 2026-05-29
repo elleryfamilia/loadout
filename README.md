@@ -1,11 +1,9 @@
-# rosita — `rosita`
+# rosita
 
 **direnv for AI coding agents.** `rosita` detects your project & runtime
 context, composes reusable **capabilities** from every matching profile (with
 optional live, trust-gated environment output), renders an agent-specific
 instruction overlay, writes it safely, and (optionally) launches the agent.
-
-> The repository/project is **rosita**; the CLI command it builds is **`rosita`**.
 
 ```
 $ rosita render --agent claude
@@ -276,4 +274,6 @@ marker block, Codex override generation, redaction, and explain output.
 
 ## License
 
-MIT OR Apache-2.0.
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at
+your option. Unless you explicitly state otherwise, any contribution you submit
+for inclusion shall be dual-licensed as above, without additional terms.

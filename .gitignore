@@ -1,9 +1,11 @@
 # Rust build artifacts
 /target
 
-# agentctx-generated agent overlays (machine-specific, regenerated on demand)
-.agentctx/generated/
-.agentctx/logs/
+# rosita-derived, machine-specific artifacts (regenerated on demand)
+.rosita/generated/
+.rosita/cache/
+.rosita/logs/
+.rosita/local.toml
 
 # OS / editor noise
 .DS_Store
