@@ -11,38 +11,44 @@ stack, package manager, build/test/lint/run commands, OS/arch/host/user, the
 calling process, and an allowlisted+redacted slice of the environment. Detection
 is best-effort and degrades gracefully (e.g. outside a git repo).
 
-## Capabilities **(planned)**
+## Capabilities **(static implemented; dynamic planned)**
 
 A **capability** is one reusable, self-contained unit of guidance — e.g.
 "Rust conventions", "you may SSH within my tailnet", "be terse, lead with the
-result". Authored once, kept in a library, composed by profiles.
+result". Authored once, kept in a library (built-ins plus `[[capabilities]]`
+config entries, merged by id), composed by profiles.
 
 Two flavors:
-- **Static** — fixed, templated guidance text.
-- **Dynamic** — guidance computed at render time by a **provider** (a native
-  probe or an allowed command) whose live output is embedded. This is how rosita
-  natively answers "what machine/network am I on?" (see *Providers*).
+- **Static (implemented)** — fixed, templated guidance text.
+- **Dynamic (planned)** — guidance computed at render time by a **provider** (a
+  native probe or an allowed command) whose live output is embedded. This is how
+  rosita natively answers "what machine/network am I on?" (see *Providers*).
 
 Capabilities are parameterized (`params`), can self-gate (`when`), declare
-dependencies (`requires`), and carry `risk`/`tags` metadata. See
-[configuration](configuration.md#capabilities-planned).
+dependencies (`requires`), can be restricted to specific `agents`, and carry
+`risk`/`tags` metadata. Each renders as its own `###` section, annotated when its
+risk is not `Info`. See [configuration](configuration.md#capabilities-planned).
 
-## Profiles **(implemented; capability composition planned)**
+## Profiles **(implemented)**
 
-A **profile** maps context → guidance. It has `when` rules and (today) inline
-`guidance`; (planned) it instead lists `capabilities` to compose.
+A **profile** maps context → guidance. It has `when` rules and lists the
+`capabilities` it composes (inline `guidance` is still supported for back-compat
+— it becomes a `<profile>:inline` capability, rendered after the explicit ones).
 
 - **Rules** match context fields — `stack`, `language`, `package_manager`,
   `path` (cwd relative to repo root), `branch`, `repo`, `host_class`, `os`,
   `arch` — with ops `equals` / `starts_with` / `contains` / `matches` (regex).
   All clauses in a profile are AND-ed.
-- **Selection today** is single-winner: highest `priority` among matches wins
-  (the built-in `default` has empty rules and always matches as a fallback).
-- **Selection planned** is *additive*: every matching profile contributes; their
-  capabilities are unioned (deduped, priority-ordered), `requires` resolved,
-  per-capability `when` filtered, and `exclude` applied. An `exclusive` profile
-  can still replace rather than add. This is what lets "in `~` I get these, on
-  repo X these, on macOS these" *layer* instead of fight.
+- **Selection is additive**: every matching profile contributes; their
+  capabilities are unioned (deduped by id, priority-ordered, `requires` resolved
+  dependencies-first with cycle protection), each capability's own `when` is
+  filtered, and any selected profile's `exclude` is applied across the whole set.
+  An `exclusive` profile replaces rather than adds (the highest-priority
+  exclusive match wins alone). The built-in `default` has empty rules, always
+  matches, and contributes the `baseline` capability. The primary
+  (highest-priority) matching profile is the display/audit label. This is what
+  lets "in `~` I get these, on repo X these, on macOS these" *layer* instead of
+  fight.
 
 ## Providers (native environment discovery) **(planned)**
 

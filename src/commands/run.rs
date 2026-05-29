@@ -70,7 +70,7 @@ fn build_launch_args(
             out.push(format!(
                 "rosita: project context refreshed for profile '{}' at {rendered_at} — current. \
                  Run `rosita refresh` if the project changes mid-session.",
-                prep.selection.profile.name
+                prep.profile_label()
             ));
         }
     }

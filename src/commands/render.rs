@@ -7,7 +7,6 @@ use crate::adapters::{self, AppContext, ApplyOptions, ApplyResult};
 use crate::audit::{self, AuditEvent};
 use crate::cli::RenderArgs;
 use crate::hash;
-use crate::profile::Selection;
 use crate::warn_user;
 use crate::writer::AtomicWriter;
 
@@ -43,7 +42,7 @@ pub fn apply_for_agents(
             .ok_or_else(|| anyhow!("unknown agent '{agent}'"))?;
         let app = AppContext {
             context: &prep.context,
-            selection: &prep.selection,
+            composition: &prep.composition,
             config: &prep.config,
             generated_at: generated_at.clone(),
             writer: &writer,
@@ -55,10 +54,16 @@ pub fn apply_for_agents(
             let event = AuditEvent {
                 timestamp: generated_at.clone(),
                 agent: agent.clone(),
-                profile: prep.selection.profile.name.clone(),
+                profile: prep.profile_label().to_string(),
+                capabilities: prep
+                    .composition
+                    .capabilities
+                    .iter()
+                    .map(|c| c.capability.id.clone())
+                    .collect(),
                 stacks: prep.context.stacks.clone(),
                 files: result.files.clone(),
-                reasons: prep.selection.reasons.clone(),
+                reasons: prep.composition.reasons.clone(),
                 context_hash: result.context_hash.clone(),
                 dry_run: false,
             };
@@ -67,15 +72,14 @@ pub fn apply_for_agents(
             }
         }
 
-        print_result(agent, &prep.selection, &result);
+        print_result(agent, prep.profile_label(), &result);
     }
     Ok(())
 }
 
-fn print_result(agent: &str, selection: &Selection, result: &ApplyResult) {
+fn print_result(agent: &str, profile_label: &str, result: &ApplyResult) {
     println!(
-        "{agent}  ·  profile {}  ·  {}",
-        selection.profile.name,
+        "{agent}  ·  profile {profile_label}  ·  {}",
         hash::short(&result.context_hash)
     );
     for f in &result.files {

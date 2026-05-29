@@ -17,6 +17,7 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::AgentDescriptor;
+use crate::capability::Capability;
 use crate::profile::ProfileConfig;
 
 /// Fully-resolved configuration used by the rest of the program.
@@ -28,8 +29,10 @@ pub struct Config {
     pub env: EnvConfig,
     /// Codex-adapter knobs.
     pub codex: CodexConfig,
-    /// Profiles, evaluated in order with priority tie-breaking.
+    /// Profiles, composed additively against the detected context.
     pub profiles: Vec<ProfileConfig>,
+    /// Capability library (built-ins merged with `[[capabilities]]` by id).
+    pub capabilities: Vec<Capability>,
     /// Agent descriptors (built-ins merged with `[[agents]]` overrides by id).
     pub agents: Vec<AgentDescriptor>,
     /// hostname-glob → host class (e.g. `work`).
@@ -103,6 +106,8 @@ struct RawConfig {
     codex: Option<RawCodex>,
     #[serde(default)]
     profiles: Vec<ProfileConfig>,
+    #[serde(default)]
+    capabilities: Vec<Capability>,
     #[serde(default)]
     agents: Vec<AgentDescriptor>,
     #[serde(default)]
@@ -178,6 +183,13 @@ impl RawConfig {
                 None => self.profiles.push(p),
             }
         }
+        // Repo capabilities replace built-in/global ones of the same id.
+        for cap in other.capabilities {
+            match self.capabilities.iter_mut().find(|e| e.id == cap.id) {
+                Some(existing) => *existing = cap,
+                None => self.capabilities.push(cap),
+            }
+        }
         // Repo agent descriptors replace built-in/global ones of the same id.
         for a in other.agents {
             match self.agents.iter_mut().find(|e| e.id == a.id) {
@@ -204,6 +216,15 @@ impl RawConfig {
             }
         }
 
+        // Built-in capabilities form the base; user ones override by id.
+        let mut capabilities = crate::capability::builtin_capabilities();
+        for cap in self.capabilities {
+            match capabilities.iter_mut().find(|e| e.id == cap.id) {
+                Some(existing) => *existing = cap,
+                None => capabilities.push(cap),
+            }
+        }
+
         // Built-in agents form the base; user `[[agents]]` override by id.
         let mut agents = crate::adapters::builtin_agents();
         for a in self.agents {
@@ -227,6 +248,7 @@ impl RawConfig {
                 max_output_kib: codex.max_output_kib.unwrap_or(32),
             },
             profiles,
+            capabilities,
             agents,
             host_classes: self.host_classes,
             sources,
@@ -351,6 +373,45 @@ mod tests {
         // Built-in profiles are always present.
         assert!(c.profiles.iter().any(|p| p.name == "rust"));
         assert!(c.profiles.iter().any(|p| p.name == "default"));
+        // Built-in capabilities are always present.
+        assert!(c.capabilities.iter().any(|cap| cap.id == "baseline"));
+        assert!(c
+            .capabilities
+            .iter()
+            .any(|cap| cap.id == "rust-conventions"));
+    }
+
+    #[test]
+    fn user_capabilities_override_and_extend() {
+        let mut base = RawConfig::default();
+        let overlay: RawConfig = toml::from_str(
+            r#"
+            [[capabilities]]
+            id = "rust-conventions"
+            description = "Rust (custom)"
+            guidance = "my rust rules"
+
+            [[capabilities]]
+            id = "ssh-tailnet"
+            risk = "caution"
+            guidance = "you may ssh within my tailnet"
+            "#,
+        )
+        .unwrap();
+        base.merge(overlay);
+        let c = base.finalize(vec![]);
+
+        // Override replaced the built-in by id.
+        let rustc = c
+            .capabilities
+            .iter()
+            .find(|x| x.id == "rust-conventions")
+            .unwrap();
+        assert_eq!(rustc.guidance, "my rust rules");
+        // New capability was added.
+        assert!(c.capabilities.iter().any(|x| x.id == "ssh-tailnet"));
+        // Other built-ins survive.
+        assert!(c.capabilities.iter().any(|x| x.id == "baseline"));
     }
 
     #[test]

@@ -47,9 +47,17 @@ Implemented and tested (83 tests, clippy+fmt clean) on branch `feat/rosita-mvp`:
    excluded from the context hash, cached with TTL, re-probed on `rosita run`,
    graceful on missing tools.
 
-## Phase 1 — Capabilities (static) + additive composition
+## Phase 1 — Capabilities (static) + additive composition ✅ done
 
 **Goal:** profiles compose reusable static capabilities; selection becomes additive.
+
+**Status:** landed. `src/capability.rs` ships `Capability`/`Risk` +
+`builtin_capabilities()`; `profile::compose` → `Composition`/`ResolvedCapability`
+replaces single-winner `select`; built-in profiles reference capabilities;
+config merges `[[capabilities]]` by id; render emits one `###` section per
+capability (risk-annotated, agent-filtered, inline template-file override
+preserved); explain lists active capabilities with provenance; audit records the
+capability set. 102 tests, clippy+fmt clean.
 
 - New `src/capability.rs`:
   ```rust

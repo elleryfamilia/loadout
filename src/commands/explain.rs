@@ -32,10 +32,22 @@ struct ExplainReport {
     package_managers: Vec<String>,
     config_sources: Vec<String>,
     context_hash: String,
+    /// Primary (highest-priority) matching profile — the display label.
     selected_profile: String,
-    selection_reasons: Vec<String>,
+    /// All matching profiles that contributed, priority order.
+    matching_profiles: Vec<String>,
+    /// Active capabilities, in render order, with provenance.
+    capabilities: Vec<ActiveCapability>,
     considered: Vec<Considered>,
     plan: Vec<AgentPlan>,
+}
+
+#[derive(Serialize)]
+struct ActiveCapability {
+    id: String,
+    via_profile: String,
+    risk: crate::capability::Risk,
+    reason: String,
 }
 
 #[derive(Serialize)]
@@ -61,6 +73,7 @@ struct PlanFile {
 
 fn build_report(prep: &Prepared, agents: &[String]) -> crate::Result<ExplainReport> {
     let ctx = &prep.context;
+    let matching = &prep.composition.profiles;
 
     let considered = prep
         .config
@@ -72,9 +85,23 @@ fn build_report(prep: &Prepared, agents: &[String]) -> crate::Result<ExplainRepo
                 name: p.name.clone(),
                 priority: p.priority,
                 matched: reasons.is_some(),
-                selected: p.name == prep.selection.profile.name,
+                // Additive: every contributing profile is "selected"; a matched
+                // profile dropped by an exclusive winner is matched-not-selected.
+                selected: matching.contains(&p.name),
                 reasons: reasons.unwrap_or_default(),
             }
+        })
+        .collect();
+
+    let capabilities = prep
+        .composition
+        .capabilities
+        .iter()
+        .map(|rc| ActiveCapability {
+            id: rc.capability.id.clone(),
+            via_profile: rc.via_profile.clone(),
+            risk: rc.capability.risk,
+            reason: rc.reason.clone(),
         })
         .collect();
 
@@ -86,7 +113,7 @@ fn build_report(prep: &Prepared, agents: &[String]) -> crate::Result<ExplainRepo
         if let Some(descriptor) = adapters::descriptor(&prep.config, agent) {
             let app = AppContext {
                 context: ctx,
-                selection: &prep.selection,
+                composition: &prep.composition,
                 config: &prep.config,
                 generated_at: generated_at.clone(),
                 writer: &writer,
@@ -120,8 +147,9 @@ fn build_report(prep: &Prepared, agents: &[String]) -> crate::Result<ExplainRepo
             .map(|p| p.display().to_string())
             .collect(),
         context_hash: ctx.compute_hash(),
-        selected_profile: prep.selection.profile.name.clone(),
-        selection_reasons: prep.selection.reasons.clone(),
+        selected_profile: prep.profile_label().to_string(),
+        matching_profiles: matching.clone(),
+        capabilities,
         considered,
         plan,
     })
@@ -154,9 +182,24 @@ fn print_human(r: &ExplainReport) {
     }
 
     println!("\nProfile selection → {}", r.selected_profile);
-    for reason in &r.selection_reasons {
-        println!("  ✓ {reason}");
+    if r.matching_profiles.len() > 1 {
+        println!("  composing: {}", r.matching_profiles.join(" + "));
     }
+
+    println!("\nActive capabilities");
+    if r.capabilities.is_empty() {
+        println!("  (none)");
+    } else {
+        for c in &r.capabilities {
+            let risk = match c.risk.annotation() {
+                Some(a) => format!(" [{a}]"),
+                None => String::new(),
+            };
+            println!("  • {}{risk}", c.id);
+            println!("        {}", c.reason);
+        }
+    }
+
     println!("\nProfiles considered");
     for c in &r.considered {
         let mark = if c.selected {

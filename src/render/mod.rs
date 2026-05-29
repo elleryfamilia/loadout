@@ -1,9 +1,10 @@
-//! Template rendering: context + profile + template → a finished overlay.
+//! Template rendering: context + composed capabilities + template → an overlay.
 //!
 //! The low-level [`TemplateRenderer`] trait abstracts the engine (here
 //! minijinja). [`render`] is the high-level entry the adapters call: it resolves
-//! the base template, renders the profile guidance, prepends the generated
-//! header, and returns the content plus the context hash and provenance.
+//! the base template, renders each composed capability into the body, prepends
+//! the generated header, and returns the content plus the context hash and
+//! provenance.
 
 pub mod header;
 
@@ -12,9 +13,10 @@ use std::path::Path;
 use minijinja::{Environment, UndefinedBehavior, Value};
 use serde::Serialize;
 
+use crate::capability::Capability;
 use crate::config::{self, Config};
 use crate::context::Context;
-use crate::profile::Selection;
+use crate::profile::Composition;
 use crate::templates;
 
 /// Abstraction over a template engine.
@@ -53,9 +55,9 @@ pub struct RenderRequest<'a> {
     pub template_name: &'a str,
     /// Detected context.
     pub context: &'a Context,
-    /// Selected profile + reasons.
-    pub selection: &'a Selection,
-    /// Loaded config (for source provenance).
+    /// Composed capabilities + matching profiles.
+    pub composition: &'a Composition,
+    /// Loaded config (template overrides, source provenance).
     pub config: &'a Config,
     /// Injected generation timestamp (RFC3339) — passed in for testability.
     pub generated_at: String,
@@ -69,11 +71,12 @@ pub struct RenderOutput {
     pub context_hash: String,
     /// Where the base template came from.
     pub template_source: String,
-    /// Rendered profile guidance (may be empty).
+    /// Concatenated capability guidance (the `profile_guidance` body; may be
+    /// empty, e.g. when every capability is restricted to other agents).
     pub profile_guidance: String,
 }
 
-/// The serializable model exposed to templates.
+/// The serializable model exposed to the base overlay template.
 #[derive(Serialize)]
 struct RenderModel<'a> {
     agent: &'a str,
@@ -82,23 +85,35 @@ struct RenderModel<'a> {
     context: &'a Context,
 }
 
+/// The serializable model exposed to each capability's guidance template.
+#[derive(Serialize)]
+struct CapabilityModel<'a> {
+    agent: &'a str,
+    /// The profile that pulled this capability in.
+    profile: &'a str,
+    context: &'a Context,
+    capability: &'a Capability,
+    /// Convenience alias for `capability.params`.
+    params: &'a toml::Value,
+}
+
 /// Render an overlay for `req`.
 pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
     let renderer = MinijinjaRenderer::default();
-    let profile_name = req.selection.profile.name.as_str();
+    let profile_label = req.composition.label();
 
-    // 1. Resolve the base template (the override of template_name, if any).
-    let template_name = req
-        .selection
-        .profile
-        .template
-        .as_deref()
-        .unwrap_or(req.template_name);
+    // 1. Resolve the base template. The primary (highest-priority) matching
+    //    profile may override the template name.
+    let template_override = req
+        .composition
+        .primary_profile()
+        .and_then(|name| req.config.profiles.iter().find(|p| p.name == name))
+        .and_then(|p| p.template.as_deref());
+    let template_name = template_override.unwrap_or(req.template_name);
     let base = templates::resolve(&req.context.repo_base, template_name)?;
 
-    // 2. Render profile guidance (inline string, or profiles/<name>.md.j2 file).
-    let profile_guidance =
-        render_profile_guidance(&renderer, req.context, req.selection, req.agent)?;
+    // 2. Render the composed capabilities into the guidance body.
+    let profile_guidance = render_capabilities(&renderer, req.context, req.composition, req.agent)?;
 
     // 3. Context hash.
     let context_hash = req.context.compute_hash();
@@ -114,7 +129,7 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
         generated_at: &req.generated_at,
         host: &req.context.system.hostname,
         agent: req.agent,
-        profile: profile_name,
+        profile: profile_label,
         context_hash: &context_hash,
         template_source: &base.source,
         sources: &sources,
@@ -123,7 +138,7 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
     // 5. Body.
     let model = RenderModel {
         agent: req.agent,
-        profile: profile_name,
+        profile: profile_label,
         profile_guidance: &profile_guidance,
         context: req.context,
     };
@@ -138,33 +153,68 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
     })
 }
 
-/// Resolve + render the profile guidance. Inline config guidance wins; otherwise
-/// a `profiles/<name>.md.j2` file under repo/global templates is used.
-fn render_profile_guidance(
+/// Render each composed capability (in order) into a single guidance body.
+///
+/// Capabilities restricted to other agents are skipped (the active agent varies
+/// per render). Each capability becomes a `### <title>` section, annotated with
+/// its risk when not `Info`. A synthetic `<profile>:inline` capability can still
+/// be overridden by a `profiles/<name>.md.j2` template file (repo, then global).
+fn render_capabilities(
     renderer: &MinijinjaRenderer,
     ctx: &Context,
-    selection: &Selection,
+    composition: &Composition,
     agent: &str,
 ) -> crate::Result<String> {
-    // Precedence: a `profiles/<name>.md.j2` template file (repo, then global)
-    // wins over the inline `guidance` string — so dropping a file overrides
-    // both built-in and user-config inline guidance. Falls back to inline.
-    let raw = read_profile_template(&ctx.repo_base, &selection.profile.name)
-        .or_else(|| selection.profile.guidance.clone());
+    let mut sections: Vec<String> = Vec::new();
 
-    let Some(raw) = raw else {
-        return Ok(String::new());
-    };
+    for rc in &composition.capabilities {
+        let cap = &rc.capability;
+        if !cap.applies_to_agent(agent) {
+            continue;
+        }
 
-    // Render guidance with the same context, but no nested profile_guidance.
-    let model = RenderModel {
-        agent,
-        profile: &selection.profile.name,
-        profile_guidance: "",
-        context: ctx,
-    };
-    let value = Value::from_serialize(&model);
-    renderer.render_str(&raw, &value)
+        // Guidance source: an inline capability may be overridden by a
+        // `profiles/<name>.md.j2` file; otherwise the capability's own text.
+        let template_src = if rc.inline {
+            read_profile_template(&ctx.repo_base, &rc.via_profile)
+                .unwrap_or_else(|| cap.guidance.clone())
+        } else {
+            cap.guidance.clone()
+        };
+        if template_src.trim().is_empty() {
+            continue;
+        }
+
+        let model = CapabilityModel {
+            agent,
+            profile: &rc.via_profile,
+            context: ctx,
+            capability: cap,
+            params: &cap.params,
+        };
+        let rendered = renderer
+            .render_str(&template_src, &Value::from_serialize(&model))?
+            .trim()
+            .to_string();
+        if rendered.is_empty() {
+            continue;
+        }
+
+        // Inline capabilities are titled by their profile (their description is
+        // synthetic); named capabilities use their title.
+        let title = if rc.inline {
+            rc.via_profile.clone()
+        } else {
+            cap.title().to_string()
+        };
+        let heading = match cap.risk.annotation() {
+            Some(ann) => format!("### {title} — {ann}"),
+            None => format!("### {title}"),
+        };
+        sections.push(format!("{heading}\n\n{rendered}"));
+    }
+
+    Ok(sections.join("\n\n"))
 }
 
 fn read_profile_template(repo_base: &Path, profile: &str) -> Option<String> {
@@ -184,19 +234,38 @@ fn read_profile_template(repo_base: &Path, profile: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::{Capability, Risk};
     use crate::context::test_support::sample_context;
-    use crate::profile::ProfileConfig;
+    use crate::profile::ResolvedCapability;
 
-    fn selection(name: &str, guidance: Option<&str>) -> Selection {
-        Selection {
-            profile: ProfileConfig {
-                name: name.to_string(),
-                when: vec![],
-                priority: 0,
-                template: None,
-                guidance: guidance.map(String::from),
-            },
-            reasons: vec!["fallback".into()],
+    fn named_cap(id: &str, guidance: &str) -> Capability {
+        Capability {
+            id: id.into(),
+            description: Some(id.into()),
+            tags: vec![],
+            risk: Risk::Info,
+            when: vec![],
+            requires: vec![],
+            params: toml::Value::Table(Default::default()),
+            guidance: guidance.into(),
+            agents: vec![],
+        }
+    }
+
+    fn resolved(cap: Capability, via: &str, inline: bool) -> ResolvedCapability {
+        ResolvedCapability {
+            capability: cap,
+            via_profile: via.into(),
+            reason: "test".into(),
+            inline,
+        }
+    }
+
+    fn composition(profile: &str, caps: Vec<ResolvedCapability>) -> Composition {
+        Composition {
+            profiles: vec![profile.into()],
+            capabilities: caps,
+            reasons: vec![],
         }
     }
 
@@ -208,16 +277,23 @@ mod tests {
         ctx.package_managers = vec!["cargo".into()];
         ctx.commands.test = vec!["cargo test".into()];
         let cfg = Config::defaults();
-        let sel = selection(
+        let comp = composition(
             "rust",
-            Some("Use cargo for **{{ context.stacks | join(\",\") }}**."),
+            vec![resolved(
+                named_cap(
+                    "rust-conventions",
+                    "Use cargo for **{{ context.stacks | join(\",\") }}**.",
+                ),
+                "rust",
+                false,
+            )],
         );
 
         let out = render(&RenderRequest {
             agent: "claude",
             template_name: "claude",
             context: &ctx,
-            selection: &sel,
+            composition: &comp,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
         })
@@ -227,9 +303,63 @@ mod tests {
         assert!(out.content.contains("profile   : rust"));
         assert!(out.content.contains("Stack:** rust"));
         assert!(out.content.contains("`cargo test`"));
-        // Guidance template was itself rendered against the context.
+        // The capability appears under its own heading...
+        assert!(out.content.contains("### rust-conventions"));
+        // ...with its guidance template rendered against the context.
         assert!(out.content.contains("Use cargo for **rust**."));
         assert!(out.context_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn concatenates_capabilities_in_order_with_risk_annotation() {
+        let ctx = sample_context();
+        let cfg = Config::defaults();
+        let mut risky = named_cap("infra-caution", "Be careful.");
+        risky.risk = Risk::Caution;
+        let comp = composition(
+            "infra",
+            vec![
+                resolved(risky, "infra", false),
+                resolved(named_cap("baseline", "Keep it minimal."), "default", false),
+            ],
+        );
+        let out = render(&RenderRequest {
+            agent: "claude",
+            template_name: "claude",
+            context: &ctx,
+            composition: &comp,
+            config: &cfg,
+            generated_at: "2026-05-29T00:00:00Z".into(),
+        })
+        .unwrap();
+
+        // Risk is annotated on the caution capability only.
+        assert!(out.content.contains("### infra-caution — ⚠️ caution"));
+        assert!(out.content.contains("### baseline"));
+        // Order is preserved: infra before baseline.
+        assert!(out.content.find("infra-caution").unwrap() < out.content.find("baseline").unwrap());
+    }
+
+    #[test]
+    fn agent_restricted_capability_is_skipped() {
+        let ctx = sample_context();
+        let cfg = Config::defaults();
+        let mut only_codex = named_cap("codex-only", "Codex specifics.");
+        only_codex.agents = vec!["codex".into()];
+        let comp = composition("default", vec![resolved(only_codex, "default", false)]);
+
+        let out = render(&RenderRequest {
+            agent: "claude",
+            template_name: "claude",
+            context: &ctx,
+            composition: &comp,
+            config: &cfg,
+            generated_at: "2026-05-29T00:00:00Z".into(),
+        })
+        .unwrap();
+        // Restricted to codex → absent from a claude render's guidance.
+        assert!(!out.content.contains("Codex specifics."));
+        assert!(out.profile_guidance.is_empty());
     }
 
     #[test]
@@ -243,14 +373,19 @@ mod tests {
         ctx.repo_base = d.path().to_path_buf();
         ctx.cwd = d.path().to_path_buf();
         let cfg = Config::defaults();
-        // Inline guidance is present but the file must win.
-        let sel = selection("rust", Some("INLINE GUIDANCE"));
+        // An inline capability whose guidance must be overridden by the file.
+        let inline = resolved(
+            Capability::inline("rust", "INLINE GUIDANCE".into()),
+            "rust",
+            true,
+        );
+        let comp = composition("rust", vec![inline]);
 
         let out = render(&RenderRequest {
             agent: "claude",
             template_name: "claude",
             context: &ctx,
-            selection: &sel,
+            composition: &comp,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
         })
@@ -261,15 +396,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_guidance_renders_no_guidance_section() {
+    fn empty_composition_renders_no_guidance_section() {
         let ctx = sample_context();
         let cfg = Config::defaults();
-        let sel = selection("default", None);
+        let comp = composition("default", vec![]);
         let out = render(&RenderRequest {
             agent: "generic",
             template_name: "generic",
             context: &ctx,
-            selection: &sel,
+            composition: &comp,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
         })
@@ -282,12 +417,12 @@ mod tests {
         let mut ctx = sample_context();
         ctx.git = None; // exercise lenient undefined handling
         let cfg = Config::defaults();
-        let sel = selection("default", None);
+        let comp = composition("default", vec![]);
         let out = render(&RenderRequest {
             agent: "claude",
             template_name: "claude",
             context: &ctx,
-            selection: &sel,
+            composition: &comp,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
         })

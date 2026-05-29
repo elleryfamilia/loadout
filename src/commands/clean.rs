@@ -36,7 +36,7 @@ pub fn run(rt: &Runtime, args: &CleanArgs) -> crate::Result<()> {
             .ok_or_else(|| anyhow!("unknown agent '{agent}'"))?;
         let app = AppContext {
             context: &prep.context,
-            selection: &prep.selection,
+            composition: &prep.composition,
             config: &prep.config,
             generated_at: now_rfc3339(),
             writer: &writer,

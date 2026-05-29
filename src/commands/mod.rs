@@ -20,7 +20,7 @@ use anyhow::{bail, Context as _};
 use crate::adapters;
 use crate::config::Config;
 use crate::context::{self, Context};
-use crate::profile::{self, Selection};
+use crate::profile::{self, Composition};
 
 /// Per-invocation runtime settings derived from global args.
 pub struct Runtime {
@@ -37,7 +37,7 @@ impl Runtime {
     }
 }
 
-/// The result of config load + detection + selection.
+/// The result of config load + detection + composition.
 pub struct Prepared {
     /// Repo base (git root or cwd).
     pub repo_base: PathBuf,
@@ -45,22 +45,28 @@ pub struct Prepared {
     pub config: Config,
     /// Detected context.
     pub context: Context,
-    /// Selected profile.
-    pub selection: Selection,
+    /// Composed capabilities + matching profiles.
+    pub composition: Composition,
 }
 
-/// Load config, detect context, and select a profile for `rt`.
+impl Prepared {
+    /// The display/audit label for this render (primary matching profile).
+    pub fn profile_label(&self) -> &str {
+        self.composition.label()
+    }
+}
+
+/// Load config, detect context, and compose capabilities for `rt`.
 pub fn prepare(rt: &Runtime) -> crate::Result<Prepared> {
     let repo_base = context::repo_base_for(&rt.cwd);
     let config = Config::load(&repo_base).context("loading configuration")?;
     let context = context::detect_context(&rt.cwd, &config).context("detecting context")?;
-    let selection = profile::select(&context, &config.profiles)
-        .context("no profile matched (and no fallback profile is configured)")?;
+    let composition = profile::compose(&context, &config.profiles, &config.capabilities);
     Ok(Prepared {
         repo_base,
         config,
         context,
-        selection,
+        composition,
     })
 }
 

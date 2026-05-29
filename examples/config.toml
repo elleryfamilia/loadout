@@ -21,20 +21,40 @@ max_output_kib = 32
 [host_classes]
 work = ["*.corp.example.com", "work-*"]
 
+# Capabilities are reusable guidance atoms that profiles compose. Built-ins are
+# always present (e.g. baseline, rust-conventions, infra-caution, terse-comms,
+# conventional-commits); override one by id, or add your own. Fields:
+#   id (required); description, tags, risk (info|caution|dangerous),
+#   when (self-gate rules), requires (other capability ids), params (table),
+#   agents (restrict to specific agent ids), guidance (templated markdown).
+# Guidance is a minijinja template with { context, profile, capability, params,
+# agent } in scope.
+[[capabilities]]
+id = "house-style"
+description = "House style"
+tags = ["dev-workflow"]
+guidance = "Run the formatter and the linter before every commit."
+
 # Profiles override the built-ins by name; add your own freely.
-# A profile matches when ALL `when` clauses match (AND); highest priority wins.
+# A profile matches when ALL `when` clauses match (AND). Selection is ADDITIVE:
+# every matching profile contributes; their capabilities are unioned (deduped,
+# priority-ordered), `requires` resolved, per-capability `when` filtered, and
+# `exclude` applied. Set `exclusive = true` to replace rather than add.
 # Fields: stack | language | package_manager | path | branch | repo | host_class | os | arch
 # Ops:    equals | starts_with | contains | matches
 [[profiles]]
 name = "experimental"
 priority = 40
 when = [{ field = "branch", op = "starts_with", value = "experiment/" }]
-guidance = "Experimental branch — iterate fast and keep changes scoped here."
+# Compose reusable capabilities (preferred over inline guidance)…
+capabilities = ["experimental-iteration", "house-style"]
 
 [[profiles]]
 name = "infra"
 priority = 50
 when = [{ field = "path", op = "starts_with", value = "infra/" }]
+# …or keep inline `guidance` (back-compat); it renders as a `<profile>:inline`
+# capability after the explicit ones.
 guidance = "Infrastructure code — prefer plans over direct mutation; never touch shared/remote state without explicit confirmation."
 
 # Agents are built in (claude, codex, gemini, opencode, copilot, generic).

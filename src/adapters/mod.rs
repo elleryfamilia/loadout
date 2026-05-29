@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Config};
 use crate::context::Context;
-use crate::profile::Selection;
+use crate::profile::Composition;
 use crate::render::{self, header, RenderRequest};
 use crate::writer::{self, WriteAction, Writer, WrittenFile};
 
@@ -163,8 +163,8 @@ pub fn agent_ids(config: &Config) -> Vec<String> {
 pub struct AppContext<'a> {
     /// Detected context.
     pub context: &'a Context,
-    /// Selected profile + reasons.
-    pub selection: &'a Selection,
+    /// Composed capabilities + matching profiles.
+    pub composition: &'a Composition,
     /// Merged config.
     pub config: &'a Config,
     /// Injected RFC3339 timestamp.
@@ -404,7 +404,7 @@ fn render_overlay(d: &AgentDescriptor, app: &AppContext) -> crate::Result<render
         agent: &d.id,
         template_name: &d.template,
         context: app.context,
-        selection: app.selection,
+        composition: app.composition,
         config: app.config,
         generated_at: app.generated_at.clone(),
     })

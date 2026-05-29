@@ -459,3 +459,80 @@ fn custom_agent_via_config_is_first_class() {
         .stdout(predicate::str::contains("would exec: echo"))
         .stdout(predicate::str::contains("hello"));
 }
+
+#[test]
+fn additive_composition_layers_stack_and_baseline() {
+    // A plain Rust repo matches both `rust` and the always-on `default`, so the
+    // overlay composes the Rust capability *and* the baseline — they layer
+    // instead of the single highest-priority profile winning.
+    let fx = Fixture::new();
+    fx.rust_project();
+
+    fx.cmd()
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("profile rust"));
+
+    let overlay = fx.read(".rosita/generated/claude.md");
+    // Each capability is its own section…
+    assert!(overlay.contains("### Rust conventions"));
+    assert!(overlay.contains("### Baseline"));
+    // …and both bodies are present (rust + baseline guidance).
+    assert!(overlay.contains("clippy"));
+    assert!(overlay.contains("minimal, focused"));
+
+    // The audit log records the composed capability set.
+    let audit = fx.read(".rosita/logs/events.jsonl");
+    assert!(audit.contains("rust-conventions"));
+    assert!(audit.contains("baseline"));
+}
+
+#[test]
+fn user_capability_via_config_is_composed() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    // A reusable capability plus a profile that composes it — no code change.
+    fx.write(
+        ".rosita/config.toml",
+        "[[capabilities]]\n\
+         id = \"house-style\"\n\
+         description = \"House style\"\n\
+         risk = \"caution\"\n\
+         guidance = \"Always run the formatter before committing.\"\n\
+         \n\
+         [[profiles]]\n\
+         name = \"house\"\n\
+         priority = 60\n\
+         capabilities = [\"house-style\"]\n",
+    );
+
+    fx.cmd()
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .success();
+
+    let overlay = fx.read(".rosita/generated/claude.md");
+    // The custom capability renders with its risk annotation and body…
+    assert!(overlay.contains("### House style — ⚠️ caution"));
+    assert!(overlay.contains("Always run the formatter before committing."));
+    // …and still composes alongside the stack capability.
+    assert!(overlay.contains("### Rust conventions"));
+
+    let audit = fx.read(".rosita/logs/events.jsonl");
+    assert!(audit.contains("house-style"));
+}
+
+#[test]
+fn explain_lists_active_capabilities() {
+    let fx = Fixture::new();
+    fx.rust_project();
+
+    fx.cmd()
+        .arg("explain")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Active capabilities"))
+        .stdout(predicate::str::contains("rust-conventions"))
+        .stdout(predicate::str::contains("baseline"));
+}

@@ -7,9 +7,10 @@
 //! behaviour is fully unit/integration testable.
 //!
 //! ## Module map
-//! - [`context`]  — detect cwd/git/languages/stack/commands/system/env.
-//! - [`config`]   — layered TOML config (global + repo) and the merged model.
-//! - [`profile`]  — rule-based profile selection.
+//! - [`context`]    — detect cwd/git/languages/stack/commands/system/env.
+//! - [`config`]     — layered TOML config (global + repo) and the merged model.
+//! - [`capability`] — reusable guidance atoms composed by profiles.
+//! - [`profile`]    — rule-based profiles + additive capability composition.
 //! - [`render`]   — template rendering (minijinja) + generated header.
 //! - [`adapters`] — per-agent wiring (Claude / Codex / generic).
 //! - [`writer`]   — atomic file writes and managed marker-block upserts.
@@ -23,6 +24,7 @@
 
 pub mod adapters;
 pub mod audit;
+pub mod capability;
 pub mod cli;
 pub mod commands;
 pub mod config;
