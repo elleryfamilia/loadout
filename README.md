@@ -234,7 +234,8 @@ Full docs live in [`docs/`](docs/):
 
 - [Concepts](docs/concepts.md) · [Configuration](docs/configuration.md) ·
   [Security & trust](docs/security.md) — for consumers.
-- [Architecture](docs/architecture.md) · [Extending](docs/extending.md) — for devs.
+- [Architecture](docs/architecture.md) · [Extending](docs/extending.md) ·
+  [Testing](docs/testing.md) — for devs.
 - [Implementation plan](docs/implementation-plan.md) — the roadmap for
   capabilities, native environment providers, dynamic capabilities, and the
   public/private layer.
@@ -255,14 +256,18 @@ shell over it (see [docs/architecture.md](docs/architecture.md)).
 ## Testing
 
 ```bash
-cargo test       # unit + end-to-end CLI tests
+cargo test       # unit + end-to-end CLI tests (126)
 cargo clippy --all-targets
 cargo fmt --check
 ```
 
-Unit tests cover detection, rule matching, rendering, atomic writes, the Claude
-marker block, Codex override generation, redaction, and explain output.
-`tests/cli.rs` drives the real binary against temp repos.
+Unit tests cover detection, additive composition, capability-params merge, the
+providers' parsers, the cache TTL, trust, rendering, atomic writes, and
+redaction; `tests/cli.rs` drives the real binary against temp repos.
+
+For a hands-on, sandboxed walkthrough of every feature (composition, providers,
+dynamic capabilities, the trust gate, the leak lint, the freshness lifecycle),
+see **[docs/testing.md](docs/testing.md)**.
 
 ## Non-goals / future work
 
