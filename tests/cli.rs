@@ -883,3 +883,84 @@ fn agents_list_shows_delivery() {
         .stdout(predicate::str::contains("import → CLAUDE.local.md"))
         .stdout(predicate::str::contains("emit-only"));
 }
+
+/// Two profiles that both target the rust stack — an ambiguous selection.
+const TWO_RUST_PROFILES: &str = "[[capabilities]]\n\
+     id = \"ca\"\n\
+     description = \"Cap A\"\n\
+     guidance = \"AAA guidance\"\n\
+     \n\
+     [[capabilities]]\n\
+     id = \"cb\"\n\
+     description = \"Cap B\"\n\
+     guidance = \"BBB guidance\"\n\
+     \n\
+     [[profiles]]\n\
+     name = \"rust-a\"\n\
+     targets = [\"rust\"]\n\
+     capabilities = [\"ca\"]\n\
+     \n\
+     [[profiles]]\n\
+     name = \"rust-b\"\n\
+     targets = [\"rust\"]\n\
+     capabilities = [\"cb\"]\n";
+
+#[test]
+fn ambiguous_profiles_render_empty_and_warn() {
+    // 2 profiles match and nothing is remembered → non-interactive commands warn
+    // and apply no profile (empty overlay) rather than guessing.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.write(".rosita/config.toml", TWO_RUST_PROFILES);
+
+    fx.cmd()
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("profiles match this project"))
+        .stdout(predicate::str::contains("profile none"));
+
+    let overlay = fx.read(".rosita/generated/claude.md");
+    assert!(!overlay.contains("AAA guidance"));
+    assert!(!overlay.contains("BBB guidance"));
+}
+
+#[test]
+fn binding_in_local_toml_selects_profile_without_prompt() {
+    // A remembered choice in the repo's private local.toml resolves selection
+    // straight to that profile — no prompt, no ambiguity warning.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init(); // repo scope → binding is read from .rosita/local.toml
+    fx.write(".rosita/config.toml", TWO_RUST_PROFILES);
+    fx.write(".rosita/local.toml", "[binding]\nprofile = \"rust-b\"\n");
+
+    fx.cmd()
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("profile rust-b"))
+        .stderr(predicate::str::contains("profiles match").not());
+
+    let overlay = fx.read(".rosita/generated/claude.md");
+    assert!(overlay.contains("BBB guidance"));
+    assert!(!overlay.contains("AAA guidance"));
+}
+
+#[test]
+fn run_with_ambiguous_profiles_non_tty_falls_back_without_blocking() {
+    // The interactive `run` chooser must never block when there's no terminal
+    // (CI/piped): it warns and applies no profile instead of reading stdin.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.write(".rosita/config.toml", TWO_RUST_PROFILES);
+
+    fx.cmd()
+        .args(["--dry-run", "run", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("isn't an interactive terminal"))
+        .stdout(predicate::str::contains("would exec: claude"));
+}
