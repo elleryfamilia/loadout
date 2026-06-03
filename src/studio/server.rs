@@ -237,7 +237,7 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
     let base_context = context::detect_context(&rt.cwd, &config).context("detecting context")?;
     let global_dir = config::global_config_dir();
     let session = Session::open(&repo_base, global_dir.as_deref())?;
-    let token = make_token();
+    let token = make_token()?;
 
     let server = tiny_http::Server::http(("127.0.0.1", args.port))
         .map_err(|e| anyhow!("binding 127.0.0.1:{}: {e}", args.port))?;
@@ -310,22 +310,20 @@ fn respond(request: tiny_http::Request, resp: Resp) -> std::io::Result<()> {
     request.respond(response)
 }
 
-/// 256-bit session token: OS randomness when available, else a time/pid hash.
-fn make_token() -> String {
+/// A 256-bit session token from the OS CSPRNG (`/dev/urandom`).
+///
+/// Failure is **fatal** — the server refuses to start rather than ever minting a
+/// guessable token (no time/pid fallback). This token gates every request, so a
+/// predictable value would defeat the whole localhost auth model. rosita is
+/// unix-targeted (unix `exec`, `libc`); a Windows port would read its CSPRNG via
+/// `getrandom`/`OsRng` here instead.
+fn make_token() -> crate::Result<String> {
     let mut buf = [0u8; 32];
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        if f.read_exact(&mut buf).is_ok() {
-            return hex(&buf);
-        }
-    }
-    let seed = format!(
-        "{}-{:?}-rosita-studio",
-        std::process::id(),
-        std::time::SystemTime::now()
-    );
-    crate::hash::context_hash(&seed)
-        .trim_start_matches("sha256:")
-        .to_string()
+    let mut f = std::fs::File::open("/dev/urandom")
+        .context("opening /dev/urandom for the studio session token")?;
+    f.read_exact(&mut buf)
+        .context("reading /dev/urandom for the studio session token")?;
+    Ok(hex(&buf))
 }
 
 fn hex(bytes: &[u8]) -> String {
