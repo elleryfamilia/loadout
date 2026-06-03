@@ -81,7 +81,15 @@ pub fn resolve(
         }
         let key = format!("cmd-{}", cap.id);
         return Some(Resolution {
-            output: providers::run_command(command, repo_base, &key, ttl, now, live),
+            output: providers::run_command(
+                command,
+                cap.script_lang.as_deref(),
+                repo_base,
+                &key,
+                ttl,
+                now,
+                live,
+            ),
             skipped: None,
         });
     }

@@ -79,6 +79,10 @@ pub struct Capability {
     /// Human-readable summary; doubles as the rendered section heading.
     #[serde(default)]
     pub description: Option<String>,
+    /// Optional icon name from studio's curated set (e.g. `box`, `bolt`). Purely
+    /// cosmetic — surfaced in studio, never in the rendered overlay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Free-form tags for discovery (`comms`, `safety`, `dev-workflow`, …).
     #[serde(default)]
     pub tags: Vec<String>,
@@ -108,10 +112,14 @@ pub struct Capability {
     /// embedded. Always trusted (built-in probes are safe).
     #[serde(default)]
     pub provider: Option<String>,
-    /// Dynamic: a shell command whose (redacted) stdout is embedded.
-    /// Trust-gated when authored in a repo layer (see [`crate::trust`]).
+    /// Dynamic: a shell command (or script body) whose (redacted) stdout is
+    /// embedded. Trust-gated when authored in a repo layer (see [`crate::trust`]).
     #[serde(default)]
     pub command: Option<String>,
+    /// Interpreter for `command` when it is a script body: `bash`, `sh`, or
+    /// `python`. `None` runs `command` as a plain `sh -c` line (back-compat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_lang: Option<String>,
     /// Whether a `command`-backed capability is allowed to execute. Defaults to
     /// `true` (existing configs keep running); set `false` to disable a script
     /// without deleting it. Layered *on top of* repo trust — a command runs only
@@ -170,6 +178,8 @@ impl Capability {
             agents: Vec::new(),
             provider: None,
             command: None,
+            script_lang: None,
+            icon: None,
             allow_exec: true,
             cache: None,
             origin: Layer::default(),
@@ -202,6 +212,8 @@ pub fn palette() -> Vec<Capability> {
             agents: Vec::new(),
             provider: None,
             command: None,
+            script_lang: None,
+            icon: None,
             allow_exec: true,
             cache: None,
             origin: Layer::default(),

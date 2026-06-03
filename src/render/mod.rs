@@ -330,6 +330,8 @@ mod tests {
             agents: vec![],
             provider: None,
             command: None,
+            script_lang: None,
+            icon: None,
             allow_exec: true,
             cache: None,
             origin: crate::capability::Layer::default(),

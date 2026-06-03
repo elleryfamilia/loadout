@@ -107,10 +107,13 @@ pub fn probe_one(
     probe_provider(p.as_ref(), ctx, repo_base, ttl, now, live).unwrap_or(None)
 }
 
-/// Run a shell command (cached under `key`), embedding its redacted stdout.
-/// `live = false` serves only an existing cache entry and never executes.
+/// Run a shell command or script (cached under `key`), embedding its redacted
+/// stdout. `lang` picks the interpreter (`bash`/`sh`/`python`); `None` runs the
+/// command as a plain `sh -c` line. `live = false` serves only an existing cache
+/// entry and never executes.
 pub fn run_command(
     command: &str,
+    lang: Option<&str>,
     repo_base: &Path,
     key: &str,
     ttl: Duration,
@@ -118,9 +121,19 @@ pub fn run_command(
     live: bool,
 ) -> Option<ProviderOutput> {
     cached(repo_base, key, ttl, now, live, || {
-        Ok(Some(exec_command(command)))
+        Ok(Some(exec_command(command, lang)))
     })
     .unwrap_or(None)
+}
+
+/// The interpreter program + leading args for a script `lang` (or a plain
+/// `sh -c` shell line when `lang` is `None`/unrecognized).
+fn interpreter(lang: Option<&str>) -> (&'static str, &'static [&'static str]) {
+    match lang {
+        Some("bash") => ("bash", &["-c"]),
+        Some("python") => ("python3", &["-c"]),
+        _ => ("sh", &["-c"]),
+    }
 }
 
 /// A cache entry on disk.
@@ -209,11 +222,12 @@ fn sanitize_key(key: &str) -> String {
         .collect()
 }
 
-/// Run `sh -c <command>` and capture its output into a [`ProviderOutput`].
-/// stdout is preferred for `text`, falling back to stderr; the structured form
-/// keeps both plus the exit code.
-fn exec_command(command: &str) -> ProviderOutput {
-    match Command::new("sh").arg("-c").arg(command).output() {
+/// Run a command/script body under the chosen interpreter and capture its
+/// output into a [`ProviderOutput`]. stdout is preferred for `text`, falling
+/// back to stderr; the structured form keeps both plus the exit code.
+fn exec_command(command: &str, lang: Option<&str>) -> ProviderOutput {
+    let (program, args) = interpreter(lang);
+    match Command::new(program).args(args).arg(command).output() {
         Ok(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();

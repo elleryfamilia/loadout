@@ -26,7 +26,7 @@ use crate::context;
 use crate::studio::assets;
 use crate::studio::edit::{Session, StagedOp};
 use crate::studio::state::{
-    self, BindingState, OnboardingStage, PreviewOutcome, Simulated, StudioState,
+    self, BindingState, LibraryView, PreviewOutcome, Simulated, StudioState,
 };
 use crate::studio::views::{self, TrustBanner};
 use crate::trust;
@@ -126,24 +126,27 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     // 5. Dispatch.
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => handle_shell(state),
-        ("GET", "/welcome") => Resp::html(views::center_placeholder_fragment()),
-        ("GET", "/library") => handle_library(state),
-        ("POST", "/preview") => handle_preview(state, req),
+        ("GET", "/tab/profiles") => handle_tab(state, "profiles"),
+        ("GET", "/tab/capabilities") => handle_tab(state, "capabilities"),
+        ("GET", "/staged") => handle_staged(state),
+        ("GET", "/close") => Resp::html(String::new()),
         ("GET", "/fs-status") => handle_fs_status(state),
         ("GET", "/diff") => handle_diff(state),
         ("POST", "/apply") => handle_apply(state),
         ("POST", "/trust/allow") => handle_trust(state, true),
         ("POST", "/trust/deny") => handle_trust(state, false),
-        ("GET", "/capabilities/new") => Resp::html(views::capability_form(None, Layer::Repo, true)),
+        ("GET", "/capabilities/new") => Resp::html(views::cap_dialog(None, Layer::Repo, true)),
         ("POST", "/capabilities") => handle_cap_save(state, req),
         ("GET", "/profiles/new") => handle_profile_new(state),
         ("POST", "/profiles") => handle_profile_save(state, req),
+        ("POST", "/profiles/preview") => handle_editor_preview(state, req),
+        ("POST", "/profiles/draft") => handle_profile_draft(state, req),
         ("GET", p) if p.starts_with("/assets/") => match assets::get(p) {
             Some((body, ct)) => Resp::asset(body, ct),
             None => Resp::not_found(),
         },
-        (m, p) if p.starts_with("/capabilities/") => handle_cap_param(state, m, p),
-        (m, p) if p.starts_with("/profiles/") => handle_profile_param(state, m, p),
+        (_, p) if p.starts_with("/capabilities/") => handle_cap_param(state, req),
+        (_, p) if p.starts_with("/profiles/") => handle_profile_param(state, req),
         _ => Resp::not_found(),
     }
 }
@@ -157,69 +160,84 @@ fn id_and_action<'a>(path: &'a str, prefix: &str) -> (String, &'a str) {
     }
 }
 
-fn handle_cap_param(state: &Arc<Mutex<StudioState>>, method: &str, path: &str) -> Resp {
-    let (id, action) = id_and_action(path, "/capabilities/");
-    match (method, action) {
-        ("GET", "edit") => handle_cap_edit(state, &id),
+fn handle_cap_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+    let (id, action) = id_and_action(&req.path, "/capabilities/");
+    match (req.method.as_str(), action) {
+        ("GET", "edit") | ("GET", "view") => handle_cap_edit(state, &id),
         ("DELETE", "") => handle_cap_delete(state, &id),
         ("POST", "duplicate") => handle_cap_duplicate(state, &id),
         _ => Resp::not_found(),
     }
 }
 
-fn handle_profile_param(state: &Arc<Mutex<StudioState>>, method: &str, path: &str) -> Resp {
-    let (name, action) = id_and_action(path, "/profiles/");
-    match (method, action) {
+fn handle_profile_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+    let (name, action) = id_and_action(&req.path, "/profiles/");
+    match (req.method.as_str(), action) {
         ("GET", "edit") => handle_profile_edit(state, &name),
+        ("GET", "select") => handle_profile_select(state, &name),
+        ("GET", "preview") => handle_profile_preview(state, &name, ""),
+        ("POST", "preview") => {
+            let agent = field(&req.body, "agent");
+            handle_profile_preview(state, &name, &agent)
+        }
+        ("POST", "disable") => handle_profile_disable(state, &name),
         ("DELETE", "") => handle_profile_delete(state, &name),
         _ => Resp::not_found(),
     }
 }
 
+/// Read a single decoded form field from a urlencoded body.
+fn field(body: &str, key: &str) -> String {
+    state::parse_pairs(body)
+        .into_iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v)
+        .unwrap_or_default()
+}
+
 // --- handlers (snapshot under the lock, render outside it) -------------------
 
 fn handle_shell(state: &Arc<Mutex<StudioState>>) -> Resp {
-    let (snap, staged) = {
-        let s = state.lock().unwrap();
-        (s.snapshot(), s.session.ops().len())
-    };
-    let cfg = match state::staged_config(&snap) {
-        Ok(c) => c,
-        Err(e) => return Resp::html(views::error_page(&e.to_string())),
-    };
-    let agents: Vec<String> = cfg.agents.iter().map(|a| a.id.clone()).collect();
-    let lib = match state::library_view(&snap) {
-        Ok(l) => l,
-        Err(e) => return Resp::html(views::error_page(&e.to_string())),
-    };
-    // A render error surfaces inline (note), never a 500.
-    let preview = state::render_preview(&snap).unwrap_or_else(|e| PreviewOutcome {
-        agent: snap.sim.agent.clone(),
-        profile_label: "none".to_string(),
-        binding: BindingState::None,
-        context_summary: String::new(),
-        cap_count: 0,
-        overlay: String::new(),
-        note: Some(format!("preview error: {e}")),
-    });
-    let stage = OnboardingStage::of(&lib, &preview.binding);
-    Resp::html(views::shell(
-        &lib, staged, &snap.sim, &agents, &preview, stage,
-    ))
+    let (snap, staged) = snap_and_staged(state);
+    match state::library_view(&snap) {
+        Ok(lib) => Resp::html(views::shell(
+            views::profiles_tab(&lib, None, None),
+            staged,
+            "profiles",
+        )),
+        Err(e) => Resp::html(views::error_page(&e.to_string())),
+    }
 }
 
-fn handle_library(state: &Arc<Mutex<StudioState>>) -> Resp {
-    let (snap, staged) = {
-        let s = state.lock().unwrap();
-        (s.snapshot(), s.session.ops().len())
-    };
+/// Snapshot + staged-op count, taken together under the session lock.
+fn snap_and_staged(state: &Arc<Mutex<StudioState>>) -> (state::Snapshot, usize) {
+    let s = state.lock().unwrap();
+    (s.snapshot(), s.session.ops().len())
+}
+
+fn handle_tab(state: &Arc<Mutex<StudioState>>, tab: &str) -> Resp {
+    let snap = state.lock().unwrap().snapshot();
     match state::library_view(&snap) {
-        Ok(l) => Resp::html(views::library_fragment(&l, staged)),
+        Ok(lib) => Resp::html(match tab {
+            "capabilities" => views::capabilities_tab_fragment(&lib, None),
+            _ => views::profiles_tab_fragment(&lib, None, None),
+        }),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
-// --- write handlers (Slice 2) ------------------------------------------------
+fn handle_staged(state: &Arc<Mutex<StudioState>>) -> Resp {
+    let staged = state.lock().unwrap().session.ops().len();
+    Resp::html(views::staged_indicator_fragment(staged))
+}
+
+/// Build the library view from the current session (helper for result fragments).
+fn library_now(state: &Arc<Mutex<StudioState>>) -> crate::Result<LibraryView> {
+    let snap = state.lock().unwrap().snapshot();
+    state::library_view(&snap)
+}
+
+// --- capability handlers -----------------------------------------------------
 
 fn handle_cap_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let pairs = state::parse_pairs(&req.body);
@@ -247,8 +265,11 @@ fn handle_cap_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
             id: id.clone(),
             cap: Box::new(cap),
         });
-    match res {
-        Ok(()) => Resp::html(views::action_result(&format!("✓ staged capability “{id}”"))),
+    match res.and_then(|()| library_now(state)) {
+        Ok(lib) => Resp::html(views::cap_result(
+            &lib,
+            &format!("staged capability “{id}”"),
+        )),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
@@ -260,29 +281,35 @@ fn handle_cap_edit(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
     if let Some(c) = cfg.capabilities.iter().find(|c| c.id == id) {
-        Resp::html(views::capability_form(Some(c), c.origin, true))
+        Resp::html(views::cap_dialog(Some(c), c.origin, true))
     } else if let Some(c) = palette().into_iter().find(|c| c.id == id) {
-        Resp::html(views::capability_form(Some(&c), Layer::Repo, false))
+        Resp::html(views::cap_dialog(Some(&c), Layer::Repo, false))
     } else {
         Resp::html(views::error_fragment(&format!("unknown capability '{id}'")))
     }
 }
 
 fn handle_cap_delete(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
-    let mut s = state.lock().unwrap();
-    match s.session.capability_layer(id) {
-        Some(layer) => match s.session.stage(StagedOp::DeleteCapability {
-            layer,
-            id: id.to_string(),
-        }) {
-            Ok(()) => Resp::html(views::action_result(&format!(
-                "✓ staged deletion of “{id}”"
-            ))),
-            Err(e) => Resp::html(views::error_fragment(&e.to_string())),
-        },
-        None => Resp::html(views::error_fragment(&format!(
-            "“{id}” isn't in your library — palette items can't be deleted"
-        ))),
+    let res = {
+        let mut s = state.lock().unwrap();
+        match s.session.capability_layer(id) {
+            Some(layer) => s.session.stage(StagedOp::DeleteCapability {
+                layer,
+                id: id.to_string(),
+            }),
+            None => {
+                return Resp::html(views::error_fragment(&format!(
+                    "“{id}” isn't in your library — palette items can't be deleted"
+                )))
+            }
+        }
+    };
+    match res.and_then(|()| library_now(state)) {
+        Ok(lib) => Resp::html(views::cap_result(
+            &lib,
+            &format!("staged deletion of “{id}”"),
+        )),
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
@@ -295,29 +322,92 @@ fn handle_cap_duplicate(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
             id: id.to_string(),
             to_layer: Layer::Repo,
         });
-    match res {
-        Ok(()) => Resp::html(views::action_result(&format!(
-            "✓ duplicated “{id}” into your repo config — edit it from YOURS"
-        ))),
+    match res.and_then(|()| library_now(state)) {
+        Ok(lib) => Resp::html(views::cap_result(
+            &lib,
+            &format!("duplicated “{id}” into your library"),
+        )),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
+// --- profile handlers --------------------------------------------------------
+
 fn handle_profile_new(state: &Arc<Mutex<StudioState>>) -> Resp {
-    let texts = state.lock().unwrap().session.staged_layer_texts();
-    Resp::html(views::profile_form(None, &available_capabilities(texts)))
+    let snap = state.lock().unwrap().snapshot();
+    let lib = match state::library_view(&snap) {
+        Ok(l) => l,
+        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
+    };
+    let draft = state::draft_profile_from_form(&[]);
+    let preview = profile_preview_or_empty(&snap, &draft, "");
+    Resp::html(views::profile_editor(&draft, true, &lib, &preview))
 }
 
 fn handle_profile_edit(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
-    let texts = state.lock().unwrap().session.staged_layer_texts();
-    let available = available_capabilities(texts.clone());
-    let cfg = match Config::from_layer_strs(texts) {
+    let snap = state.lock().unwrap().snapshot();
+    let lib = match state::library_view(&snap) {
+        Ok(l) => l,
+        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
+    };
+    let cfg = match state::staged_config(&snap) {
         Ok(c) => c,
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
     match cfg.profiles.iter().find(|p| p.name == name) {
-        Some(p) => Resp::html(views::profile_form(Some(p), &available)),
+        Some(p) => {
+            let preview = profile_preview_or_empty(&snap, p, "");
+            Resp::html(views::profile_editor(p, false, &lib, &preview))
+        }
         None => Resp::html(views::error_fragment(&format!("unknown profile '{name}'"))),
+    }
+}
+
+fn handle_profile_select(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
+    let snap = state.lock().unwrap().snapshot();
+    match state::library_view(&snap) {
+        Ok(lib) => Resp::html(views::profiles_tab_fragment(&lib, Some(name), None)),
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
+    }
+}
+
+fn handle_profile_preview(state: &Arc<Mutex<StudioState>>, name: &str, agent: &str) -> Resp {
+    let snap = state.lock().unwrap().snapshot();
+    let agents = agent_ids(&snap);
+    match state::render_profile(&snap, name, agent) {
+        Ok(p) => Resp::html(views::profile_preview_fragment(&p, &agents, name)),
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
+    }
+}
+
+fn handle_profile_disable(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
+    let res = {
+        let mut s = state.lock().unwrap();
+        let snap = s.snapshot();
+        let cfg = match state::staged_config(&snap) {
+            Ok(c) => c,
+            Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
+        };
+        match cfg.profiles.iter().find(|p| p.name == name) {
+            Some(p) => {
+                let mut next = p.clone();
+                next.disabled = !next.disabled;
+                let layer = s.session.profile_layer(name).unwrap_or(Layer::Repo);
+                s.session.stage(StagedOp::EditProfile {
+                    layer,
+                    name: name.to_string(),
+                    profile: Box::new(next),
+                })
+            }
+            None => return Resp::html(views::error_fragment(&format!("unknown profile '{name}'"))),
+        }
+    };
+    match res.and_then(|()| library_now(state)) {
+        Ok(lib) => Resp::html(views::profile_result(
+            &lib,
+            &format!("toggled profile “{name}”"),
+        )),
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
@@ -327,33 +417,121 @@ fn handle_profile_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         Ok(p) => p,
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
-    let layer = state::layer_from_form(&pairs); // profiles are public; visibility absent → Repo/Global
     let name = profile.name.clone();
     let res = state.lock().unwrap().session.stage(StagedOp::EditProfile {
-        layer,
+        layer: Layer::Repo,
         name: name.clone(),
         profile: Box::new(profile),
     });
-    match res {
-        Ok(()) => Resp::html(views::action_result(&format!("✓ staged profile “{name}”"))),
+    match res.and_then(|()| library_now(state)) {
+        Ok(lib) => Resp::html(views::profile_result(
+            &lib,
+            &format!("staged profile “{name}”"),
+        )),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
-fn handle_profile_delete(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
-    let mut s = state.lock().unwrap();
-    match s.session.profile_layer(name) {
-        Some(layer) => match s.session.stage(StagedOp::DeleteProfile {
-            layer,
-            name: name.to_string(),
-        }) {
-            Ok(()) => Resp::html(views::action_result(&format!(
-                "✓ staged deletion of “{name}”"
-            ))),
-            Err(e) => Resp::html(views::error_fragment(&e.to_string())),
-        },
-        None => Resp::html(views::error_fragment(&format!("unknown profile '{name}'"))),
+/// Live preview for the editor (POST /profiles/preview) — composes the unsaved
+/// draft and renders it; never stages.
+fn handle_editor_preview(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+    let pairs = state::parse_pairs(&req.body);
+    let draft = state::draft_profile_from_form(&pairs);
+    let snap = state.lock().unwrap().snapshot();
+    match state::render_profile_config(&snap, &draft, "") {
+        Ok(p) => Resp::html(views::editor_preview_fragment(&p)),
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
+}
+
+/// Inline cap create from the profile editor (POST /profiles/draft): stage the
+/// new capability, then re-render the editor with the draft preserved and the
+/// new cap added + checked.
+fn handle_profile_draft(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+    let pairs = state::parse_pairs(&req.body);
+    let Some((cap, layer)) = state::inline_capability_from_form(&pairs) else {
+        return Resp::html(views::error_fragment(
+            "give the new capability a name before adding it",
+        ));
+    };
+    let new_id = cap.id.clone();
+    if let Err(e) = state
+        .lock()
+        .unwrap()
+        .session
+        .stage(StagedOp::EditCapability {
+            layer,
+            id: new_id.clone(),
+            cap: Box::new(cap),
+        })
+    {
+        return Resp::html(views::error_fragment(&e.to_string()));
+    }
+    // Re-render the editor preserving the in-progress profile + the new cap.
+    let snap = state.lock().unwrap().snapshot();
+    let lib = match state::library_view(&snap) {
+        Ok(l) => l,
+        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
+    };
+    let mut draft = state::draft_profile_from_form(&pairs);
+    if !draft.capabilities.iter().any(|r| r.id() == new_id) {
+        draft
+            .capabilities
+            .push(crate::profile::CapabilityRef::Id(new_id));
+    }
+    let is_new = state::parse_pairs(&req.body)
+        .iter()
+        .any(|(k, v)| k == "new" && v == "1");
+    let preview = profile_preview_or_empty(&snap, &draft, "");
+    Resp::html(format!(
+        "{}{}",
+        views::profile_editor(&draft, is_new, &lib, &preview),
+        views::staged_indicator_loader(),
+    ))
+}
+
+fn handle_profile_delete(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
+    let res = {
+        let mut s = state.lock().unwrap();
+        match s.session.profile_layer(name) {
+            Some(layer) => s.session.stage(StagedOp::DeleteProfile {
+                layer,
+                name: name.to_string(),
+            }),
+            None => return Resp::html(views::error_fragment(&format!("unknown profile '{name}'"))),
+        }
+    };
+    match res.and_then(|()| library_now(state)) {
+        Ok(lib) => Resp::html(views::profile_result(
+            &lib,
+            &format!("staged deletion of “{name}”"),
+        )),
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
+    }
+}
+
+/// Render a draft/profile for the editor preview, or an empty outcome on error.
+fn profile_preview_or_empty(
+    snap: &state::Snapshot,
+    profile: &crate::profile::ProfileConfig,
+    agent: &str,
+) -> PreviewOutcome {
+    state::render_profile_config(snap, profile, agent).unwrap_or_else(|e| PreviewOutcome {
+        agent: agent.to_string(),
+        profile_label: profile.name.clone(),
+        binding: BindingState::None,
+        context_summary: String::new(),
+        cap_count: 0,
+        overlay: String::new(),
+        note: Some(format!("preview error: {e}")),
+    })
+}
+
+/// The configured agent ids (for the preview agent picker).
+fn agent_ids(snap: &state::Snapshot) -> Vec<String> {
+    state::staged_config(snap)
+        .map(|cfg| cfg.agents.iter().map(|a| a.id.clone()).collect())
+        .unwrap_or_default()
 }
 
 fn handle_diff(state: &Arc<Mutex<StudioState>>) -> Resp {
@@ -398,10 +576,13 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
     // holding the lock across its (brief, small-file) I/O is correct here.
     let result = state.lock().unwrap().session.apply();
     match result {
-        Ok(written) => Resp::html(views::action_result(&format!(
-            "✓ applied {} file change(s) — command caps may need re-allowing",
-            written.len()
-        ))),
+        Ok(written) => match library_now(state) {
+            Ok(lib) => Resp::html(views::profile_result(
+                &lib,
+                &format!("applied {} file change(s)", written.len()),
+            )),
+            Err(e) => Resp::html(views::error_fragment(&e.to_string())),
+        },
         Err(e) => Resp::html(views::error_fragment(&format!("apply failed: {e}"))),
     }
 }
@@ -414,28 +595,10 @@ fn handle_trust(state: &Arc<Mutex<StudioState>>, allow: bool) -> Resp {
         trust::deny(&repo_base).map(|_| ())
     };
     match res {
-        Ok(()) => Resp::html(views::action_result(if allow {
-            "✓ repo trusted — its command capabilities can run"
-        } else {
-            "✓ trust revoked for this repo"
-        })),
+        // Re-render the review so the trust banner reflects the new state.
+        Ok(()) => handle_diff(state),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
-}
-
-/// Capability ids you can compose into a profile: your library plus palette
-/// items you haven't duplicated yet.
-fn available_capabilities(texts: Vec<(Layer, std::path::PathBuf, String)>) -> Vec<String> {
-    let mut ids: Vec<String> = Config::from_layer_strs(texts)
-        .map(|c| c.capabilities.iter().map(|c| c.id.clone()).collect())
-        .unwrap_or_default();
-    let owned: std::collections::HashSet<String> = ids.iter().cloned().collect();
-    for c in palette() {
-        if !owned.contains(&c.id) {
-            ids.push(c.id);
-        }
-    }
-    ids
 }
 
 fn trust_banner(cfg: &Config, repo_base: &std::path::Path) -> TrustBanner {
@@ -450,18 +613,6 @@ fn trust_banner(cfg: &Config, repo_base: &std::path::Path) -> TrustBanner {
         command_caps,
         status: status.label().to_string(),
         trusted: status == trust::Status::Trusted,
-    }
-}
-
-fn handle_preview(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
-    let snap = {
-        let mut s = state.lock().unwrap();
-        s.sim.update_from_form(&req.body);
-        s.snapshot()
-    };
-    match state::render_preview(&snap) {
-        Ok(p) => Resp::html(views::preview_fragment(&p)),
-        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
@@ -741,7 +892,9 @@ mod tests {
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("rosita studio"));
-        assert!(body.contains("Live overlay"));
+        // The shell renders the Profiles tab (dashboard) by default.
+        assert!(body.contains("Profiles"));
+        assert!(body.contains("Capabilities"));
     }
 
     #[test]
@@ -760,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_requires_origin_then_renders_selected_profile() {
+    fn profile_preview_renders_composed_overlay() {
         let cfg = "[[capabilities]]\n\
              id = \"rc\"\n\
              description = \"Rust conv\"\n\
@@ -773,36 +926,38 @@ mod tests {
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
-        // POST without Origin → CSRF guard rejects.
+        // The Profiles-tab preview composes + renders the named profile.
         let r = route(
             &st,
-            &req("POST", "/preview", "", &[HOST, COOKIE], "lang=rust"),
-        );
-        assert_eq!(r.status, 403);
-
-        // With Origin → renders the selected rust profile's overlay.
-        let r = route(
-            &st,
-            &req("POST", "/preview", "", &[HOST, COOKIE, ORIGIN], "lang=rust"),
+            &req("GET", "/profiles/rust/preview", "", &[HOST, COOKIE], ""),
         );
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("profile rust"));
-        assert!(body.contains("Use clippy here."));
+        assert!(body.contains("profile rust")); // binding chip
+        assert!(body.contains("Use clippy here.")); // composed guidance
+
+        // The agent-change POST is CSRF-guarded (no Origin → rejected).
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/profiles/rust/preview",
+                "",
+                &[HOST, COOKIE],
+                "agent=claude",
+            ),
+        );
+        assert_eq!(r.status, 403);
     }
 
     #[test]
-    fn preview_empty_when_no_profile_matches() {
+    fn profiles_tab_empty_state_when_none() {
         let d = rust_repo();
         let st = state_for(d.path(), None); // no profiles configured
-        let r = route(
-            &st,
-            &req("POST", "/preview", "", &[HOST, COOKIE, ORIGIN], "lang=rust"),
-        );
+        let r = route(&st, &req("GET", "/tab/profiles", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("profile none"));
-        assert!(body.contains("No profile applies"));
+        assert!(body.contains("No profiles yet"));
     }
 
     fn body_of(r: Resp) -> String {
@@ -960,18 +1115,18 @@ mod tests {
         assert!(owned.contains("Edit capability"));
         assert!(owned.contains("Stage change"));
 
-        // Palette cap → read-only with a duplicate action.
+        // Palette cap → read-only dialog with a duplicate action.
         let palette = body_of(route(
             &st,
             &req(
                 "GET",
-                "/capabilities/rust-conventions/edit",
+                "/capabilities/rust-conventions/view",
                 "",
                 &[HOST, COOKIE],
                 "",
             ),
         ));
-        assert!(palette.contains("read-only"));
+        assert!(palette.contains("Palette capability"));
         assert!(palette.contains("Duplicate"));
     }
 }

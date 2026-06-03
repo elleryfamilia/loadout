@@ -449,6 +449,9 @@ fn cap_table(c: &Capability) -> Result<Table> {
     if let Some(d) = &c.description {
         t["description"] = value(d.as_str());
     }
+    if let Some(ic) = &c.icon {
+        t["icon"] = value(ic.as_str());
+    }
     if !c.tags.is_empty() {
         t["tags"] = str_array(&c.tags);
     }
@@ -470,6 +473,9 @@ fn cap_table(c: &Capability) -> Result<Table> {
     }
     if let Some(cmd) = &c.command {
         t["command"] = value(cmd.as_str());
+    }
+    if let Some(lang) = &c.script_lang {
+        t["script_lang"] = value(lang.as_str());
     }
     // Only persist the off-switch; `allow_exec = true` is the default.
     if !c.allow_exec {
@@ -505,6 +511,9 @@ fn profile_table(p: &ProfileConfig) -> Result<Table> {
     }
     if let Some(g) = &p.guidance {
         t["guidance"] = value(g.as_str());
+    }
+    if p.disabled {
+        t["disabled"] = value(true);
     }
     Ok(t)
 }
@@ -576,6 +585,8 @@ mod tests {
             agents: vec![],
             provider: None,
             command: None,
+            script_lang: None,
+            icon: None,
             allow_exec: true,
             cache: None,
             origin: Layer::default(),
@@ -670,6 +681,7 @@ mod tests {
             capabilities: vec![crate::profile::CapabilityRef::Id("a".into())],
             template: None,
             guidance: None,
+            disabled: false,
         };
         s.stage(StagedOp::CreateProfile {
             layer: Layer::Repo,

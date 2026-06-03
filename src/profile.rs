@@ -52,6 +52,10 @@ pub struct ProfileConfig {
     /// capability appended after the explicit ones).
     #[serde(default)]
     pub guidance: Option<String>,
+    /// When `true`, the profile is never selected or composed (an off-switch that
+    /// keeps the definition around). Only serialized when set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
 }
 
 /// How a profile references a capability: a bare id, or an id with inline
@@ -213,10 +217,10 @@ pub fn select(ctx: &Context, profiles: &[ProfileConfig], binding: Option<&Bindin
         match b {
             Binding::None => return Selection::None,
             Binding::Profile(name) => {
-                if let Some(p) = profiles.iter().find(|p| &p.name == name) {
+                // A disabled bound profile is inert — fall through to re-selection.
+                if let Some(p) = profiles.iter().find(|p| &p.name == name && !p.disabled) {
                     return Selection::Use(p.clone());
                 }
-                // Bound profile no longer exists → fall through to re-selection.
             }
         }
     }
@@ -224,7 +228,7 @@ pub fn select(ctx: &Context, profiles: &[ProfileConfig], binding: Option<&Bindin
     let tags = ctx.selection_targets();
     let candidates: Vec<ProfileConfig> = profiles
         .iter()
-        .filter(|p| profile_matches_targets(p, &tags))
+        .filter(|p| !p.disabled && profile_matches_targets(p, &tags))
         .cloned()
         .collect();
 
@@ -451,6 +455,8 @@ mod tests {
             agents: vec![],
             provider: None,
             command: None,
+            script_lang: None,
+            icon: None,
             allow_exec: true,
             cache: None,
             origin: crate::capability::Layer::default(),
@@ -475,6 +481,7 @@ mod tests {
                 .collect(),
             template: None,
             guidance: None,
+            disabled: false,
         }
     }
 

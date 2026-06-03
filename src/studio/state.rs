@@ -13,7 +13,7 @@ use crate::capability::{palette, Capability, Layer, Risk};
 use crate::config::Config;
 use crate::context::{Context, GitContext, Scope};
 use crate::dynamic::DynamicMode;
-use crate::profile::{self, CapabilityRef, Composition, ProfileConfig, Selection};
+use crate::profile::{self, CapabilityRef, ProfileConfig, Selection};
 use crate::render::{self, RenderRequest};
 use crate::studio::edit::Session;
 
@@ -124,6 +124,12 @@ pub struct CapView {
     pub id: String,
     pub title: String,
     pub kind: &'static str,
+    /// Optional curated icon name.
+    pub icon: Option<String>,
+    /// Interpreter for a script cap (`bash`/`sh`/`python`); drives the badge.
+    pub script_lang: Option<String>,
+    /// True when authored in a `*local.toml` layer (private / gitignored).
+    pub private: bool,
     /// The capability's risk (drives the row's risk spine).
     pub risk: Risk,
     /// Composed into the current preview overlay.
@@ -156,38 +162,11 @@ pub struct ProfileView {
     pub targets: Vec<String>,
     pub selected: bool,
     pub candidate: bool,
+    /// When true the profile is an off-switch off (never selected/composed).
+    pub disabled: bool,
     pub capabilities: Vec<String>,
     /// Resolved composition atoms, in declared order (drives the card's dots).
     pub atoms: Vec<AtomDot>,
-}
-
-/// Where the user is in the capability→profile→bound pipeline. Drives the
-/// center welcome card and the library's empty-state copy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OnboardingStage {
-    /// No owned capabilities and no profiles yet.
-    Empty,
-    /// Owned capabilities exist, but no profile yet.
-    HasCaps,
-    /// Profiles exist, but none binds to the current context.
-    HasProfile,
-    /// A profile binds to the current simulated context.
-    Bound,
-}
-
-impl OnboardingStage {
-    /// Compute the stage from the library snapshot + the resolved binding.
-    pub fn of(lib: &LibraryView, binding: &BindingState) -> OnboardingStage {
-        if matches!(binding, BindingState::Bound(_)) {
-            OnboardingStage::Bound
-        } else if !lib.profiles.is_empty() {
-            OnboardingStage::HasProfile
-        } else if !lib.yours.is_empty() {
-            OnboardingStage::HasCaps
-        } else {
-            OnboardingStage::Empty
-        }
-    }
 }
 
 /// The whole left-pane library snapshot for a context.
@@ -233,45 +212,44 @@ pub fn select_for(cfg: &Config, ctx: &Context) -> Selection {
     profile::select(ctx, &cfg.profiles, binding.as_ref())
 }
 
-/// Render the overlay for the snapshot's simulated context in **ReadOnly** mode
-/// (never executes providers/commands). Selection drives which profile (if any)
-/// is composed.
-pub fn render_preview(snap: &Snapshot) -> crate::Result<PreviewOutcome> {
+/// Render a specific profile (by name) composed for `agent`, in ReadOnly mode.
+/// Drives the Profiles-tab preview pane.
+pub fn render_profile(
+    snap: &Snapshot,
+    profile_name: &str,
+    agent: &str,
+) -> crate::Result<PreviewOutcome> {
     let cfg = staged_config(snap)?;
-    let ctx = simulated_context(&snap.base_context, &snap.sim);
-    let selection = select_for(&cfg, &ctx);
+    let profile = cfg
+        .profiles
+        .iter()
+        .find(|p| p.name == profile_name)
+        .ok_or_else(|| anyhow::anyhow!("unknown profile '{profile_name}'"))?
+        .clone();
+    render_profile_config(snap, &profile, agent)
+}
 
-    let (composition, note) = match &selection {
-        Selection::Use(p) => (
-            profile::compose_profile(&ctx, p, &cfg.capabilities, &cfg.capability_params),
-            None,
-        ),
-        Selection::None => (
-            Composition::default(),
-            Some("No profile applies to this context — the overlay is empty.".to_string()),
-        ),
-        Selection::Ambiguous(cands) => {
-            let names: Vec<&str> = cands.iter().map(|p| p.name.as_str()).collect();
-            (
-                Composition::default(),
-                Some(format!(
-                    "{} profiles match ({}). Pick one with `rosita run` to bind it.",
-                    cands.len(),
-                    names.join(", ")
-                )),
-            )
-        }
-    };
+/// Render an arbitrary (possibly unsaved/draft) profile composed for `agent`.
+/// The context is synthesized from the profile's own targets so its capabilities
+/// gate as intended. Used by the Profiles-tab preview and the editor's live draft.
+pub fn render_profile_config(
+    snap: &Snapshot,
+    profile: &ProfileConfig,
+    agent: &str,
+) -> crate::Result<PreviewOutcome> {
+    let cfg = staged_config(snap)?;
+    let ctx = context_for_profile(&snap.base_context, profile);
+    let composition =
+        profile::compose_profile(&ctx, profile, &cfg.capabilities, &cfg.capability_params);
 
-    let agent_id = if snap.sim.agent.is_empty() {
+    let agent_id = if agent.is_empty() {
         cfg.default_agent.clone()
     } else {
-        snap.sim.agent.clone()
+        agent.to_string()
     };
     let descriptor = adapters::descriptor(&cfg, &agent_id)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("unknown agent '{agent_id}'"))?;
-
     let out = render::render(&RenderRequest {
         agent: &descriptor.id,
         template_name: &descriptor.template,
@@ -281,29 +259,43 @@ pub fn render_preview(snap: &Snapshot) -> crate::Result<PreviewOutcome> {
         generated_at: now_rfc3339(),
         dynamic: DynamicMode::ReadOnly,
     })?;
-
-    let binding = match &selection {
-        Selection::Use(p) => BindingState::Bound(p.name.clone()),
-        Selection::None => BindingState::None,
-        Selection::Ambiguous(cands) => BindingState::Ambiguous(cands.len()),
-    };
-    // Count only the caps that actually render for this agent (matches the
-    // renderer's own `applies_to_agent` gate) so the breadcrumb never overstates.
     let cap_count = composition
         .capabilities
         .iter()
         .filter(|rc| rc.capability.applies_to_agent(&agent_id))
         .count();
-
     Ok(PreviewOutcome {
         agent: agent_id,
-        profile_label: composition.label().to_string(),
-        binding,
+        profile_label: profile.name.clone(),
+        binding: if profile.disabled {
+            BindingState::None
+        } else {
+            BindingState::Bound(profile.name.clone())
+        },
         context_summary: context_summary(&ctx),
         cap_count,
         overlay: out.content,
-        note,
+        note: profile
+            .disabled
+            .then(|| "This profile is disabled — it won't be selected in real runs.".to_string()),
     })
+}
+
+/// Synthesize a context from a profile's targets so its capabilities gate as
+/// intended when previewed (a `machine`-only profile previews as machine scope).
+fn context_for_profile(base: &Context, profile: &ProfileConfig) -> Context {
+    let mut ctx = base.clone();
+    ctx.stacks = profile
+        .targets
+        .iter()
+        .filter(|t| t.as_str() != "machine")
+        .cloned()
+        .collect();
+    if profile.targets.len() == 1 && profile.targets.first().map(String::as_str) == Some("machine")
+    {
+        ctx.git = None;
+    }
+    ctx
 }
 
 /// A short human summary of a (simulated) context for the provenance
@@ -348,6 +340,9 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
             active: active_ids.contains(&c.id),
             title: c.title().to_string(),
+            icon: c.icon.clone(),
+            script_lang: c.script_lang.clone(),
+            private: matches!(c.origin, Layer::RepoLocal | Layer::GlobalLocal),
             risk: c.risk,
             id: c.id.clone(),
         })
@@ -386,6 +381,9 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
             active: false,
             title: c.title().to_string(),
+            icon: c.icon.clone(),
+            script_lang: c.script_lang.clone(),
+            private: false,
             risk: c.risk,
             id: c.id.clone(),
         })
@@ -398,6 +396,7 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
             targets: p.targets.clone(),
             selected: selected_name.as_deref() == Some(p.name.as_str()),
             candidate: profile::profile_matches_targets(p, &tags),
+            disabled: p.disabled,
             capabilities: p.capabilities.iter().map(|r| r.id().to_string()).collect(),
             atoms: p
                 .capabilities
@@ -573,18 +572,28 @@ pub fn capability_from_form(
             s
         }
     };
-    // "markdown" → static guidance; "script" → a command whose output is embedded.
-    let (guidance, command, allow_exec) = if value_of(pairs, "kind") == Some("script") {
-        let cmd = opt(value_of(pairs, "command"))
-            .ok_or_else(|| anyhow::anyhow!("a script capability needs a command"))?;
+    // "markdown" → static guidance; "script" → a command body run under an
+    // interpreter (bash/sh/python), its output embedded. An empty script falls
+    // back to markdown so the editor never errors mid-modal.
+    let script_cmd = (value_of(pairs, "kind") == Some("script"))
+        .then(|| opt(value_of(pairs, "command")))
+        .flatten();
+    let (guidance, command, script_lang, allow_exec) = if let Some(cmd) = script_cmd {
+        let lang = match value_of(pairs, "script_lang") {
+            Some("python") => "python",
+            Some("sh") => "sh",
+            _ => "bash",
+        };
         (
             String::new(),
             Some(cmd),
+            Some(lang.to_string()),
             value_of(pairs, "allow_exec").is_some(),
         )
     } else {
         (
             value_of(pairs, "guidance").unwrap_or("").to_string(),
+            None,
             None,
             true,
         )
@@ -592,6 +601,7 @@ pub fn capability_from_form(
     Ok(Capability {
         id,
         description: name.or_else(|| base.and_then(|c| c.description.clone())),
+        icon: opt(value_of(pairs, "icon")),
         tags: base.map(|c| c.tags.clone()).unwrap_or_default(),
         risk: base.map(|c| c.risk).unwrap_or_default(),
         when: base.map(|c| c.when.clone()).unwrap_or_default(),
@@ -603,6 +613,7 @@ pub fn capability_from_form(
         agents: base.map(|c| c.agents.clone()).unwrap_or_default(),
         provider: base.and_then(|c| c.provider.clone()),
         command,
+        script_lang,
         allow_exec,
         cache: base.and_then(|c| c.cache.clone()),
         origin: Layer::default(),
@@ -627,7 +638,66 @@ pub fn profile_from_form(pairs: &[(String, String)]) -> crate::Result<ProfileCon
         capabilities,
         template: opt(value_of(pairs, "template")),
         guidance: opt(value_of(pairs, "guidance")),
+        disabled: value_of(pairs, "disabled").is_some(),
     })
+}
+
+/// Build a capability + its target layer from the profile editor's inline
+/// quick-create fields (`cap_name`/`cap_kind`/`cap_content`/`cap_private`).
+/// Returns `None` when no name was typed (nothing to add).
+pub fn inline_capability_from_form(pairs: &[(String, String)]) -> Option<(Capability, Layer)> {
+    let name = opt(value_of(pairs, "cap_name"))?;
+    let id = slug(&name);
+    if id.is_empty() {
+        return None;
+    }
+    let content = value_of(pairs, "cap_content").unwrap_or("").to_string();
+    let (guidance, command, script_lang) =
+        if value_of(pairs, "cap_kind") == Some("script") && !content.trim().is_empty() {
+            (String::new(), Some(content), Some("bash".to_string()))
+        } else {
+            (content, None, None)
+        };
+    let layer = if value_of(pairs, "cap_private").is_some() {
+        Layer::RepoLocal
+    } else {
+        Layer::Repo
+    };
+    let cap = Capability {
+        id,
+        description: Some(name),
+        icon: None,
+        tags: Vec::new(),
+        risk: Risk::Info,
+        when: Vec::new(),
+        requires: Vec::new(),
+        params: toml::Value::Table(Default::default()),
+        guidance,
+        agents: Vec::new(),
+        provider: None,
+        command,
+        script_lang,
+        allow_exec: true,
+        cache: None,
+        origin: Layer::default(),
+    };
+    Some((cap, layer))
+}
+
+/// A lenient profile built from an in-progress editor form — no ≥1-capability
+/// rule — used only to render the editor's live preview (never staged).
+pub fn draft_profile_from_form(pairs: &[(String, String)]) -> ProfileConfig {
+    ProfileConfig {
+        name: opt(value_of(pairs, "name")).unwrap_or_else(|| "(unnamed)".to_string()),
+        targets: values_for(pairs, "targets"),
+        capabilities: values_for(pairs, "capabilities")
+            .into_iter()
+            .map(CapabilityRef::Id)
+            .collect(),
+        template: None,
+        guidance: opt(value_of(pairs, "guidance")),
+        disabled: value_of(pairs, "disabled").is_some(),
+    }
 }
 
 #[cfg(test)]
@@ -700,8 +770,11 @@ mod tests {
         )
         .unwrap();
         assert!(!off.allow_exec);
-        // A script needs a command.
-        assert!(capability_from_form(None, &parse_pairs("name=X&kind=script")).is_err());
+        assert_eq!(on.script_lang.as_deref(), Some("bash"));
+        // An empty script falls back to a (markdown) capability, not an error.
+        let empty = capability_from_form(None, &parse_pairs("name=X&kind=script")).unwrap();
+        assert!(empty.command.is_none());
+        assert!(empty.script_lang.is_none());
     }
 
     #[test]

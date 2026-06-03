@@ -147,8 +147,8 @@ fn studio_binds_and_serves_secured_spine() {
     );
     assert!(shell.contains("rosita studio"), "shell renders the page");
     assert!(
-        shell.contains("Live overlay"),
-        "shell renders the preview pane"
+        shell.contains("Profiles") && shell.contains("Capabilities"),
+        "shell renders the Profiles/Capabilities tabs"
     );
 
     assert!(

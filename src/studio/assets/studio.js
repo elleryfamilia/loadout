@@ -84,7 +84,20 @@
     root.querySelectorAll(sel).forEach(bind);
   }
 
+  // Tab active-state (chrome only; the swap itself is hx-driven). Delegated so it
+  // survives fragment swaps. Clicking a [data-tab] marks it active among its peers.
+  function wireTabs() {
+    document.addEventListener("click", function (ev) {
+      var tab = ev.target.closest ? ev.target.closest("[data-tab]") : null;
+      if (!tab) return;
+      var peers = tab.parentNode.querySelectorAll("[data-tab]");
+      for (var i = 0; i < peers.length; i++) peers[i].classList.remove("active");
+      tab.classList.add("active");
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     process(document.body);
+    wireTabs();
   });
 })();
