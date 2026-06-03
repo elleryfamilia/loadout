@@ -1,9 +1,9 @@
 # rosita studio — design
 
-> Status: design (v2). Supersedes the exploratory v1. Reflects the full design
-> pass (3 explorations → synthesis → critic → codex gpt-5.5 review) **and** the
-> subsequent model simplifications agreed with the maintainer. The UI
-> screens/flows are the one piece deliberately left for a follow-up wireframe pass.
+> Status: design + wireframes complete (v2). Supersedes the exploratory v1.
+> Reflects the full design pass (3 explorations → synthesis → critic → codex
+> gpt-5.5 review) **and** the subsequent model simplifications agreed with the
+> maintainer. UI wireframes are in §16. Next step: implementation at Slice 0 (§15).
 
 ## 1. Objective & philosophy
 
@@ -330,9 +330,158 @@ studio UI.
   (language tie + capability picker), diff/apply, trust banner, leak warning, and
   the "which profile?" prompt surfaced in `rosita run`.
 
-## 16. Open / next
+## 16. UI wireframes
 
-- **Studio UI wireframe** — the screens and flows (capability editor; profile
-  creator with the language tie + capability picker; the run-time profile prompt;
-  the diff/apply review; the simulator). Deliberately deferred until the model
-  settled (now settled). This is the next refinement pass.
+**Layout principle:** the core loop is *edit a thing → watch the overlay change*,
+so the **live overlay preview is always on screen** (right), you edit in the
+center, and navigate/list on the left. A top bar holds the **context simulator**
+and the **staged-changes → Apply** control. All updates are htmx fragment swaps.
+
+**Responsive:** pure-CSS breakpoint. Below it the preview pane drops out and a
+`⟱ Preview` toggle appears in the top bar; tapping it slides the preview in as a
+drawer over the editor. The preview fragment keeps updating via htmx even while
+hidden, so it's current the moment it's revealed.
+
+### Shell — Capabilities mode (library + editor + preview)
+
+```
+┌ rosita studio ──────────────────────────────────────────── ◷ 127.0.0.1:7777 ┐
+│ Simulate ▸ lang[rust ▾]  scope[repo ▾]  agent[claude ▾]   ◍ 2 staged › Review │
+├───────────────┬────────────────────────────────────┬─────────────────────────┤
+│ Capabilities ▸│  EDIT  rust-conventions             │ Live overlay · claude   │
+│ Profiles      │  ──────────────────────────────────  │ # demo — agent context  │
+│  YOURS        │  id       rust-conventions           │ _profile: rust—browser_ │
+│  ● rust-conv ✎│  desc     Rust conventions           │ ## Rust conventions     │
+│  ● terse     ✎│  tags     [stack] [＋]               │ Build with cargo, lint  │
+│  PALETTE      │  risk     ◉info ○caution ○dangerous  │ with clippy; prefer ?/  │
+│  ○ go-conv  ⎘ │  guidance ┌──────────────────────┐   │ Result over unwrap()…   │
+│  ○ python   ⎘ │           │Rust project. Build…  │   │                         │
+│  ○ infra-…  ⎘ │           └──────────────────────┘   │ ⟳ updates as you type   │
+│ [＋ New cap]  │  lives in ◉repo ○global · ◉public ○private                    │
+│               │  ⚠ leak check: clean    [Discard] [Stage change]              │
+└───────────────┴────────────────────────────────────┴─────────────────────────┘
+```
+`●` yours (editable). `○` read-only palette; `⎘` duplicates into your config to
+own. "lives in" is the 2×2 layer/visibility picker; the leak check sits under it,
+visible and non-blocking.
+
+### Profiles composer (left list + center; preview stays)
+
+```
+│ Profiles    ▸ │  EDIT PROFILE   rust — browser       │ Live overlay · claude   │
+│  ● rust—kernel│  name     rust — browser             │ ## Rust conventions     │
+│  ● rust—brows…│  targets  [rust ▾] [＋]  ← language   │ …                       │
+│  ● machine    │           tie (detected lang)        │ ## WASM                 │
+│ [＋ New prof] │  capabilities  (need ≥1 to save)     │ Target wasm32; keep     │
+│               │   ┌────────────────────────────────┐ │ bindings thin…          │
+│               │   │ ⠿ rust-conventions          ✕ │ │                         │
+│               │   │ ⠿ wasm-conventions          ✕ │ │ ⟳ live                  │
+│               │   └────────────────────────────────┘ │                         │
+│               │   [＋ add capability ▾] palette+yours │                         │
+│               │  lives in ◉repo ○global · ◉public  [Discard] [Stage change]    │
+```
+`targets` is the language tie (§4); `⠿` drag handles set render order. Save
+disabled until ≥1 capability.
+
+### Review & apply (diff against raw bytes; normalization surfaced)
+
+```
+┌ Review staged changes (2) ──────────────────────────────────────────────────┐
+│  .rosita/config.toml   repo · public                                +6 −1    │
+│  + id = "wasm-conventions"                                                   │
+│  + guidance = "Target wasm32; keep bindings thin…"                          │
+│    ⚠ rosita will also re-wrap 2 lines it parsed (shown in context)           │
+│  .rosita/local.toml    repo · private                               +1       │
+│  + [binding] profile = "rust — browser"  ← remembered pick for this project  │
+│  ⚠ leak: none.   ⚠ on-disk unchanged since load.                            │
+│                                   [Cancel]        [Apply 2 changes]          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Run-time pick (CLI — `rosita run`, on 2+ matches)
+
+```
+$ rosita run claude
+rosita › this rust project matches 2 profiles:
+   1) rust — kernel    2) rust — browser    3) none (don't apply rosita here)
+ ❯ 2
+rosita › bound "rust — browser" → remembered in .rosita/local.toml; launching…
+```
+Single match = no prompt. The binding makes it skip straight to launch next time.
+
+### First launch / onboarding (no profiles or own caps yet)
+
+Welcome state — show that detection worked, explain what a profile is for, and
+explain *why* the overlay is empty (so it reads "not set up," not "broken"):
+
+```
+│ Profiles  ▸   │  👋 Welcome to rosita studio          │ Live overlay · claude  │
+│  (none yet)   │  rosita detected this project:        │   (empty)              │
+│ [＋ New prof] │    ● rust · branch main · repo         │  No profile applies    │
+│  PALETTE      │  A *profile* decides what guidance    │  here yet, so the      │
+│  ○ rust-conv  │  your agent gets here. You have none  │  overlay is empty.     │
+│  ○ terse  …   │  yet — let's make your first.          │  Create one to fill ↓  │
+│               │  ┌──────────────────────────────────┐ │                        │
+│               │  │ ▶ Quick start — a "rust" profile, │ │                        │
+│               │  │   pre-filled with rust palette    │ │                        │
+│               │  │   caps. You edit & own it.         │ │                        │
+│               │  │ ▷ Start from scratch               │ │                        │
+│               │  └──────────────────────────────────┘ │                        │
+```
+
+Quick start → composer pre-filled (name `rust`, `targets [rust]` from detection,
+capabilities suggested from the palette, **labeled "suggested, edit freely"** —
+a head start, not a magic default), and the preview lights up. A language profile
+**defaults to `global`** with a first-use explainer (`ⓘ global = reuse in every
+rust repo; repo = just this one`). On apply, since it's the only rust profile, it
+auto-binds → success state: `✓ Created "rust" (global) — applied here. It'll
+auto-apply in any rust repo.  [Open it] [Create another]`.
+
+Variants (same skeleton): **machine first-launch** (detected `● machine · no
+repo`; Quick start offers a provider-backed "machine" profile + the safety cap;
+reminds that machine scope is emit-only with the `@import` line to copy);
+**has profiles, none target here** (`You have 4 profiles, none target rust.
+[Create one] · [Pick an existing one] · [None]`).
+
+### Dynamic capability + trust
+
+```
+EDIT  current-ctx  ·  kind ○ static  ◉ dynamic
+source ◉ provider[docker ▾]   ○ command[ kubectl config current-context ]
+cache  [30s]    guidance: "On {{ provider.output }}"
+lives in ◉ repo ○ global · ◉ public ○ private
+─ trust ───────────────────────────────────────────────
+provider source → always trusted (no allow).
+command in a repo → ⚠ won't run until you trust this repo:
+   this repo: untrusted   [Allow this repo…]  (explicit, confirmed)
+   preview shows the skip note until then.
+```
+
+### Machine scope (no repo; providers surfaced; emit-only delivery)
+
+```
+Simulate ▸ scope[machine]  agent[claude ▾]            delivery: emit-only ⓘ
+─ Live overlay · claude (machine) ───────────────────────────
+# machine — agent context · host ellerys-mba · macos/arm64
+## Careful operator   live box, not a sandbox; confirm destructive ops…
+## Environment (providers)  toolchain git/cargo/node/docker · 7 containers
+─────────────────────────────────────────────────────────────
+ⓘ emit-only — add to your global agent config once:
+   @import ~/.config/rosita/generated/claude.md        [Copy]
+```
+
+### Context simulator (preview any context; drives selection)
+
+```
+Simulate ▸ lang[rust ▾] scope[repo ▾] branch[main] path[/] agent[claude ▾]
+  → resolved profile: rust — browser (bound)     [change binding] [unbind]
+  the preview + which-profile reflect this simulated context, not just real cwd
+```
+
+## 17. Next
+
+Design and wireframes are complete. The next step is **implementation, starting
+at Slice 0** (§15): the headless `toml_edit` edit engine + the origin-tagging
+`Config::from_layer_strs` seam + the pick-one selection & binding logic, all
+proven by tests, before any HTTP. Carry the §8/§10 must-dos (origin re-tagging
+for trust; diff-against-raw-bytes; comment-preserving round-trip tests).
