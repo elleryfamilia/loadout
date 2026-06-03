@@ -39,6 +39,7 @@ pub mod providers;
 pub mod redact;
 pub mod render;
 pub mod report;
+pub mod studio;
 pub mod templates;
 pub mod trust;
 pub mod writer;

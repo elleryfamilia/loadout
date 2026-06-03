@@ -122,6 +122,33 @@ impl Config {
     pub fn defaults() -> Self {
         RawConfig::default().finalize(Vec::new())
     }
+
+    /// Assemble a [`Config`] from **in-memory** layer texts (studio's staged
+    /// docs), parsing and merging them exactly as [`Config::load_from`] does from
+    /// disk — including **re-tagging each capability's `origin` by its layer**.
+    ///
+    /// Layers are given in precedence order (later wins). This is
+    /// security-critical: `Capability::origin` is `#[serde(skip)]` and defaults
+    /// to [`Layer::BuiltIn`](crate::capability::Layer::BuiltIn), and the
+    /// command-trust gate keys off origin — a repo-authored `command` capability
+    /// assembled *without* re-tagging would look built-in and bypass
+    /// `rosita allow`. Mirrors the disk-load tagging in [`Config::load_from`].
+    pub fn from_layer_strs(
+        layers: Vec<(crate::capability::Layer, PathBuf, String)>,
+    ) -> Result<Self> {
+        let mut sources = Vec::new();
+        let mut raw = RawConfig::default();
+        for (layer, path, text) in layers {
+            let mut parsed: RawConfig = toml::from_str(&text)
+                .with_context(|| format!("parsing staged config for {}", path.display()))?;
+            for cap in &mut parsed.capabilities {
+                cap.origin = layer;
+            }
+            raw.merge(parsed);
+            sources.push(path);
+        }
+        Ok(raw.finalize(sources))
+    }
 }
 
 // --- raw (per-layer) parsing -------------------------------------------------

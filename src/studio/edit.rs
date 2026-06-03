@@ -1,0 +1,738 @@
+//! The headless `toml_edit` edit engine — studio's write risk core.
+//!
+//! A [`Session`] opens the writable config layer files, keeps a *staged*
+//! `toml_edit` document per file plus an ordered, replayable list of
+//! [`StagedOp`]s, and can:
+//!
+//! - **stage** typed create/edit/delete of capabilities & profiles (and
+//!   duplicate a palette item into a layer) — built by mutating the parsed tree
+//!   in place, so comments and key order on untouched regions survive by
+//!   construction (never string concatenation);
+//! - **diff** the staged document against the raw on-disk bytes (via `similar`),
+//!   surfacing when `toml_edit` would also reformat untouched lines;
+//! - **apply** atomically — an external-edit hash gate, a one-shot `.bak` per
+//!   touched file, writes ordered public-before-private, then reload + baseline
+//!   reset.
+//!
+//! The staged config can also be assembled in memory via
+//! [`Config::from_layer_strs`](crate::config::Config::from_layer_strs), which
+//! **re-tags capability origins by layer** so the command-trust gate is honored.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{anyhow, bail, Context as _, Result};
+use toml_edit::{value, Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
+
+use crate::capability::{palette, Capability, Layer, Risk};
+use crate::config::{self, Config};
+use crate::profile::ProfileConfig;
+use crate::writer::{atomic_write, AtomicWriter, Writer, WrittenFile};
+
+/// A typed, replayable staged edit. Each carries the [`Layer`] it targets.
+#[derive(Debug, Clone)]
+pub enum StagedOp {
+    /// Add a new capability to a layer.
+    CreateCapability { layer: Layer, cap: Box<Capability> },
+    /// Replace the capability with this id in a layer (created if absent).
+    EditCapability {
+        layer: Layer,
+        id: String,
+        cap: Box<Capability>,
+    },
+    /// Remove the capability with this id from a layer.
+    DeleteCapability { layer: Layer, id: String },
+    /// Add a new profile to a layer.
+    CreateProfile {
+        layer: Layer,
+        profile: Box<ProfileConfig>,
+    },
+    /// Replace the profile with this name in a layer (created if absent).
+    EditProfile {
+        layer: Layer,
+        name: String,
+        profile: Box<ProfileConfig>,
+    },
+    /// Remove the profile with this name from a layer.
+    DeleteProfile { layer: Layer, name: String },
+    /// Copy a shipped palette capability into a layer to own it (the only way to
+    /// "edit" a palette item). Re-resolved from the palette on replay.
+    DuplicatePaletteItem { id: String, to_layer: Layer },
+}
+
+impl StagedOp {
+    /// The layer this op writes to.
+    pub fn layer(&self) -> Layer {
+        match self {
+            StagedOp::CreateCapability { layer, .. }
+            | StagedOp::EditCapability { layer, .. }
+            | StagedOp::DeleteCapability { layer, .. }
+            | StagedOp::CreateProfile { layer, .. }
+            | StagedOp::EditProfile { layer, .. }
+            | StagedOp::DeleteProfile { layer, .. } => *layer,
+            StagedOp::DuplicatePaletteItem { to_layer, .. } => *to_layer,
+        }
+    }
+}
+
+/// One writable config layer file held by a [`Session`].
+struct LayerFile {
+    layer: Layer,
+    path: PathBuf,
+    public: bool,
+    /// Raw bytes at load (empty string if the file was absent).
+    original: String,
+    /// Parsed-from-original document (untouched baseline).
+    doc: DocumentMut,
+    /// Working copy that staged ops mutate.
+    staged: DocumentMut,
+    /// `sha256:…` of `original`, for the external-edit gate.
+    sha: String,
+}
+
+/// A studio editing session over a repo's (and optionally the global) config
+/// layers: staged `toml_edit` docs + an ordered, replayable op list.
+pub struct Session {
+    repo_base: PathBuf,
+    layers: Vec<LayerFile>,
+    ops: Vec<StagedOp>,
+}
+
+/// A per-file diff of the staged document against the raw on-disk bytes.
+#[derive(Debug, Clone)]
+pub struct FileDiff {
+    /// Which layer the file is.
+    pub layer: Layer,
+    /// File path.
+    pub path: PathBuf,
+    /// Public (`config.toml`) vs private (`local.toml`).
+    pub public: bool,
+    /// Raw bytes currently on disk at load.
+    pub raw_before: String,
+    /// Bytes the staged document would write.
+    pub staged_after: String,
+    /// Unified diff (raw → staged), from `similar`.
+    pub unified: String,
+    /// Staged bytes differ from the raw on-disk bytes.
+    pub changed: bool,
+    /// `toml_edit` would also reformat untouched lines (parsed-then-reserialized
+    /// original ≠ raw) — surfaced so hand-authored TOML rewrites aren't hidden.
+    pub reformats_untouched: bool,
+}
+
+impl Session {
+    /// Open a session over the repo's writable layers (`config.toml` +
+    /// `local.toml`), plus the global layers when `global_dir` is given. Missing
+    /// files are tracked as empty so they can be created by staged ops.
+    pub fn open(repo_base: &Path, global_dir: Option<&Path>) -> Result<Self> {
+        let mut candidates: Vec<(Layer, PathBuf, bool)> = Vec::new();
+        if let Some(g) = global_dir {
+            candidates.push((Layer::Global, g.join("config.toml"), true));
+            candidates.push((Layer::GlobalLocal, g.join("local.toml"), false));
+        }
+        candidates.push((Layer::Repo, config::repo_config_path(repo_base), true));
+        candidates.push((Layer::RepoLocal, config::repo_local_path(repo_base), false));
+
+        let mut layers = Vec::with_capacity(candidates.len());
+        for (layer, path, public) in candidates {
+            layers.push(LayerFile::open(layer, path, public)?);
+        }
+        Ok(Session {
+            repo_base: repo_base.to_path_buf(),
+            layers,
+            ops: Vec::new(),
+        })
+    }
+
+    /// Stage one typed op: mutate the target layer's working document and record
+    /// the op for replay. Errors if the op targets a layer not in this session.
+    pub fn stage(&mut self, op: StagedOp) -> Result<()> {
+        let layer = op.layer();
+        let lf = self
+            .layers
+            .iter_mut()
+            .find(|l| l.layer == layer)
+            .ok_or_else(|| anyhow!("layer {layer:?} is not open in this session"))?;
+        apply_op(&mut lf.staged, &op)?;
+        self.ops.push(op);
+        Ok(())
+    }
+
+    /// The staged ops recorded so far, in order.
+    pub fn ops(&self) -> &[StagedOp] {
+        &self.ops
+    }
+
+    /// Assemble the staged config in memory (origin-tagged per layer). `Ok`
+    /// means every staged layer re-parses through the strict config parser.
+    pub fn staged_config(&self) -> Result<Config> {
+        let layers = self
+            .layers
+            .iter()
+            .map(|lf| (lf.layer, lf.path.clone(), lf.staged.to_string()))
+            .collect();
+        Config::from_layer_strs(layers)
+    }
+
+    /// Gate apply: every staged layer must re-parse through the strict config
+    /// parser. (Richer diagnostics — cycles, regex, minijinja, leak-lint — land
+    /// with the HTTP slices.)
+    pub fn validate(&self) -> Result<()> {
+        self.staged_config().map(|_| ())
+    }
+
+    /// Per-file diffs of staged vs. raw on-disk bytes, only for files that differ
+    /// (or that `toml_edit` would reformat).
+    pub fn diff(&self) -> Vec<FileDiff> {
+        self.layers
+            .iter()
+            .filter_map(|lf| {
+                let staged_after = lf.staged.to_string();
+                let changed = staged_after != lf.original;
+                let reformats_untouched = lf.doc.to_string() != lf.original;
+                if !changed && !reformats_untouched {
+                    return None;
+                }
+                Some(FileDiff {
+                    layer: lf.layer,
+                    path: lf.path.clone(),
+                    public: lf.public,
+                    unified: unified_diff(&lf.original, &staged_after, &lf.path),
+                    raw_before: lf.original.clone(),
+                    staged_after,
+                    changed,
+                    reformats_untouched,
+                })
+            })
+            .collect()
+    }
+
+    /// Re-read every layer from disk and replay the staged ops onto fresh
+    /// baselines (the external-edit "Reload" action).
+    pub fn reload(&mut self) -> Result<()> {
+        for lf in &mut self.layers {
+            lf.reread()?;
+        }
+        let ops = std::mem::take(&mut self.ops);
+        for op in &ops {
+            if let Some(lf) = self.layers.iter_mut().find(|l| l.layer == op.layer()) {
+                apply_op(&mut lf.staged, op)?;
+            }
+        }
+        self.ops = ops;
+        Ok(())
+    }
+
+    /// Validate, gate on external edits, back up touched files, then write each
+    /// changed layer atomically (public `config.toml` before private
+    /// `local.toml`), and reset the baseline. Returns the files written.
+    ///
+    /// Cross-file atomicity is best-effort (per-file atomic + backups + ordering;
+    /// no journal) — a documented limitation.
+    pub fn apply(&mut self) -> Result<Vec<WrittenFile>> {
+        self.validate().context("staged config is invalid")?;
+        self.check_external_edits()?;
+
+        // Snapshot a one-shot .bak for each existing file that will change.
+        let backup_dir = config::cache_dir(&self.repo_base).join("studio-backups");
+        for lf in &self.layers {
+            if lf.staged.to_string() != lf.original && !lf.original.is_empty() {
+                let name = lf
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "layer".to_string());
+                let bak = backup_dir.join(format!("{}.{:?}.bak", name, lf.layer));
+                atomic_write(&bak, &lf.original)
+                    .with_context(|| format!("backing up {}", lf.path.display()))?;
+            }
+        }
+
+        // Write public before private (layers are already stored in that order).
+        let writer = AtomicWriter::new(false);
+        let mut written = Vec::new();
+        for lf in &self.layers {
+            let staged = lf.staged.to_string();
+            if staged != lf.original {
+                written.push(writer.write(&lf.path, &staged)?);
+            }
+        }
+
+        // Reset baseline from what is now on disk; the ops are committed.
+        for lf in &mut self.layers {
+            lf.reread()?;
+        }
+        self.ops.clear();
+        Ok(written)
+    }
+
+    fn check_external_edits(&self) -> Result<()> {
+        let mut changed = Vec::new();
+        for lf in &self.layers {
+            let now = std::fs::read_to_string(&lf.path).unwrap_or_default();
+            if sha(&now) != lf.sha {
+                changed.push(lf.path.display().to_string());
+            }
+        }
+        if !changed.is_empty() {
+            bail!(
+                "config changed on disk since the session loaded — reload before applying: {}",
+                changed.join(", ")
+            );
+        }
+        Ok(())
+    }
+}
+
+impl LayerFile {
+    fn open(layer: Layer, path: PathBuf, public: bool) -> Result<Self> {
+        let original = std::fs::read_to_string(&path).unwrap_or_default();
+        let doc: DocumentMut = original
+            .parse()
+            .with_context(|| format!("parsing {} as TOML", path.display()))?;
+        Ok(LayerFile {
+            sha: sha(&original),
+            staged: doc.clone(),
+            doc,
+            original,
+            public,
+            layer,
+            path,
+        })
+    }
+
+    /// Re-read from disk and reset the baseline + staged copy.
+    fn reread(&mut self) -> Result<()> {
+        let original = std::fs::read_to_string(&self.path).unwrap_or_default();
+        self.doc = original
+            .parse()
+            .with_context(|| format!("re-parsing {} as TOML", self.path.display()))?;
+        self.staged = self.doc.clone();
+        self.sha = sha(&original);
+        self.original = original;
+        Ok(())
+    }
+}
+
+// --- op application (toml_edit tree mutation, never string concat) -----------
+
+fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
+    match op {
+        StagedOp::CreateCapability { cap, .. } => {
+            aot_mut(doc, "capabilities").push(cap_table(cap)?);
+        }
+        StagedOp::EditCapability { id, cap, .. } => {
+            upsert(aot_mut(doc, "capabilities"), "id", id, cap_table(cap)?);
+        }
+        StagedOp::DeleteCapability { id, .. } => {
+            remove(aot_mut(doc, "capabilities"), "id", id);
+        }
+        StagedOp::CreateProfile { profile, .. } => {
+            aot_mut(doc, "profiles").push(profile_table(profile)?);
+        }
+        StagedOp::EditProfile { name, profile, .. } => {
+            upsert(
+                aot_mut(doc, "profiles"),
+                "name",
+                name,
+                profile_table(profile)?,
+            );
+        }
+        StagedOp::DeleteProfile { name, .. } => {
+            remove(aot_mut(doc, "profiles"), "name", name);
+        }
+        StagedOp::DuplicatePaletteItem { id, .. } => {
+            let cap = palette()
+                .into_iter()
+                .find(|c| &c.id == id)
+                .ok_or_else(|| anyhow!("unknown palette capability '{id}'"))?;
+            // Duplicating an existing id replaces it (you own the copy now).
+            upsert(aot_mut(doc, "capabilities"), "id", id, cap_table(&cap)?);
+        }
+    }
+    Ok(())
+}
+
+/// Get (or create) an array-of-tables at `key`.
+fn aot_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut ArrayOfTables {
+    if doc.get(key).and_then(Item::as_array_of_tables).is_none() {
+        doc.insert(key, Item::ArrayOfTables(ArrayOfTables::new()));
+    }
+    doc[key]
+        .as_array_of_tables_mut()
+        .expect("just inserted an array-of-tables")
+}
+
+/// Replace the entry whose `field` equals `val`, or push when absent.
+fn upsert(aot: &mut ArrayOfTables, field: &str, val: &str, table: Table) {
+    match find_index(aot, field, val) {
+        Some(i) => {
+            if let Some(slot) = aot.get_mut(i) {
+                *slot = table;
+            }
+        }
+        None => aot.push(table),
+    }
+}
+
+/// Remove the entry whose `field` equals `val`, if present.
+fn remove(aot: &mut ArrayOfTables, field: &str, val: &str) {
+    if let Some(i) = find_index(aot, field, val) {
+        aot.remove(i);
+    }
+}
+
+fn find_index(aot: &ArrayOfTables, field: &str, val: &str) -> Option<usize> {
+    aot.iter()
+        .position(|t| t.get(field).and_then(Item::as_str) == Some(val))
+}
+
+// --- typed → toml_edit table builders ----------------------------------------
+
+fn risk_str(r: Risk) -> &'static str {
+    match r {
+        Risk::Info => "info",
+        Risk::Caution => "caution",
+        Risk::Dangerous => "dangerous",
+    }
+}
+
+/// Build a clean array-of-tables entry for a capability — only meaningful
+/// (non-default) fields, so studio writes TOML you could have authored.
+fn cap_table(c: &Capability) -> Result<Table> {
+    let mut t = Table::new();
+    t["id"] = value(c.id.as_str());
+    if let Some(d) = &c.description {
+        t["description"] = value(d.as_str());
+    }
+    if !c.tags.is_empty() {
+        t["tags"] = str_array(&c.tags);
+    }
+    if c.risk != Risk::Info {
+        t["risk"] = value(risk_str(c.risk));
+    }
+    if !c.when.is_empty() {
+        let when = toml::Value::try_from(&c.when).context("serializing capability `when`")?;
+        t["when"] = to_edit_item(&when);
+    }
+    if !c.requires.is_empty() {
+        t["requires"] = str_array(&c.requires);
+    }
+    if !c.agents.is_empty() {
+        t["agents"] = str_array(&c.agents);
+    }
+    if let Some(p) = &c.provider {
+        t["provider"] = value(p.as_str());
+    }
+    if let Some(cmd) = &c.command {
+        t["command"] = value(cmd.as_str());
+    }
+    if let Some(cache) = &c.cache {
+        t["cache"] = value(cache.as_str());
+    }
+    if !c.guidance.is_empty() {
+        t["guidance"] = value(c.guidance.as_str());
+    }
+    if c.params.as_table().map(|p| !p.is_empty()).unwrap_or(false) {
+        // Inline so it reads `params = { … }` rather than a nested header.
+        t["params"] = Item::Value(to_edit_value(&c.params));
+    }
+    Ok(t)
+}
+
+/// Build a clean array-of-tables entry for a profile.
+fn profile_table(p: &ProfileConfig) -> Result<Table> {
+    let mut t = Table::new();
+    t["name"] = value(p.name.as_str());
+    if !p.targets.is_empty() {
+        t["targets"] = str_array(&p.targets);
+    }
+    if !p.capabilities.is_empty() {
+        let caps =
+            toml::Value::try_from(&p.capabilities).context("serializing profile capabilities")?;
+        t["capabilities"] = to_edit_item(&caps);
+    }
+    if let Some(tmpl) = &p.template {
+        t["template"] = value(tmpl.as_str());
+    }
+    if let Some(g) = &p.guidance {
+        t["guidance"] = value(g.as_str());
+    }
+    Ok(t)
+}
+
+fn str_array(items: &[String]) -> Item {
+    let mut a = Array::new();
+    for s in items {
+        a.push(s.as_str());
+    }
+    Item::Value(Value::Array(a))
+}
+
+/// Convert a `toml::Value` to a `toml_edit::Value` (tables become inline tables).
+fn to_edit_value(v: &toml::Value) -> Value {
+    match v {
+        toml::Value::String(s) => Value::from(s.clone()),
+        toml::Value::Integer(i) => Value::from(*i),
+        toml::Value::Float(f) => Value::from(*f),
+        toml::Value::Boolean(b) => Value::from(*b),
+        toml::Value::Datetime(d) => Value::from(d.to_string()),
+        toml::Value::Array(arr) => {
+            let mut a = Array::new();
+            for e in arr {
+                a.push(to_edit_value(e));
+            }
+            Value::Array(a)
+        }
+        toml::Value::Table(tbl) => {
+            let mut it = InlineTable::new();
+            for (k, vv) in tbl {
+                it.insert(k, to_edit_value(vv));
+            }
+            Value::InlineTable(it)
+        }
+    }
+}
+
+/// Convert a `toml::Value` to a `toml_edit::Item` (top-level tables stay tables).
+fn to_edit_item(v: &toml::Value) -> Item {
+    Item::Value(to_edit_value(v))
+}
+
+fn sha(text: &str) -> String {
+    crate::hash::context_hash(&text)
+}
+
+fn unified_diff(before: &str, after: &str, path: &Path) -> String {
+    let label = path.display().to_string();
+    similar::TextDiff::from_lines(before, after)
+        .unified_diff()
+        .header(&format!("{label} (on disk)"), &format!("{label} (staged)"))
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cap(id: &str, guidance: &str) -> Capability {
+        Capability {
+            id: id.into(),
+            description: Some(format!("{id} desc")),
+            tags: vec![],
+            risk: Risk::Info,
+            when: vec![],
+            requires: vec![],
+            params: toml::Value::Table(Default::default()),
+            guidance: guidance.into(),
+            agents: vec![],
+            provider: None,
+            command: None,
+            cache: None,
+            origin: Layer::default(),
+        }
+    }
+
+    /// A repo with a hand-authored, commented `config.toml`.
+    fn repo_with_config(body: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(config::repo_dir(d.path())).unwrap();
+        std::fs::write(config::repo_config_path(d.path()), body).unwrap();
+        d
+    }
+
+    fn session(repo: &Path) -> Session {
+        Session::open(repo, None).unwrap()
+    }
+
+    #[test]
+    fn untouched_session_round_trips_comments_exactly() {
+        let body = "# top comment\n\n[[capabilities]]\nid = \"a\"  # inline\nguidance = \"hi\"\n";
+        let d = repo_with_config(body);
+        let s = session(d.path());
+        // No ops staged → no diffs at all (byte-exact round-trip).
+        assert!(
+            s.diff().is_empty(),
+            "untouched session should produce no diff"
+        );
+    }
+
+    #[test]
+    fn create_capability_preserves_existing_comments() {
+        let body = "# keep me\n\n[[capabilities]]\nid = \"a\"\nguidance = \"A\"\n";
+        let d = repo_with_config(body);
+        let mut s = session(d.path());
+        s.stage(StagedOp::CreateCapability {
+            layer: Layer::Repo,
+            cap: Box::new(cap("b", "B body")),
+        })
+        .unwrap();
+
+        let diffs = s.diff();
+        assert_eq!(diffs.len(), 1);
+        let after = &diffs[0].staged_after;
+        // Original comment + entry survive; the new entry is appended cleanly.
+        assert!(after.contains("# keep me"));
+        assert!(after.contains("id = \"a\""));
+        assert!(after.contains("id = \"b\""));
+        assert!(after.contains("guidance = \"B body\""));
+        // The staged text must re-parse through the strict config parser.
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn edit_then_delete_capability() {
+        let body = "[[capabilities]]\nid = \"a\"\nguidance = \"old\"\n\n[[capabilities]]\nid = \"b\"\nguidance = \"B\"\n";
+        let d = repo_with_config(body);
+        let mut s = session(d.path());
+
+        let mut edited = cap("a", "new guidance");
+        edited.risk = Risk::Caution;
+        s.stage(StagedOp::EditCapability {
+            layer: Layer::Repo,
+            id: "a".into(),
+            cap: Box::new(edited),
+        })
+        .unwrap();
+        s.stage(StagedOp::DeleteCapability {
+            layer: Layer::Repo,
+            id: "b".into(),
+        })
+        .unwrap();
+
+        let after = s.diff()[0].staged_after.clone();
+        assert!(after.contains("new guidance"));
+        assert!(after.contains("risk = \"caution\""));
+        assert!(!after.contains("id = \"b\""));
+        // Still valid TOML/config.
+        s.validate().unwrap();
+        let cfg = s.staged_config().unwrap();
+        assert_eq!(cfg.capabilities.len(), 1);
+        assert_eq!(cfg.capabilities[0].guidance, "new guidance");
+    }
+
+    #[test]
+    fn create_profile_with_targets_and_caps() {
+        let d = repo_with_config("");
+        let mut s = session(d.path());
+        let profile = ProfileConfig {
+            name: "rust".into(),
+            targets: vec!["rust".into()],
+            capabilities: vec![crate::profile::CapabilityRef::Id("a".into())],
+            template: None,
+            guidance: None,
+        };
+        s.stage(StagedOp::CreateProfile {
+            layer: Layer::Repo,
+            profile: Box::new(profile),
+        })
+        .unwrap();
+        let after = s.diff()[0].staged_after.clone();
+        assert!(after.contains("name = \"rust\""));
+        assert!(after.contains("targets = [\"rust\"]"));
+        assert!(after.contains("capabilities = [\"a\"]"));
+        s.validate().unwrap();
+    }
+
+    #[test]
+    fn apply_writes_and_is_idempotent_on_reload() {
+        let body = "# header\n[[capabilities]]\nid = \"a\"\nguidance = \"A\"\n";
+        let d = repo_with_config(body);
+        let mut s = session(d.path());
+        s.stage(StagedOp::CreateCapability {
+            layer: Layer::Repo,
+            cap: Box::new(cap("b", "B")),
+        })
+        .unwrap();
+
+        let written = s.apply().unwrap();
+        assert_eq!(written.len(), 1);
+
+        // On disk: both capabilities, comment preserved.
+        let on_disk = std::fs::read_to_string(config::repo_config_path(d.path())).unwrap();
+        assert!(on_disk.contains("# header"));
+        assert!(on_disk.contains("id = \"a\""));
+        assert!(on_disk.contains("id = \"b\""));
+
+        // Baseline reset: nothing staged → no diff, and a no-op re-open agrees.
+        assert!(s.diff().is_empty());
+        let reopened = session(d.path());
+        assert!(reopened.diff().is_empty());
+
+        // A backup of the pre-apply file was snapshotted.
+        let bak_dir = config::cache_dir(d.path()).join("studio-backups");
+        assert!(bak_dir.exists());
+    }
+
+    #[test]
+    fn external_edit_gate_blocks_apply() {
+        let d = repo_with_config("[[capabilities]]\nid = \"a\"\nguidance = \"A\"\n");
+        let mut s = session(d.path());
+        s.stage(StagedOp::CreateCapability {
+            layer: Layer::Repo,
+            cap: Box::new(cap("b", "B")),
+        })
+        .unwrap();
+
+        // Someone edits the file out from under the session.
+        std::fs::write(
+            config::repo_config_path(d.path()),
+            "[[capabilities]]\nid = \"z\"\nguidance = \"Z\"\n",
+        )
+        .unwrap();
+
+        let err = s.apply().unwrap_err();
+        assert!(err.to_string().contains("changed on disk"));
+
+        // Reload re-reads + replays the staged op onto the new baseline.
+        s.reload().unwrap();
+        let after = s.diff()[0].staged_after.clone();
+        assert!(after.contains("id = \"z\"")); // the external edit is now the base
+        assert!(after.contains("id = \"b\"")); // our staged op replayed
+        s.apply().unwrap();
+    }
+
+    #[test]
+    fn duplicate_palette_item_lands_as_owned_repo_capability() {
+        // Security-critical: a duplicated palette `command` cap must be tagged
+        // with the repo origin (untrusted authorship), not built-in.
+        let d = repo_with_config("");
+        let mut s = session(d.path());
+        // Inject a command-backed palette-like cap by creating one, then verify
+        // origin tagging via the in-memory assembly seam.
+        let mut command_cap = cap("danger", "runs a command");
+        command_cap.command = Some("echo hi".into());
+        s.stage(StagedOp::CreateCapability {
+            layer: Layer::Repo,
+            cap: Box::new(command_cap),
+        })
+        .unwrap();
+
+        let cfg = s.staged_config().unwrap();
+        let landed = cfg.capabilities.iter().find(|c| c.id == "danger").unwrap();
+        assert_eq!(
+            landed.origin,
+            Layer::Repo,
+            "repo-authored command must be tagged Repo so trust is enforced"
+        );
+        assert!(!landed.origin.is_trusted_authorship());
+    }
+
+    #[test]
+    fn real_palette_duplicate_is_owned_in_repo() {
+        let d = repo_with_config("");
+        let mut s = session(d.path());
+        let palette_id = palette()[0].id.clone();
+        s.stage(StagedOp::DuplicatePaletteItem {
+            id: palette_id.clone(),
+            to_layer: Layer::Repo,
+        })
+        .unwrap();
+        let cfg = s.staged_config().unwrap();
+        let dup = cfg
+            .capabilities
+            .iter()
+            .find(|c| c.id == palette_id)
+            .expect("duplicated palette item should now be in the repo library");
+        assert_eq!(dup.origin, Layer::Repo);
+    }
+}
