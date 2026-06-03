@@ -86,12 +86,33 @@ pub struct Snapshot {
     pub layer_texts: Vec<(Layer, PathBuf, String)>,
 }
 
+/// How the simulated context resolved to a profile — the binding chip's three
+/// states. Named `BindingState` (not `Binding`) to avoid colliding with the
+/// on-disk [`crate::binding::Binding`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingState {
+    /// Exactly one profile applies (its name).
+    Bound(String),
+    /// No profile applies to this context.
+    None,
+    /// 2+ profiles match and none is bound (how many).
+    Ambiguous(usize),
+}
+
 /// The result of a ReadOnly preview render.
 pub struct PreviewOutcome {
     /// Agent the overlay was rendered for.
     pub agent: String,
-    /// Selected profile label (`none` when no profile applies).
+    /// Selected profile label (`none` when no profile applies). Retained for the
+    /// `profile {label}` text in the overlay head; the chip uses `binding`.
     pub profile_label: String,
+    /// Structured selection state for the binding chip.
+    pub binding: BindingState,
+    /// Short human summary of the simulated context, e.g. `rust · repo`.
+    pub context_summary: String,
+    /// How many capabilities actually render for `agent` (after agent gating) —
+    /// the provenance breadcrumb's count, truthful to what's in the overlay.
+    pub cap_count: usize,
     /// The rendered overlay markdown (header + body).
     pub overlay: String,
     /// A human note when there's no single profile (empty / ambiguous).
@@ -103,8 +124,30 @@ pub struct CapView {
     pub id: String,
     pub title: String,
     pub kind: &'static str,
+    /// The capability's risk (drives the row's risk spine).
+    pub risk: Risk,
     /// Composed into the current preview overlay.
     pub active: bool,
+}
+
+/// Whether a profile's referenced capability id resolves to something that
+/// actually contributes to the overlay. Composition only pulls *owned* caps;
+/// a palette ref renders nothing until duplicated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomState {
+    /// Owned (in your config) — contributes to the overlay.
+    Owned,
+    /// Named but only in the read-only palette (not duplicated) — contributes nothing.
+    Palette,
+    /// Unknown id — resolves to nothing.
+    Unknown,
+}
+
+/// One "atom dot" on a profile card: a referenced capability and how it resolves.
+pub struct AtomDot {
+    pub id: String,
+    pub risk: Risk,
+    pub state: AtomState,
 }
 
 /// One profile row for the library view.
@@ -114,6 +157,37 @@ pub struct ProfileView {
     pub selected: bool,
     pub candidate: bool,
     pub capabilities: Vec<String>,
+    /// Resolved composition atoms, in declared order (drives the card's dots).
+    pub atoms: Vec<AtomDot>,
+}
+
+/// Where the user is in the capability→profile→bound pipeline. Drives the
+/// center welcome card and the library's empty-state copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardingStage {
+    /// No owned capabilities and no profiles yet.
+    Empty,
+    /// Owned capabilities exist, but no profile yet.
+    HasCaps,
+    /// Profiles exist, but none binds to the current context.
+    HasProfile,
+    /// A profile binds to the current simulated context.
+    Bound,
+}
+
+impl OnboardingStage {
+    /// Compute the stage from the library snapshot + the resolved binding.
+    pub fn of(lib: &LibraryView, binding: &BindingState) -> OnboardingStage {
+        if matches!(binding, BindingState::Bound(_)) {
+            OnboardingStage::Bound
+        } else if !lib.profiles.is_empty() {
+            OnboardingStage::HasProfile
+        } else if !lib.yours.is_empty() {
+            OnboardingStage::HasCaps
+        } else {
+            OnboardingStage::Empty
+        }
+    }
 }
 
 /// The whole left-pane library snapshot for a context.
@@ -208,12 +282,40 @@ pub fn render_preview(snap: &Snapshot) -> crate::Result<PreviewOutcome> {
         dynamic: DynamicMode::ReadOnly,
     })?;
 
+    let binding = match &selection {
+        Selection::Use(p) => BindingState::Bound(p.name.clone()),
+        Selection::None => BindingState::None,
+        Selection::Ambiguous(cands) => BindingState::Ambiguous(cands.len()),
+    };
+    // Count only the caps that actually render for this agent (matches the
+    // renderer's own `applies_to_agent` gate) so the breadcrumb never overstates.
+    let cap_count = composition
+        .capabilities
+        .iter()
+        .filter(|rc| rc.capability.applies_to_agent(&agent_id))
+        .count();
+
     Ok(PreviewOutcome {
         agent: agent_id,
         profile_label: composition.label().to_string(),
+        binding,
+        context_summary: context_summary(&ctx),
+        cap_count,
         overlay: out.content,
         note,
     })
+}
+
+/// A short human summary of a (simulated) context for the provenance
+/// breadcrumb, e.g. `rust · repo` or `no stack · machine`.
+fn context_summary(ctx: &Context) -> String {
+    let stack = if ctx.stacks.is_empty() {
+        "no stack".to_string()
+    } else {
+        ctx.stacks.join("+")
+    };
+    let scope = if ctx.git.is_some() { "repo" } else { "machine" };
+    format!("{stack} · {scope}")
 }
 
 /// Build the left-pane library view (your caps + the palette + your profiles),
@@ -246,20 +348,46 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
             active: active_ids.contains(&c.id),
             title: c.title().to_string(),
+            risk: c.risk,
             id: c.id.clone(),
         })
         .collect();
+    // The palette (called once; the local `palette` below would shadow the fn).
+    let palette_items = palette();
+    // Resolve each profile's capability refs to risk + provenance for the atom
+    // dots: owned (contributes) vs palette-only (named but not duplicated, so it
+    // renders nothing) vs unknown. No extra requests — all from the snapshot.
+    let owned_risk: std::collections::HashMap<&str, Risk> = cfg
+        .capabilities
+        .iter()
+        .map(|c| (c.id.as_str(), c.risk))
+        .collect();
+    let palette_risk: std::collections::HashMap<&str, Risk> = palette_items
+        .iter()
+        .map(|c| (c.id.as_str(), c.risk))
+        .collect();
+    let resolve_atom = |id: String| -> AtomDot {
+        let (risk, state) = if let Some(&r) = owned_risk.get(id.as_str()) {
+            (r, AtomState::Owned)
+        } else if let Some(&r) = palette_risk.get(id.as_str()) {
+            (r, AtomState::Palette)
+        } else {
+            (Risk::Info, AtomState::Unknown)
+        };
+        AtomDot { id, risk, state }
+    };
     // Palette items not already owned (by id) in your library.
     let owned: std::collections::HashSet<&str> =
         cfg.capabilities.iter().map(|c| c.id.as_str()).collect();
-    let palette = palette()
-        .into_iter()
+    let palette: Vec<CapView> = palette_items
+        .iter()
         .filter(|c| !owned.contains(c.id.as_str()))
         .map(|c| CapView {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
             active: false,
             title: c.title().to_string(),
-            id: c.id,
+            risk: c.risk,
+            id: c.id.clone(),
         })
         .collect();
     let profiles = cfg
@@ -271,6 +399,11 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
             selected: selected_name.as_deref() == Some(p.name.as_str()),
             candidate: profile::profile_matches_targets(p, &tags),
             capabilities: p.capabilities.iter().map(|r| r.id().to_string()).collect(),
+            atoms: p
+                .capabilities
+                .iter()
+                .map(|r| resolve_atom(r.id().to_string()))
+                .collect(),
         })
         .collect();
 

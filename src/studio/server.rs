@@ -25,7 +25,9 @@ use crate::config::{self, Config};
 use crate::context;
 use crate::studio::assets;
 use crate::studio::edit::{Session, StagedOp};
-use crate::studio::state::{self, PreviewOutcome, Simulated, StudioState};
+use crate::studio::state::{
+    self, BindingState, OnboardingStage, PreviewOutcome, Simulated, StudioState,
+};
 use crate::studio::views::{self, TrustBanner};
 use crate::trust;
 
@@ -194,10 +196,16 @@ fn handle_shell(state: &Arc<Mutex<StudioState>>) -> Resp {
     let preview = state::render_preview(&snap).unwrap_or_else(|e| PreviewOutcome {
         agent: snap.sim.agent.clone(),
         profile_label: "none".to_string(),
+        binding: BindingState::None,
+        context_summary: String::new(),
+        cap_count: 0,
         overlay: String::new(),
         note: Some(format!("preview error: {e}")),
     });
-    Resp::html(views::shell(&lib, staged, &snap.sim, &agents, &preview))
+    let stage = OnboardingStage::of(&lib, &preview.binding);
+    Resp::html(views::shell(
+        &lib, staged, &snap.sim, &agents, &preview, stage,
+    ))
 }
 
 fn handle_library(state: &Arc<Mutex<StudioState>>) -> Resp {
@@ -923,7 +931,7 @@ mod tests {
 
         let diff = body_of(route(&st, &req("GET", "/diff", "", &[HOST, COOKIE], "")));
         // Leak-lint flags the private-looking hostname in the public layer.
-        assert!(diff.contains("leak check"));
+        assert!(diff.to_lowercase().contains("leak check"));
         assert!(diff.contains("build-box.corp.example.com"));
         // Trust banner appears for the repo command cap (untrusted by default).
         assert!(diff.contains("trust this repo") || diff.contains("Allow this repo"));
