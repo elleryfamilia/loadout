@@ -124,6 +124,8 @@ pub struct CapView {
     pub id: String,
     pub title: String,
     pub kind: &'static str,
+    /// Primary category for grouping the library (the capability's first tag).
+    pub category: Option<String>,
     /// Optional curated icon name.
     pub icon: Option<String>,
     /// Interpreter for a script cap (`bash`/`sh`/`python`); drives the badge.
@@ -338,6 +340,7 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
         .iter()
         .map(|c| CapView {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
+            category: c.tags.first().cloned(),
             active: active_ids.contains(&c.id),
             title: c.title().to_string(),
             icon: c.icon.clone(),
@@ -379,6 +382,7 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
         .filter(|c| !owned.contains(c.id.as_str()))
         .map(|c| CapView {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
+            category: c.tags.first().cloned(),
             active: false,
             title: c.title().to_string(),
             icon: c.icon.clone(),

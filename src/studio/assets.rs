@@ -22,6 +22,7 @@ fn content_type(name: &str) -> &'static str {
         Some("js") => "text/javascript; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("html") => "text/html; charset=utf-8",
+        Some("woff2") => "font/woff2",
         _ => "application/octet-stream",
     }
 }
@@ -38,6 +39,13 @@ mod tests {
         let (js, ct) = get("/assets/studio.js").expect("studio.js must be embedded");
         assert!(ct.starts_with("text/javascript"));
         assert!(!js.is_empty());
+        // Self-hosted fonts are embedded and served as font/woff2.
+        for f in ["newsreader", "sail"] {
+            let (font, ct) = get(&format!("/assets/fonts/{f}.woff2"))
+                .unwrap_or_else(|| panic!("{f}.woff2 must be embedded"));
+            assert_eq!(ct, "font/woff2");
+            assert!(!font.is_empty());
+        }
         // Unknown / traversal names don't resolve.
         assert!(get("/assets/../config.toml").is_none());
         assert!(get("/assets/nope.css").is_none());

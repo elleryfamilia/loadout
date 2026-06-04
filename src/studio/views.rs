@@ -227,7 +227,7 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str) -> String {
             }
             body {
                 header class="topbar" {
-                    div class="brand" { span class="brand-mark" { (brand_mark()) } span class="brand-name" { "rosita studio" } }
+                    div class="brand" { span class="brand-mark" { (brand_mark()) } span class="brand-name" { "rosita" } }
                     (tab_bar(active_tab))
                     div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
                 }
@@ -456,7 +456,17 @@ pub fn capabilities_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
                     button class="btn btn-primary" hx-get="/capabilities/new" hx-target="#modal" { (icon("plus")) "Write your first capability" }
                 }
             } @else {
-                div class="cap-grid" { @for c in &lib.yours { (cap_card(c)) } }
+                @let groups = group_capabilities(&lib.yours);
+                @if groups.len() <= 1 {
+                    div class="cap-grid" { @for c in &lib.yours { (cap_card(c)) } }
+                } @else {
+                    @for (label, caps) in &groups {
+                        section class="cap-group" {
+                            h2 class="cap-group-head" { (label) span class="cap-group-count" { (caps.len()) } }
+                            div class="cap-grid" { @for c in caps { (cap_card(c)) } }
+                        }
+                    }
+                }
             }
         }
     }
@@ -464,6 +474,77 @@ pub fn capabilities_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
 
 pub fn capabilities_tab_fragment(lib: &LibraryView, flash: Option<&str>) -> String {
     capabilities_tab(lib, flash).into_string()
+}
+
+/// Order known categories sensibly; unknown tags fall after them (alphabetical),
+/// and the untagged "General" bucket sorts last.
+const CATEGORY_ORDER: &[&str] = &[
+    "awareness",
+    "stack",
+    "comms",
+    "dev-workflow",
+    "infra",
+    "safety",
+    "security",
+];
+
+/// A friendly heading for a capability category (its primary tag).
+fn category_label(cat: Option<&str>) -> String {
+    match cat {
+        Some("stack") => "Stack conventions".to_string(),
+        Some("comms") => "Communication".to_string(),
+        Some("awareness") => "Awareness".to_string(),
+        Some("infra") => "Infrastructure".to_string(),
+        Some("safety") => "Safety".to_string(),
+        Some("security") => "Security".to_string(),
+        Some("dev-workflow") => "Workflow".to_string(),
+        Some(other) => title_case(other),
+        None => "General".to_string(),
+    }
+}
+
+/// "my-tag" → "My tag" for an unmapped category.
+fn title_case(s: &str) -> String {
+    let spaced = s.replace(['-', '_'], " ");
+    let mut chars = spaced.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => spaced,
+    }
+}
+
+/// Group capabilities by their primary category, in a stable, friendly order.
+/// Within a group, the caps keep their library order.
+fn group_capabilities(caps: &[CapView]) -> Vec<(String, Vec<&CapView>)> {
+    let key_of = |c: &CapView| c.category.clone().unwrap_or_default();
+    // Distinct keys in first-seen order, then sorted by rank.
+    let mut keys: Vec<String> = Vec::new();
+    for c in caps {
+        let k = key_of(c);
+        if !keys.contains(&k) {
+            keys.push(k);
+        }
+    }
+    keys.sort_by_key(|k| category_rank(k));
+    keys.into_iter()
+        .map(|k| {
+            let label = category_label(if k.is_empty() { None } else { Some(&k) });
+            let members: Vec<&CapView> = caps.iter().filter(|c| key_of(c) == k).collect();
+            (label, members)
+        })
+        .collect()
+}
+
+/// Sort key: known categories by their `CATEGORY_ORDER` index, then unknown tags
+/// alphabetically, then the untagged "General" bucket last.
+fn category_rank(key: &str) -> (u8, String) {
+    if key.is_empty() {
+        return (3, String::new());
+    }
+    match CATEGORY_ORDER.iter().position(|&c| c == key) {
+        Some(i) => (1, format!("{i:02}")),
+        None => (2, key.to_string()),
+    }
 }
 
 fn cap_card(c: &CapView) -> Markup {
@@ -932,4 +1013,63 @@ fn enc(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cv(id: &str, category: Option<&str>) -> CapView {
+        CapView {
+            id: id.into(),
+            title: id.into(),
+            kind: "static",
+            category: category.map(str::to_string),
+            icon: None,
+            script_lang: None,
+            private: false,
+            risk: Risk::Info,
+            active: false,
+        }
+    }
+
+    #[test]
+    fn capabilities_group_in_friendly_order() {
+        let caps = vec![
+            cv("a", Some("comms")),
+            cv("b", None),
+            cv("c", Some("stack")),
+            cv("d", Some("awareness")),
+            cv("e", Some("stack")),
+            cv("f", Some("zebra-custom")),
+        ];
+        let groups = group_capabilities(&caps);
+        let labels: Vec<&str> = groups.iter().map(|(l, _)| l.as_str()).collect();
+        // Known categories in CATEGORY_ORDER, then unknown tags (alpha), then
+        // the untagged "General" bucket last.
+        assert_eq!(
+            labels,
+            vec![
+                "Awareness",
+                "Stack conventions",
+                "Communication",
+                "Zebra custom",
+                "General"
+            ]
+        );
+        // A group keeps its members in library order.
+        let stack = groups
+            .iter()
+            .find(|(l, _)| l == "Stack conventions")
+            .unwrap();
+        let ids: Vec<&str> = stack.1.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["c", "e"]);
+    }
+
+    #[test]
+    fn category_label_titlecases_unknown_tags() {
+        assert_eq!(category_label(Some("stack")), "Stack conventions");
+        assert_eq!(category_label(Some("my-custom_tag")), "My custom tag");
+        assert_eq!(category_label(None), "General");
+    }
 }

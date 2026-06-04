@@ -1,5 +1,23 @@
 /* rosita studio — refined dark, tabbed (Profiles / Capabilities).
-   One accent (blue); risk as a semantic spine; a 4px grid and a real type scale. */
+   One accent (blue); risk as a semantic spine; a 4px grid and a real type scale.
+   Fonts are self-hosted (no external calls): Sail for the wordmark, Newsreader
+   for body/UI. Both © their authors under the SIL Open Font License 1.1
+   (https://scripts.sil.org/OFL); redistributed here in binary woff2 form. */
+
+@font-face {
+  font-family: "Newsreader";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url(/assets/fonts/newsreader.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Sail";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/assets/fonts/sail.woff2) format("woff2");
+}
 
 :root {
   --bg: #0d0f14;
@@ -23,7 +41,8 @@
   --ok: #7fd6a0;
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --sans: "Newsreader", Georgia, "Times New Roman", serif;
+  --brand: "Sail", "Newsreader", cursive;
 
   --r-sm: 6px;
   --r: 8px;
@@ -34,7 +53,7 @@
 html, body { height: 100%; }
 body {
   margin: 0;
-  font: 400 13px/1.5 var(--sans);
+  font: 400 13.5px/1.55 var(--sans);
   background: var(--bg);
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
@@ -49,10 +68,10 @@ body {
   height: 52px; padding: 0 16px;
   background: var(--panel); border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 8px; }
+.brand { display: flex; align-items: center; gap: 10px; }
 .brand-mark { display: inline-flex; }
-.brand-mark .rose { width: 22px; height: 22px; display: block; }
-.brand-name { font-size: 15px; font-weight: 600; }
+.brand-mark .rose { width: 28px; height: 28px; display: block; }
+.brand-name { font-family: var(--brand); font-size: 30px; font-weight: 400; line-height: 1; letter-spacing: .5px; padding-bottom: 2px; }
 
 .tabs { display: flex; gap: 4px; }
 .tab {
@@ -203,6 +222,10 @@ body {
 .markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 1.1em 0; }
 
 /* --- Capabilities tab ------------------------------------------------------ */
+.cap-group { margin-bottom: 26px; }
+.cap-group:last-child { margin-bottom: 0; }
+.cap-group-head { display: flex; align-items: center; gap: 9px; margin: 0 0 12px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.cap-group-count { font-size: 11px; font-weight: 600; color: var(--faint); background: var(--panel-2); border-radius: 999px; padding: 1px 8px; letter-spacing: 0; }
 .cap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 12px; }
 .cap-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-left: 3px solid transparent; border-radius: var(--r); background: var(--panel-2); cursor: pointer; transition: border-color .12s; }
 .cap-card:hover { border-color: var(--accent-line); }
@@ -226,6 +249,15 @@ body {
 .modal-body { padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
 .modal-foot .delete-left { margin-right: auto; }
+
+/* --- confirmation dialog (replaces window.confirm) ------------------------- */
+.confirm-root { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; }
+.confirm-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .62); }
+.confirm { position: relative; z-index: 1; width: min(440px, 92vw); display: flex; flex-direction: column; gap: 10px; padding: 20px 22px; background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: 0 24px 64px rgba(0, 0, 0, .6); }
+.confirm-title { margin: 0; font-size: 18px; font-weight: 600; }
+.confirm-root.danger .confirm-title { color: var(--danger); }
+.confirm-msg { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.55; }
+.confirm-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
 /* icon picker dropdown */
 .icon-field { flex: none; display: flex; flex-direction: column; gap: 5px; }

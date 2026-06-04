@@ -55,21 +55,24 @@
     var trig = parseTrigger(el, isForm);
     var timer;
 
+    function send() {
+      var opts = { method: method, headers: {} };
+      if (method !== "GET") {
+        opts.headers["Content-Type"] = "application/x-www-form-urlencoded";
+        opts.body = form ? serialize(form) : "";
+      }
+      fetch(url, opts)
+        .then(function (r) { return r.text(); })
+        .then(function (t) { swap(target, t); })
+        .catch(function () { /* leave the last good fragment in place */ });
+    }
+
     function fire(ev) {
       if (ev) ev.preventDefault();
-      if (confirmMsg && !window.confirm(confirmMsg)) return;
+      // hx-confirm gates the request on a themed dialog (not window.confirm).
+      if (confirmMsg) { confirmThen(el, url, method, confirmMsg, send); return; }
       clearTimeout(timer);
-      timer = setTimeout(function () {
-        var opts = { method: method, headers: {} };
-        if (method !== "GET") {
-          opts.headers["Content-Type"] = "application/x-www-form-urlencoded";
-          opts.body = form ? serialize(form) : "";
-        }
-        fetch(url, opts)
-          .then(function (r) { return r.text(); })
-          .then(function (t) { swap(target, t); })
-          .catch(function () { /* leave the last good fragment in place */ });
-      }, trig.delay);
+      timer = setTimeout(send, trig.delay);
     }
 
     trig.events.forEach(function (ev) {
@@ -82,6 +85,65 @@
     var sel = "[hx-get],[hx-post],[hx-delete],[hx-put]";
     if (root.matches && root.matches(sel)) bind(root);
     root.querySelectorAll(sel).forEach(bind);
+  }
+
+  // A themed confirmation dialog (replaces the native window.confirm). The
+  // message is our own server-rendered hx-confirm string; it's set via
+  // textContent (never innerHTML). Confirm runs onOk(); Cancel / Escape /
+  // backdrop dismiss. Enter confirms. Tone is inferred (DELETE / danger class).
+  function confirmThen(srcEl, url, method, message, onOk) {
+    var danger = method === "DELETE" ||
+      /(^|\s)(btn-danger|danger)(\s|$)/.test(srcEl.className || "");
+    var apply = /\/apply$/.test(url);
+    var okLabel = danger ? "Delete" : apply ? "Apply" : "Confirm";
+    var title = danger ? "Confirm removal" : apply ? "Apply changes" : "Please confirm";
+
+    var root = document.createElement("div");
+    root.className = "confirm-root" + (danger ? " danger" : "");
+    var backdrop = document.createElement("div");
+    backdrop.className = "confirm-backdrop";
+    var card = document.createElement("div");
+    card.className = "confirm";
+    card.setAttribute("role", "alertdialog");
+    card.setAttribute("aria-modal", "true");
+    var h = document.createElement("h2");
+    h.className = "confirm-title";
+    h.textContent = title;
+    var p = document.createElement("p");
+    p.className = "confirm-msg";
+    p.textContent = message;
+    var foot = document.createElement("div");
+    foot.className = "confirm-foot";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn btn-ghost";
+    cancel.textContent = "Cancel";
+    var ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "btn " + (danger ? "btn-danger" : "btn-primary");
+    ok.textContent = okLabel;
+    foot.appendChild(cancel);
+    foot.appendChild(ok);
+    card.appendChild(h);
+    card.appendChild(p);
+    card.appendChild(foot);
+    root.appendChild(backdrop);
+    root.appendChild(card);
+    document.body.appendChild(root);
+    ok.focus();
+
+    function close() {
+      document.removeEventListener("keydown", onKey, true);
+      if (root.parentNode) root.parentNode.removeChild(root);
+    }
+    function onKey(e) {
+      if (e.key === "Escape") { e.preventDefault(); close(); }
+      else if (e.key === "Enter") { e.preventDefault(); close(); onOk(); }
+    }
+    cancel.addEventListener("click", close);
+    backdrop.addEventListener("click", close);
+    ok.addEventListener("click", function () { close(); onOk(); });
+    document.addEventListener("keydown", onKey, true);
   }
 
   // Tab active-state (chrome only; the swap itself is hx-driven). Delegated so it
