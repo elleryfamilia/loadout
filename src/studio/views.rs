@@ -658,6 +658,7 @@ pub fn cap_dialog(
     layer: Layer,
     owned: bool,
     return_profile: Option<&str>,
+    used_by: &[String],
 ) -> String {
     let is_new = cap.is_none();
     let id = cap.map(|c| c.id.as_str()).unwrap_or("");
@@ -665,6 +666,25 @@ pub fn cap_dialog(
     let advanced = cap
         .map(crate::studio::state::is_advanced_capability)
         .unwrap_or(false);
+    // Deleting a composed capability also cleans it out of the profiles using it;
+    // warn up front and name them so it isn't a surprise.
+    let delete_confirm = if used_by.is_empty() {
+        format!("Delete capability “{id}”? This stages its removal.")
+    } else {
+        let names = used_by
+            .iter()
+            .map(|n| format!("“{n}”"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let those = if used_by.len() == 1 {
+            "that profile"
+        } else {
+            "those profiles"
+        };
+        format!(
+            "Delete capability “{id}”? It's composed by {names} — deleting it will also remove it from {those}. This stages all the changes."
+        )
+    };
     html! {
         div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
         div class="modal" {
@@ -739,7 +759,7 @@ pub fn cap_dialog(
                         @if !is_new {
                             button type="button" class="btn btn-danger delete-left"
                                 hx-delete=(format!("/capabilities/{}", enc(id))) hx-target="#main"
-                                hx-confirm=(format!("Delete capability “{id}”? This stages its removal.")) {
+                                hx-confirm=(delete_confirm) {
                                 (icon("trash")) "Delete"
                             }
                         }

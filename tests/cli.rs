@@ -441,6 +441,25 @@ fn doctor_leak_lint_flags_public_but_not_local() {
 }
 
 #[test]
+fn doctor_flags_a_profile_referencing_an_unknown_capability() {
+    // A hand-deleted capability leaves a dangling profile reference that renders
+    // nothing — doctor surfaces it.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[capabilities]]\nid = \"present\"\nguidance = \"hi\"\n\
+         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"present\", \"gone\"]\n",
+    );
+
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unknown capability 'gone'"))
+        .stdout(predicate::str::contains("unknown capability 'present'").not());
+}
+
+#[test]
 fn doctor_flags_repo_declared_caps_and_profiles() {
     // Capabilities and profiles are global-only; a repo that declares them is
     // ignored at render time, so doctor surfaces the otherwise-invisible mistake.

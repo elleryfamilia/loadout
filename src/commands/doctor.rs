@@ -86,6 +86,8 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     }
     // Capabilities/profiles authored in a repo layer (global-only mistake).
     check_repo_global_only(&mut c, &prep.repo_base);
+    // Profiles referencing capabilities that don't exist (e.g. a hand-deleted cap).
+    check_dangling_capability_refs(&mut c, &prep.config);
     // Allowlist/denylist consistency.
     check_env_policy(&mut c, &prep.config);
     // Private-data leak lint over public config layers.
@@ -233,6 +235,29 @@ fn check_public_leaks(c: &mut Checks, prep: &super::Prepared) {
     }
     if scanned > 0 && flagged == 0 {
         c.line(Status::Ok, "public config has no private-looking literals");
+    }
+}
+
+/// A profile that references a capability id not in the library renders nothing
+/// for that entry (compose silently skips it). Surface the dangling reference —
+/// it usually means a capability was hand-deleted without cleaning up the
+/// profile (studio's delete does this cleanup automatically).
+fn check_dangling_capability_refs(c: &mut Checks, cfg: &config::Config) {
+    let known: std::collections::HashSet<&str> =
+        cfg.capabilities.iter().map(|x| x.id.as_str()).collect();
+    for p in &cfg.profiles {
+        for r in &p.capabilities {
+            if !known.contains(r.id()) {
+                c.line(
+                    Status::Warn,
+                    format!(
+                        "profile '{}' references unknown capability '{}' (it renders nothing — remove it or define the capability)",
+                        p.name,
+                        r.id()
+                    ),
+                );
+            }
+        }
     }
 }
 

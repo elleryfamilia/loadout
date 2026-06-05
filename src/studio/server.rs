@@ -24,6 +24,7 @@ use crate::commands::Runtime;
 use crate::config::{self, Config};
 use crate::context;
 use crate::dynamic::DynamicMode;
+use crate::profile::ProfileConfig;
 use crate::studio::assets;
 use crate::studio::edit::{Session, StagedOp};
 use crate::studio::state::{
@@ -137,7 +138,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/trust/allow") => handle_trust(state, true),
         ("POST", "/trust/deny") => handle_trust(state, false),
         ("GET", "/capabilities/new") => {
-            Resp::html(views::cap_dialog(None, Layer::Global, true, None))
+            Resp::html(views::cap_dialog(None, Layer::Global, true, None, &[]))
         }
         ("POST", "/capabilities") => handle_cap_save(state, req),
         ("GET", "/profiles/new") => handle_profile_new(state),
@@ -447,34 +448,103 @@ fn handle_cap_edit(state: &Arc<Mutex<StudioState>>, id: &str, return_profile: &s
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
     if let Some(c) = cfg.capabilities.iter().find(|c| c.id == id) {
-        Resp::html(views::cap_dialog(Some(c), c.origin, true, rp))
+        let used_by = profiles_using(&cfg, id);
+        Resp::html(views::cap_dialog(Some(c), c.origin, true, rp, &used_by))
     } else if let Some(c) = palette().into_iter().find(|c| c.id == id) {
-        Resp::html(views::cap_dialog(Some(&c), Layer::Global, false, rp))
+        Resp::html(views::cap_dialog(Some(&c), Layer::Global, false, rp, &[]))
     } else {
         Resp::html(views::error_fragment(&format!("unknown capability '{id}'")))
     }
 }
 
+/// Names of the profiles whose `capabilities` reference `cap_id`.
+fn profiles_using(cfg: &Config, cap_id: &str) -> Vec<String> {
+    cfg.profiles
+        .iter()
+        .filter(|p| p.capabilities.iter().any(|r| r.id() == cap_id))
+        .map(|p| p.name.clone())
+        .collect()
+}
+
 fn handle_cap_delete(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
-    let res = {
+    // Deleting a composed capability would leave dangling references in the
+    // profiles that use it (silently dropped at render). Instead, stage the
+    // deletion AND remove the id from every profile that composed it, and report
+    // the cleanup so it isn't invisible.
+    let res = (|| -> crate::Result<(Vec<String>, Vec<String>)> {
         let mut s = state.lock().unwrap();
-        match s.session.capability_layer(id) {
-            Some(layer) => s.session.stage(StagedOp::DeleteCapability {
-                layer,
-                id: id.to_string(),
-            }),
-            None => {
-                return Resp::html(views::error_fragment(&format!(
-                    "“{id}” isn't in your library — palette items can't be deleted"
-                )))
+        let Some(layer) = s.session.capability_layer(id) else {
+            return Err(anyhow!(
+                "“{id}” isn't in your library — palette items can't be deleted"
+            ));
+        };
+        let cfg = s.session.staged_config()?;
+        let affected = profiles_using(&cfg, id);
+        let cleaned: Vec<ProfileConfig> = cfg
+            .profiles
+            .iter()
+            .filter(|p| affected.contains(&p.name))
+            .map(|p| {
+                let mut p = p.clone();
+                p.capabilities.retain(|r| r.id() != id);
+                p
+            })
+            .collect();
+
+        s.session.stage(StagedOp::DeleteCapability {
+            layer,
+            id: id.to_string(),
+        })?;
+        let mut emptied = Vec::new();
+        for p in cleaned {
+            if p.capabilities.is_empty() && p.guidance.is_none() {
+                emptied.push(p.name.clone());
             }
+            let player = s.session.profile_layer(&p.name).unwrap_or(Layer::Global);
+            s.session.stage(StagedOp::EditProfile {
+                layer: player,
+                name: p.name.clone(),
+                profile: Box::new(p),
+            })?;
         }
+        Ok((affected, emptied))
+    })();
+
+    let (affected, emptied) = match res {
+        Ok(v) => v,
+        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
-    match res.and_then(|()| library_now(state)) {
-        Ok(lib) => Resp::html(views::cap_result(
-            &lib,
-            &format!("staged deletion of “{id}”"),
-        )),
+
+    let mut msg = format!("staged deletion of “{id}”");
+    if !affected.is_empty() {
+        let names = affected
+            .iter()
+            .map(|n| format!("“{n}”"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let those = if affected.len() == 1 {
+            "profile"
+        } else {
+            "profiles"
+        };
+        msg.push_str(&format!(" — and removed it from {those} {names}"));
+        if !emptied.is_empty() {
+            let e = emptied
+                .iter()
+                .map(|n| format!("“{n}”"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let now_has = if emptied.len() == 1 {
+                "now has no capabilities"
+            } else {
+                "now have no capabilities"
+            };
+            msg.push_str(&format!(" ({e} {now_has})"));
+        }
+    }
+
+    match library_now(state) {
+        Ok(lib) => Resp::html(views::cap_result(&lib, &msg)),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
@@ -1229,6 +1299,49 @@ mod tests {
         ));
         let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
         assert!(!on_disk.contains("id = \"rc\""));
+    }
+
+    #[test]
+    fn deleting_a_composed_capability_warns_and_cleans_up_the_profile() {
+        let cfg = "[[capabilities]]\nid = \"rc\"\nguidance = \"x\"\n\
+                   \n[[capabilities]]\nid = \"keep\"\nguidance = \"y\"\n\
+                   \n[[profiles]]\nname = \"p\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\", \"keep\"]\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+
+        // The edit dialog warns up front that the cap is composed by a profile.
+        let dialog = body_of(route(
+            &st,
+            &req("GET", "/capabilities/rc/edit", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(dialog.contains("composed by") && dialog.contains("“p”"));
+
+        // Deleting it stages the removal AND cleans the reference, and says so.
+        let r = body_of(route(
+            &st,
+            &req(
+                "DELETE",
+                "/capabilities/rc",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        ));
+        assert!(r.contains("staged deletion"));
+        assert!(r.contains("removed it from") && r.contains("“p”"));
+
+        // Apply → on disk the cap is gone and the profile no longer references it.
+        body_of(route(
+            &st,
+            &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
+        assert!(
+            !on_disk.contains("\"rc\""),
+            "no dangling ref; got:\n{on_disk}"
+        );
+        assert!(on_disk.contains("id = \"keep\""));
+        assert!(on_disk.contains("capabilities = [\"keep\"]"));
     }
 
     #[test]
