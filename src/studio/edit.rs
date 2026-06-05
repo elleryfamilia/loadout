@@ -605,6 +605,22 @@ mod tests {
         Session::open(repo, None).unwrap()
     }
 
+    /// A repo plus a global config dir (a subdir of the same tempdir) whose
+    /// `config.toml` starts with `body`. Capabilities and profiles are
+    /// global-only, so tests that assert on the *merged* staged config author
+    /// them here and stage to `Layer::Global`.
+    fn repo_with_global(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let gdir = d.path().join("global");
+        std::fs::create_dir_all(&gdir).unwrap();
+        std::fs::write(gdir.join("config.toml"), body).unwrap();
+        (d, gdir)
+    }
+
+    fn session_global(repo: &Path, gdir: &Path) -> Session {
+        Session::open(repo, Some(gdir)).unwrap()
+    }
+
     #[test]
     fn untouched_session_round_trips_comments_exactly() {
         let body = "# top comment\n\n[[capabilities]]\nid = \"a\"  # inline\nguidance = \"hi\"\n";
@@ -643,19 +659,19 @@ mod tests {
     #[test]
     fn edit_then_delete_capability() {
         let body = "[[capabilities]]\nid = \"a\"\nguidance = \"old\"\n\n[[capabilities]]\nid = \"b\"\nguidance = \"B\"\n";
-        let d = repo_with_config(body);
-        let mut s = session(d.path());
+        let (d, gdir) = repo_with_global(body);
+        let mut s = session_global(d.path(), &gdir);
 
         let mut edited = cap("a", "new guidance");
         edited.risk = Risk::Caution;
         s.stage(StagedOp::EditCapability {
-            layer: Layer::Repo,
+            layer: Layer::Global,
             id: "a".into(),
             cap: Box::new(edited),
         })
         .unwrap();
         s.stage(StagedOp::DeleteCapability {
-            layer: Layer::Repo,
+            layer: Layer::Global,
             id: "b".into(),
         })
         .unwrap();
@@ -754,39 +770,35 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_palette_item_lands_as_owned_repo_capability() {
-        // Security-critical: a duplicated palette `command` cap must be tagged
-        // with the repo origin (untrusted authorship), not built-in.
-        let d = repo_with_config("");
-        let mut s = session(d.path());
-        // Inject a command-backed palette-like cap by creating one, then verify
-        // origin tagging via the in-memory assembly seam.
+    fn created_command_capability_is_owned_globally_and_trusted() {
+        // Capabilities are global-only, so an authored `command` capability lands
+        // in the global layer (trusted authorship) — there is no repo-authored,
+        // untrusted command path anymore. Origin tagging is still verified via
+        // the in-memory assembly seam.
+        let (d, gdir) = repo_with_global("");
+        let mut s = session_global(d.path(), &gdir);
         let mut command_cap = cap("danger", "runs a command");
         command_cap.command = Some("echo hi".into());
         s.stage(StagedOp::CreateCapability {
-            layer: Layer::Repo,
+            layer: Layer::Global,
             cap: Box::new(command_cap),
         })
         .unwrap();
 
         let cfg = s.staged_config().unwrap();
         let landed = cfg.capabilities.iter().find(|c| c.id == "danger").unwrap();
-        assert_eq!(
-            landed.origin,
-            Layer::Repo,
-            "repo-authored command must be tagged Repo so trust is enforced"
-        );
-        assert!(!landed.origin.is_trusted_authorship());
+        assert_eq!(landed.origin, Layer::Global);
+        assert!(landed.origin.is_trusted_authorship());
     }
 
     #[test]
-    fn real_palette_duplicate_is_owned_in_repo() {
-        let d = repo_with_config("");
-        let mut s = session(d.path());
+    fn real_palette_duplicate_is_owned_globally() {
+        let (d, gdir) = repo_with_global("");
+        let mut s = session_global(d.path(), &gdir);
         let palette_id = palette()[0].id.clone();
         s.stage(StagedOp::DuplicatePaletteItem {
             id: palette_id.clone(),
-            to_layer: Layer::Repo,
+            to_layer: Layer::Global,
         })
         .unwrap();
         let cfg = s.staged_config().unwrap();
@@ -794,7 +806,7 @@ mod tests {
             .capabilities
             .iter()
             .find(|c| c.id == palette_id)
-            .expect("duplicated palette item should now be in the repo library");
-        assert_eq!(dup.origin, Layer::Repo);
+            .expect("duplicated palette item should now be in the global library");
+        assert_eq!(dup.origin, Layer::Global);
     }
 }

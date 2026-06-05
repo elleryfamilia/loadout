@@ -142,10 +142,7 @@ impl Config {
         for (layer, path, text) in layers {
             let mut parsed: RawConfig = toml::from_str(&text)
                 .with_context(|| format!("parsing staged config for {}", path.display()))?;
-            // NOTE: global-only stripping is intentionally NOT applied here yet —
-            // studio still authors into the repo layer; it moves to global in the
-            // same change that gates this path (so staged repo edits never vanish
-            // mid-preview). See `strip_global_only` and the studio routing slice.
+            strip_global_only(layer, &mut parsed);
             for cap in &mut parsed.capabilities {
                 cap.origin = layer;
             }
@@ -718,7 +715,28 @@ mod tests {
         );
     }
 
-    // NOTE: the studio path (`from_layer_strs`) is gated in the studio-routing
-    // slice, together with moving studio authoring to the global layer — see
-    // `from_layer_strs` for why the gate is deferred there.
+    #[test]
+    fn from_layer_strs_enforces_global_only() {
+        use crate::capability::Layer;
+        let c = Config::from_layer_strs(vec![
+            (
+                Layer::Global,
+                PathBuf::from("/g/config.toml"),
+                CAP_AND_PROFILE.to_string(),
+            ),
+            (
+                Layer::Repo,
+                PathBuf::from("/r/.rosita/config.toml"),
+                "[[capabilities]]\nid = \"repo-cap\"\nguidance = \"nope\"\n\
+                 \n[[profiles]]\nname = \"repo-prof\"\ntargets = [\"rust\"]\n"
+                    .to_string(),
+            ),
+        ])
+        .unwrap();
+        // Global contributes; the repo layer is stripped (studio path).
+        assert!(c.capabilities.iter().any(|x| x.id == "x"));
+        assert!(c.profiles.iter().any(|p| p.name == "p"));
+        assert!(!c.capabilities.iter().any(|x| x.id == "repo-cap"));
+        assert!(!c.profiles.iter().any(|p| p.name == "repo-prof"));
+    }
 }

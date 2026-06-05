@@ -868,7 +868,7 @@ pub fn profile_editor(
                 }
                 fieldset class="lives-in" {
                     legend { "Where it lives" }
-                    input type="hidden" name="scope" value="repo";
+                    p class="hint small" { "Global — every repo can use it; the profile whose targets match a repo binds there." }
                     label class="check" { input type="checkbox" name="disabled" checked[draft.disabled]; span { "Disabled (kept, but never selected)" } }
                 }
                 div class="form-buttons" {

@@ -101,8 +101,9 @@ fn studio_binds_and_serves_secured_spine() {
     );
 
     // 5. A write over the real socket: stage a capability (exercises POST-body
-    //    parsing + the Origin guard end-to-end), then apply it.
-    let body = "name=smoke&kind=markdown&guidance=hello&scope=repo&visibility=public";
+    //    parsing + the Origin guard end-to-end), then apply it. Capabilities are
+    //    global-only, so it lands in the global config dir (ROSITA_CONFIG_DIR).
+    let body = "name=smoke&kind=markdown&guidance=hello&visibility=public";
     let create = http(
         port,
         &format!(
@@ -117,7 +118,7 @@ fn studio_binds_and_serves_secured_spine() {
         ),
     );
     let written =
-        std::fs::read_to_string(_dir.path().join(".rosita/config.toml")).unwrap_or_default();
+        std::fs::read_to_string(_dir.path().join("empty-global/config.toml")).unwrap_or_default();
 
     // A POST without Origin must be refused (CSRF guard) over the socket too.
     let no_origin = http(

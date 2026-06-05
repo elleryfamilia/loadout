@@ -15,7 +15,7 @@ use crate::context::{Context, GitContext, Scope};
 use crate::dynamic::DynamicMode;
 use crate::profile::{self, CapabilityRef, ProfileConfig, Selection};
 use crate::render::{self, RenderRequest};
-use crate::studio::edit::{Session, StagedOp};
+use crate::studio::edit::Session;
 
 /// The simulated context the preview is rendered for. Each field overrides the
 /// real detected context; `None`/empty means "use what was detected".
@@ -526,27 +526,6 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
     })
 }
 
-/// Studio's "first open" affordance: when a repo has no authored capabilities,
-/// write the shipped starter set into its public `config.toml` as normal, owned
-/// entries (stage + apply through the comment-preserving engine). From then on
-/// the starters are just capabilities — fully editable and deletable — so studio
-/// never needs a separate read-only palette. A no-op (returns 0) the moment any
-/// capability already exists in any layer.
-pub fn seed_starters_if_empty(session: &mut Session) -> crate::Result<usize> {
-    if !session.staged_config()?.capabilities.is_empty() {
-        return Ok(0);
-    }
-    let starters = palette();
-    for cap in &starters {
-        session.stage(StagedOp::CreateCapability {
-            layer: Layer::Repo,
-            cap: Box::new(cap.clone()),
-        })?;
-    }
-    session.apply()?;
-    Ok(starters.len())
-}
-
 fn kind_of(has_command: bool, has_provider: bool) -> &'static str {
     if has_command {
         "command"
@@ -634,15 +613,15 @@ fn opt(s: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Which writable layer a form's `scope`/`visibility` controls select.
+/// Which writable layer a form's `visibility` control selects. Capabilities and
+/// profiles are global-only, so studio always authors into a global layer:
+/// `config.toml` (shared) or, when marked private, `local.toml` (real hostnames
+/// and other machine-specific values). A repo layer is never a write target.
 pub fn layer_from_form(pairs: &[(String, String)]) -> Layer {
-    let global = value_of(pairs, "scope") == Some("global");
-    let private = value_of(pairs, "visibility") == Some("private");
-    match (global, private) {
-        (true, true) => Layer::GlobalLocal,
-        (true, false) => Layer::Global,
-        (false, true) => Layer::RepoLocal,
-        (false, false) => Layer::Repo,
+    if value_of(pairs, "visibility") == Some("private") {
+        Layer::GlobalLocal
+    } else {
+        Layer::Global
     }
 }
 
@@ -793,9 +772,9 @@ pub fn inline_capability_from_form(pairs: &[(String, String)]) -> Option<(Capabi
             (content, None, None)
         };
     let layer = if value_of(pairs, "cap_private").is_some() {
-        Layer::RepoLocal
+        Layer::GlobalLocal
     } else {
-        Layer::Repo
+        Layer::Global
     };
     let cap = Capability {
         id,
@@ -950,52 +929,17 @@ mod tests {
     }
 
     #[test]
-    fn seed_starters_populates_empty_repo_then_noops() {
-        use crate::studio::edit::Session;
-        let d = tempfile::tempdir().unwrap();
-
-        // Empty repo (no .rosita dir): first open seeds the shipped palette into
-        // config.toml as normal entries.
-        let mut s = Session::open(d.path(), None).unwrap();
-        let n = seed_starters_if_empty(&mut s).unwrap();
-        assert!(n >= 5, "expected the shipped starter set to be seeded");
-        let on_disk = std::fs::read_to_string(crate::config::repo_config_path(d.path())).unwrap();
-        assert!(on_disk.contains("id = \"baseline\""));
-        assert!(on_disk.contains("id = \"rust-conventions\""));
-
-        // A fresh session over the now-populated repo seeds nothing more.
-        let mut s2 = Session::open(d.path(), None).unwrap();
-        assert_eq!(seed_starters_if_empty(&mut s2).unwrap(), 0);
-    }
-
-    #[test]
-    fn seed_starters_skips_a_repo_that_already_has_one() {
-        use crate::studio::edit::Session;
-        let d = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(crate::config::repo_dir(d.path())).unwrap();
-        std::fs::write(
-            crate::config::repo_config_path(d.path()),
-            "[[capabilities]]\nid = \"mine\"\nguidance = \"hand-authored\"\n",
-        )
-        .unwrap();
-        let mut s = Session::open(d.path(), None).unwrap();
-        assert_eq!(seed_starters_if_empty(&mut s).unwrap(), 0);
-        // The user's hand-authored config is untouched.
-        let on_disk = std::fs::read_to_string(crate::config::repo_config_path(d.path())).unwrap();
-        assert!(on_disk.contains("id = \"mine\""));
-        assert!(!on_disk.contains("id = \"baseline\""));
-    }
-
-    #[test]
-    fn layer_from_form_maps_scope_and_visibility() {
-        assert_eq!(layer_from_form(&parse_pairs("scope=repo")), Layer::Repo);
+    fn layer_from_form_is_global_only() {
+        // Authoring always targets a global layer; visibility picks public vs
+        // private. The `scope` field is ignored (a repo is never a write target).
+        assert_eq!(layer_from_form(&parse_pairs("")), Layer::Global);
+        assert_eq!(layer_from_form(&parse_pairs("scope=repo")), Layer::Global);
+        assert_eq!(
+            layer_from_form(&parse_pairs("visibility=private")),
+            Layer::GlobalLocal
+        );
         assert_eq!(
             layer_from_form(&parse_pairs("scope=repo&visibility=private")),
-            Layer::RepoLocal
-        );
-        assert_eq!(layer_from_form(&parse_pairs("scope=global")), Layer::Global);
-        assert_eq!(
-            layer_from_form(&parse_pairs("scope=global&visibility=private")),
             Layer::GlobalLocal
         );
     }

@@ -137,7 +137,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/trust/allow") => handle_trust(state, true),
         ("POST", "/trust/deny") => handle_trust(state, false),
         ("GET", "/capabilities/new") => {
-            Resp::html(views::cap_dialog(None, Layer::Repo, true, None))
+            Resp::html(views::cap_dialog(None, Layer::Global, true, None))
         }
         ("POST", "/capabilities") => handle_cap_save(state, req),
         ("GET", "/profiles/new") => handle_profile_new(state),
@@ -449,7 +449,7 @@ fn handle_cap_edit(state: &Arc<Mutex<StudioState>>, id: &str, return_profile: &s
     if let Some(c) = cfg.capabilities.iter().find(|c| c.id == id) {
         Resp::html(views::cap_dialog(Some(c), c.origin, true, rp))
     } else if let Some(c) = palette().into_iter().find(|c| c.id == id) {
-        Resp::html(views::cap_dialog(Some(&c), Layer::Repo, false, rp))
+        Resp::html(views::cap_dialog(Some(&c), Layer::Global, false, rp))
     } else {
         Resp::html(views::error_fragment(&format!("unknown capability '{id}'")))
     }
@@ -486,7 +486,7 @@ fn handle_cap_duplicate(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         .session
         .stage(StagedOp::DuplicatePaletteItem {
             id: id.to_string(),
-            to_layer: Layer::Repo,
+            to_layer: Layer::Global,
         });
     match res.and_then(|()| library_now(state)) {
         Ok(lib) => Resp::html(views::cap_result(
@@ -549,7 +549,7 @@ fn handle_profile_disable(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
             Some(p) => {
                 let mut next = p.clone();
                 next.disabled = !next.disabled;
-                let layer = s.session.profile_layer(name).unwrap_or(Layer::Repo);
+                let layer = s.session.profile_layer(name).unwrap_or(Layer::Global);
                 s.session.stage(StagedOp::EditProfile {
                     layer,
                     name: name.to_string(),
@@ -575,8 +575,9 @@ fn handle_profile_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         Err(e) => return profile_editor_with_error(state, &pairs, &e.to_string()),
     };
     let name = profile.name.clone();
+    // Profiles are global-only — always authored into the global config.
     let res = state.lock().unwrap().session.stage(StagedOp::EditProfile {
-        layer: Layer::Repo,
+        layer: Layer::Global,
         name: name.clone(),
         profile: Box::new(profile),
     });
@@ -858,11 +859,7 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
     let config = Config::load(&repo_base).context("loading configuration")?;
     let base_context = context::detect_context(&rt.cwd, &config).context("detecting context")?;
     let global_dir = config::global_config_dir();
-    let mut session = Session::open(&repo_base, global_dir.as_deref())?;
-    // First open of a repo with no authored capabilities: seed the starter set
-    // into config.toml so they appear as ordinary, editable/deletable entries.
-    let seeded = state::seed_starters_if_empty(&mut session)
-        .context("seeding starter capabilities into config.toml")?;
+    let session = Session::open(&repo_base, global_dir.as_deref())?;
     let token = make_token()?;
 
     let server = tiny_http::Server::http(("127.0.0.1", args.port))
@@ -886,9 +883,6 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
         port,
     }));
 
-    if seeded > 0 {
-        println!("rosita studio → seeded {seeded} starter capabilities into .rosita/config.toml (edit or delete them in the Capabilities tab)");
-    }
     let url = format!("http://127.0.0.1:{port}{BOOTSTRAP_PATH}?token={token}");
     println!("rosita studio → open  {url}");
     println!("(serving on 127.0.0.1:{port}; Ctrl-C to stop)");
@@ -993,13 +987,18 @@ mod tests {
     }
 
     fn state_for(repo: &std::path::Path, cfg_toml: Option<&str>) -> Arc<Mutex<StudioState>> {
+        // Capabilities and profiles are global-only, so the fixture's config is
+        // authored into a global dir (a subdir of the repo tempdir, cleaned up
+        // with it) and the session is opened with that global layer.
+        let gdir = repo.join("global");
+        std::fs::create_dir_all(&gdir).unwrap();
         if let Some(c) = cfg_toml {
-            std::fs::create_dir_all(config::repo_dir(repo)).unwrap();
-            std::fs::write(config::repo_config_path(repo), c).unwrap();
+            std::fs::write(gdir.join("config.toml"), c).unwrap();
         }
-        let config = Config::load_from(None, repo).unwrap();
+        let gcfg = gdir.join("config.toml");
+        let config = Config::load_from(Some(&gcfg), repo).unwrap();
         let base_context = context::detect_context(repo, &config).unwrap();
-        let session = Session::open(repo, None).unwrap();
+        let session = Session::open(repo, Some(&gdir)).unwrap();
         Arc::new(Mutex::new(StudioState {
             sim: Simulated {
                 agent: config.default_agent.clone(),
@@ -1012,6 +1011,12 @@ mod tests {
             token: "testtoken".into(),
             port: 7777,
         }))
+    }
+
+    /// The global `config.toml` the fixture authors into — where caps/profiles
+    /// land on apply (they are global-only).
+    fn global_config_path(repo: &std::path::Path) -> std::path::PathBuf {
+        repo.join("global").join("config.toml")
     }
 
     fn req(method: &str, path: &str, query: &str, headers: &[(&str, &str)], body: &str) -> Req {
@@ -1191,7 +1196,7 @@ mod tests {
         ));
         assert!(applied.contains("applied"));
 
-        let on_disk = std::fs::read_to_string(config::repo_config_path(d.path())).unwrap();
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
         assert!(on_disk.contains("id = \"rc\""));
         assert!(on_disk.contains("Use clippy"));
 
@@ -1222,12 +1227,12 @@ mod tests {
             &st,
             &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
         ));
-        let on_disk = std::fs::read_to_string(config::repo_config_path(d.path())).unwrap();
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
         assert!(!on_disk.contains("id = \"rc\""));
     }
 
     #[test]
-    fn duplicate_palette_item_stages_into_repo() {
+    fn duplicate_palette_item_stages_into_global() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         let r = body_of(route(
@@ -1332,8 +1337,11 @@ mod tests {
     }
 
     #[test]
-    fn diff_surfaces_leak_warning_and_trust_banner() {
-        // A repo command cap whose guidance carries a machine-specific literal.
+    fn diff_surfaces_leak_warning_for_public_config() {
+        // A capability whose guidance carries a machine-specific literal in the
+        // public (global) config.toml is leak-linted before apply. The command
+        // is global-authored → trusted, so there is no trust banner (that gate
+        // is dormant now that repos can't author commands).
         let cfg = "[[capabilities]]\n\
              id = \"deploy\"\n\
              command = \"echo hi\"\n\
@@ -1345,9 +1353,6 @@ mod tests {
         // Leak-lint flags the private-looking hostname in the public layer.
         assert!(diff.to_lowercase().contains("leak check"));
         assert!(diff.contains("build-box.corp.example.com"));
-        // Trust banner appears for the repo command cap (untrusted by default).
-        assert!(diff.contains("trust this repo") || diff.contains("Allow this repo"));
-        assert!(diff.contains("deploy"));
     }
 
     #[test]
@@ -1519,7 +1524,7 @@ mod tests {
             &st,
             &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
         ));
-        let on_disk = std::fs::read_to_string(config::repo_config_path(d.path())).unwrap();
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
         assert!(on_disk.contains("id = \"rust-strict\"")); // the copy's derived id
         assert!(on_disk.contains("New body"));
         assert!(on_disk.contains("id = \"rc\"") && on_disk.contains("Old.")); // original kept
