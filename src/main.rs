@@ -23,7 +23,6 @@ fn main() -> ExitCode {
     let rt = Runtime::new(cwd, cli.global.dry_run);
 
     let result = match &cli.command {
-        Command::Init(args) => commands::init::run(&rt, args),
         Command::Detect(args) => commands::detect::run(&rt, args),
         Command::Render(args) => commands::render::run(&rt, args),
         Command::Run(args) => commands::run::run(&rt, args),

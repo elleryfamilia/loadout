@@ -126,7 +126,8 @@ specifics are private.**
   profile-supplied ← local.
 - **`rosita doctor` lints** the public layers for machine-specific literals
   (IPv4, `*.domain.tld` globs, multi-label hostnames) and nudges you to move
-  them to `local.toml`. `rosita init` scaffolds a gitignored `local.toml` stub.
+  them to `local.toml`. The private `local.toml` is created on demand and is
+  auto-gitignored the first time rosita renders into a repo.
 - **Prefer detection over storage** — don't store network topology; let a
   provider probe it at runtime (planned). It can't leak (it's local) and can't
   go stale.

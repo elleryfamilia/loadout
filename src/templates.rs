@@ -25,11 +25,6 @@ pub struct ResolvedTemplate {
     pub content: String,
 }
 
-/// Files written by `init` to scaffold customizable templates.
-pub fn embedded_all() -> Vec<(&'static str, &'static str)> {
-    vec![("overlay.md.j2", DEFAULT_OVERLAY)]
-}
-
 /// Resolve a body template by name across repo → global → embedded overlay.
 ///
 /// Any name falls back to the shared embedded overlay, so adding a new agent
@@ -98,12 +93,5 @@ mod tests {
         let t = resolve(d.path(), "copilot").unwrap();
         assert!(t.source.ends_with("copilot.md.j2"));
         assert_eq!(t.content, "CUSTOM {{ profile }}");
-    }
-
-    #[test]
-    fn embedded_all_is_overlay() {
-        let all = embedded_all();
-        assert_eq!(all.len(), 1);
-        assert_eq!(all[0].0, "overlay.md.j2");
     }
 }

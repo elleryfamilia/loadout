@@ -41,10 +41,11 @@ cargo build --release       # ./target/release/rosita
 ## Quickstart
 
 ```bash
-rosita init                 # scaffold .rosita/ (config + templates)
+# Author capabilities & profiles once, globally, in ~/.config/rosita/config.toml
+# (or visually via `rosita studio`). A repo needs no setup.
 rosita detect               # show what was detected
 rosita explain              # show which profile is selected, and why
-rosita render --agent claude   # render + wire up the overlay
+rosita render --agent claude   # render + wire up the overlay (auto-manages .gitignore)
 rosita run claude            # render, then launch `claude` (passes args through)
 ```
 
@@ -52,7 +53,6 @@ rosita run claude            # render, then launch `claude` (passes args through
 
 | Command | What it does |
 | --- | --- |
-| `rosita init [--global] [--force]` | Scaffold `.rosita/` (config + templates); `--global` also seeds `~/.config/rosita`. |
 | `rosita detect [--json] [--probes]` | Detect and print the current context; `--probes` also runs environment providers (host/toolchain/ai-tools/tailnet/docker). |
 | `rosita render [--agent <id>\|all] [--override] [--force]` | Render the overlay(s) and wire them up. |
 | `rosita run <id> [args…] [--skip-render] [--override]` | Render for a launchable agent, then exec it (args passed through). |

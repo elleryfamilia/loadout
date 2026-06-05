@@ -284,11 +284,15 @@ pub fn apply(
         notes.push(hint.clone());
     }
 
-    // 3. gitignore (only inside a repo): the generated/cache dirs + any files we created.
+    // 3. gitignore (only inside a repo): the rosita-managed dirs + the private
+    // local.toml (binding + param overrides) + any root files we created. This
+    // keeps a repo clean automatically on every render — there is no `init`.
     if app.in_repo() {
         let mut entries = vec![
             ".rosita/generated/".to_string(),
             ".rosita/cache/".to_string(),
+            ".rosita/logs/".to_string(),
+            ".rosita/local.toml".to_string(),
         ];
         entries.extend(gitignore_extra);
         if let Some(wf) = ensure_gitignored(app, &entries)? {

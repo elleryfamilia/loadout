@@ -44,8 +44,6 @@ pub struct GlobalArgs {
 /// Subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Scaffold `.rosita/` (config + templates) in the repo.
-    Init(InitArgs),
     /// Detect and print the current context.
     Detect(DetectArgs),
     /// Render the overlay for an agent and wire it up.
@@ -139,17 +137,6 @@ pub struct TrustArgs {
 pub enum TrustAction {
     /// Show the current trust status (the default).
     Status,
-}
-
-/// `init` options.
-#[derive(Debug, Args)]
-pub struct InitArgs {
-    /// Also scaffold the global config (`~/.config/rosita`).
-    #[arg(long)]
-    pub global: bool,
-    /// Overwrite existing config/templates.
-    #[arg(long)]
-    pub force: bool,
 }
 
 /// `detect` options.

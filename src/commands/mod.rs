@@ -8,7 +8,6 @@ pub mod clean;
 pub mod detect;
 pub mod doctor;
 pub mod explain;
-pub mod init;
 pub mod introspect;
 pub mod refresh;
 pub mod render;
@@ -195,47 +194,9 @@ pub fn resolve_agents(arg: Option<&str>, config: &Config) -> crate::Result<Vec<S
     }
 }
 
-/// The sample repo config written by `rosita init`.
-///
-/// Embedded from `examples/config.toml` so the scaffolded config and the
-/// documented example are the same single source of truth.
-pub const SAMPLE_REPO_CONFIG: &str = include_str!("../../examples/config.toml");
-
-/// The sample (gitignored) `local.toml` written by `rosita init` — the private
-/// layer stub with commented `host_classes`/`capability_params` examples.
-pub const SAMPLE_LOCAL_CONFIG: &str = include_str!("../../examples/local.toml");
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sample_config_parses() {
-        // Ensure the scaffolded sample is always valid against the parser.
-        let d = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(d.path().join(".rosita")).unwrap();
-        std::fs::write(
-            crate::config::repo_config_path(d.path()),
-            SAMPLE_REPO_CONFIG,
-        )
-        .unwrap();
-        // The private layer stub sits beside it and must also parse.
-        std::fs::write(
-            crate::config::repo_local_path(d.path()),
-            SAMPLE_LOCAL_CONFIG,
-        )
-        .unwrap();
-        // No global layer → fully hermetic.
-        let cfg = Config::load_from(None, d.path()).expect("sample config must parse");
-        assert_eq!(cfg.default_agent, "claude");
-        // Capabilities and profiles are global-only: a repo layer that declares
-        // them is honored for nothing (the loader drops them). The sample's
-        // non-cap/profile content (defaults, etc.) still applies.
-        assert!(cfg.profiles.is_empty(), "repo-layer profiles are dropped");
-        assert!(cfg.capabilities.is_empty(), "repo-layer caps are dropped");
-        // The public sample must not name a machine (host_classes moved to local).
-        assert!(!SAMPLE_REPO_CONFIG.contains("example.com"));
-    }
 
     #[test]
     fn resolve_agents_defaults_all_and_unknown() {

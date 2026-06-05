@@ -77,7 +77,7 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     if prep.config.sources.is_empty() {
         c.line(
             Status::Warn,
-            "no config files found; using built-in defaults (run `rosita init`)",
+            "no config files found; author capabilities and profiles in ~/.config/rosita/config.toml (or run `rosita studio`)",
         );
     } else {
         for s in &prep.config.sources {
@@ -244,7 +244,7 @@ fn check_gitignore(c: &mut Checks, repo_base: &Path) {
     } else {
         c.line(
             Status::Warn,
-            ".gitignore missing .rosita/generated/ (run `rosita init`)",
+            ".gitignore missing .rosita/generated/ (render an agent to manage it)",
         );
     }
 }

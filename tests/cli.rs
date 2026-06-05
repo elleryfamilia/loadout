@@ -298,23 +298,29 @@ fn explain_reports_selection_and_plan() {
 }
 
 #[test]
-fn init_scaffolds_config_and_templates() {
+fn render_auto_manages_gitignore_and_init_is_gone() {
+    // There is no `rosita init` — a repo needs no scaffolding. Rendering an
+    // agent gitignores everything rosita manages, automatically.
     let fx = Fixture::new();
-    fx.git_init(); // so the gitignore step runs
+    fx.rust_project();
+    fx.rust_profile();
+    fx.git_init();
 
     fx.cmd()
         .arg("init")
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Initializing rosita"));
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
 
-    assert!(fx.exists(".rosita/config.toml"));
-    assert!(fx.exists(".rosita/templates/overlay.md.j2"));
-    assert!(fx.read(".gitignore").contains(".rosita/generated/"));
-    assert!(fx.read(".rosita/config.toml").contains("[profiles]"));
-    // The private layer stub is scaffolded and gitignored.
-    assert!(fx.exists(".rosita/local.toml"));
-    assert!(fx.read(".gitignore").contains(".rosita/local.toml"));
+    fx.cmd()
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .success();
+    let gi = fx.read(".gitignore");
+    assert!(gi.contains(".rosita/generated/"));
+    assert!(gi.contains(".rosita/cache/"));
+    assert!(gi.contains(".rosita/logs/"));
+    assert!(gi.contains(".rosita/local.toml"));
 }
 
 #[test]
