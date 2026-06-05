@@ -2,9 +2,54 @@
 //!
 //! Local-only: tailnet IPs/hostnames are machine-specific and never leave the
 //! gitignored overlay/cache. The parser is pure for testing.
+//!
+//! The CLI is located via `PATH` and a set of known install locations — the
+//! macOS App Store/standalone app keeps its CLI inside the bundle and never adds
+//! it to `PATH`, so a `PATH`-only lookup would miss it.
 
 use super::{EnvProvider, ProviderOutput};
 use crate::context::Context;
+
+/// Known `tailscale` CLI locations that aren't on `PATH` by default. The macOS
+/// App Store / standalone app ships the CLI inside the bundle and never adds it
+/// to `PATH`; Homebrew's paths are included for shells that don't inherit it.
+const TAILSCALE_FALLBACKS: &[&str] = &[
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/opt/homebrew/bin/tailscale",
+    "/usr/local/bin/tailscale",
+];
+
+/// `tailscale` invocations to try, in order: the bare name (resolved via `PATH`)
+/// first, then any known fallback location that `exists`. Pure for testing — the
+/// caller supplies the existence check.
+fn tailscale_candidates(exists: impl Fn(&str) -> bool) -> Vec<String> {
+    let mut candidates = vec!["tailscale".to_string()];
+    candidates.extend(
+        TAILSCALE_FALLBACKS
+            .iter()
+            .filter(|p| exists(p))
+            .map(|p| p.to_string()),
+    );
+    candidates
+}
+
+/// Whether `path` is an executable regular file (unix). rosita is unix-targeted,
+/// so the executable bit is the right gate (mirrors agent-env's `[ -x ]`).
+fn is_executable_file(path: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// Run `tailscale status`, locating the CLI via `PATH` then the known fallbacks.
+/// Returns the first candidate that yields output (`None` if none are installed
+/// or all are logged out).
+fn tailscale_status() -> Option<String> {
+    tailscale_candidates(is_executable_file)
+        .into_iter()
+        .find_map(|prog| super::run_ok(&prog, &["status"]))
+}
 
 /// A peer on the tailnet.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,8 +73,8 @@ impl EnvProvider for TailnetProvider {
     }
 
     fn probe(&self, _ctx: &Context) -> crate::Result<Option<ProviderOutput>> {
-        let Some(raw) = super::run_ok("tailscale", &["status"]) else {
-            return Ok(None); // not installed, or logged out (non-zero exit)
+        let Some(raw) = tailscale_status() else {
+            return Ok(None); // not installed anywhere known, or logged out
         };
         let peers = parse_tailscale(&raw);
         if peers.is_empty() {
@@ -125,5 +170,26 @@ garbage line without ip
     fn empty_or_loggedout_yields_no_peers() {
         assert!(parse_tailscale("").is_empty());
         assert!(parse_tailscale("Logged out.").is_empty());
+    }
+
+    #[test]
+    fn candidates_try_path_first_then_existing_fallbacks() {
+        // Nothing on disk → only the bare PATH name is tried.
+        assert_eq!(tailscale_candidates(|_| false), vec!["tailscale".to_string()]);
+
+        // macOS app present → appended after the PATH name (PATH still first).
+        assert_eq!(
+            tailscale_candidates(|p| p.contains("Tailscale.app")),
+            vec![
+                "tailscale".to_string(),
+                "/Applications/Tailscale.app/Contents/MacOS/Tailscale".to_string(),
+            ]
+        );
+
+        // All fallbacks present → PATH name first, then each in declared order.
+        let all = tailscale_candidates(|_| true);
+        assert_eq!(all.len(), TAILSCALE_FALLBACKS.len() + 1);
+        assert_eq!(all[0], "tailscale");
+        assert_eq!(&all[1..], TAILSCALE_FALLBACKS);
     }
 }
