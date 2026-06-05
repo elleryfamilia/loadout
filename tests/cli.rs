@@ -203,6 +203,53 @@ fn render_is_idempotent() {
 }
 
 #[test]
+fn editing_the_global_library_re_renders_a_repo_with_unchanged_context() {
+    // The overlay freshness fingerprint folds in the composition, so editing the
+    // GLOBAL library re-renders a repo whose detected context is identical.
+    // Regression: the fingerprint used to be context-only, so a config change
+    // left a stale overlay and `render`/`run` falsely reported "unchanged".
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[capabilities]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"VERSION-ONE guidance.\"\n\
+         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\"]\n",
+    );
+    fx.cmd()
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .success();
+    assert!(fx
+        .read(".rosita/generated/claude.md")
+        .contains("VERSION-ONE"));
+
+    // No change → still idempotent.
+    fx.cmd()
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unchanged"));
+
+    // Edit the capability's guidance in the global config; the repo's detected
+    // context is unchanged.
+    fx.author(
+        "[[capabilities]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"VERSION-TWO guidance.\"\n\
+         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\"]\n",
+    );
+    fx.cmd()
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .success();
+
+    // The overlay must reflect the edit — proof the cache was invalidated.
+    let overlay = fx.read(".rosita/generated/claude.md");
+    assert!(
+        overlay.contains("VERSION-TWO"),
+        "a global-config edit must re-render the overlay; got:\n{overlay}"
+    );
+    assert!(!overlay.contains("VERSION-ONE"));
+}
+
+#[test]
 fn render_preserves_user_content_in_claude_local() {
     let fx = Fixture::new();
     fx.rust_project();

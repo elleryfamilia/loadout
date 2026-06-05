@@ -182,6 +182,27 @@ impl Composition {
     pub fn label(&self) -> &str {
         self.profile.as_deref().unwrap_or("none")
     }
+
+    /// A stable fingerprint of *what this composition would render*: the selected
+    /// profile plus the ordered capability definitions (their guidance, params,
+    /// provider/command, risk, …). Independent of any live dynamic output — it
+    /// hashes the capability *source*, so it's deterministic across renders.
+    ///
+    /// Combined with the context hash, this is what lets a **global-config**
+    /// change — adding, editing, removing, or reordering a capability or profile
+    /// — invalidate a repo's cached overlay even when the detected context is
+    /// unchanged.
+    pub fn fingerprint(&self) -> String {
+        #[derive(serde::Serialize)]
+        struct Fingerprint<'a> {
+            profile: Option<&'a str>,
+            capabilities: Vec<&'a Capability>,
+        }
+        crate::hash::context_hash(&Fingerprint {
+            profile: self.profile.as_deref(),
+            capabilities: self.capabilities.iter().map(|r| &r.capability).collect(),
+        })
+    }
 }
 
 /// The result of profile selection for a context (see [`select`]).
@@ -659,6 +680,36 @@ mod tests {
         let c = compose_t(&sample_context(), &p, &caps);
         assert_eq!(c.profile.as_deref(), Some("p"));
         assert_eq!(ids(&c), vec!["a", "b"]); // duplicate `a` collapsed
+    }
+
+    #[test]
+    fn fingerprint_tracks_profile_and_capability_changes() {
+        let ctx = sample_context();
+        let caps = vec![cap("a", "A body"), cap("b", "B body")];
+
+        let base = compose_t(&ctx, &prof("p", &["rust"], &["a"]), &caps);
+        // Deterministic for the same composition.
+        assert_eq!(
+            base.fingerprint(),
+            compose_t(&ctx, &prof("p", &["rust"], &["a"]), &caps).fingerprint()
+        );
+        // Adding a capability changes it.
+        assert_ne!(
+            base.fingerprint(),
+            compose_t(&ctx, &prof("p", &["rust"], &["a", "b"]), &caps).fingerprint()
+        );
+        // Editing a composed capability's guidance changes it (the cache-staleness
+        // bug: same context, different rendered content).
+        let edited = vec![cap("a", "A body — EDITED"), cap("b", "B body")];
+        assert_ne!(
+            base.fingerprint(),
+            compose_t(&ctx, &prof("p", &["rust"], &["a"]), &edited).fingerprint()
+        );
+        // A different profile name changes it.
+        assert_ne!(
+            base.fingerprint(),
+            compose_t(&ctx, &prof("q", &["rust"], &["a"]), &caps).fingerprint()
+        );
     }
 
     #[test]

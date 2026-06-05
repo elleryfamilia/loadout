@@ -307,7 +307,7 @@ fn check_claude_marker(c: &mut Checks, repo_base: &Path) {
 
 fn check_overlays(c: &mut Checks, prep: &super::Prepared) {
     let dir = config::generated_dir(&prep.repo_base);
-    let current = prep.context.compute_hash();
+    let current = crate::render::overlay_fingerprint(&prep.context, &prep.composition);
     let mut found = false;
     for a in &prep.config.agents {
         let path = dir.join(&a.generated_filename);

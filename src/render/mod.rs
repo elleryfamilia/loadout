@@ -143,6 +143,15 @@ struct ProviderRef<'a> {
     data: &'a serde_json::Value,
 }
 
+/// The freshness fingerprint stamped into a generated overlay (and compared on
+/// the next render / by `doctor`): the detected context **and** the composition
+/// that produced the overlay. A change to either — including a global-config
+/// edit that alters the resolved capabilities/profile for an unchanged context —
+/// moves the fingerprint, so a cached overlay is never silently stale.
+pub fn overlay_fingerprint(context: &Context, composition: &Composition) -> String {
+    crate::hash::context_hash(&(context.compute_hash(), composition.fingerprint()))
+}
+
 /// Render an overlay for `req`.
 pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
     let renderer = MinijinjaRenderer::default();
@@ -174,8 +183,11 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
     let has_dynamic = rendered_caps.iter().any(|c| c.dynamic);
     let profile_guidance = join_capability_sections(&rendered_caps);
 
-    // 3. Context hash.
-    let context_hash = req.context.compute_hash();
+    // 3. Freshness fingerprint: the detected context AND the composition that
+    //    produced this overlay. Folding in the composition is what makes a
+    //    *global-config* change (a new/edited/removed capability or profile)
+    //    re-render a repo whose detected context is unchanged.
+    let context_hash = overlay_fingerprint(req.context, req.composition);
 
     // 4. Header.
     let sources: Vec<String> = req
