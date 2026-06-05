@@ -49,6 +49,20 @@ rosita render --agent claude   # render + wire up the overlay (auto-manages .git
 rosita run claude            # render, then launch `claude` (passes args through)
 ```
 
+### Already have a `CLAUDE.md` / `AGENTS.md`?
+
+Don't hand-translate it. rosita ships a Claude Code **skill**,
+[`rosita-migrate`](skills/rosita-migrate/SKILL.md), that reads your existing
+global agent instructions and turns them into rosita capabilities + the few
+profiles you actually need — additively (your originals are left untouched).
+
+Install it into Claude Code, then ask it to migrate:
+
+```bash
+ln -s "$PWD/skills/rosita-migrate" ~/.claude/skills/rosita-migrate
+# then, in Claude Code:  /rosita-migrate   (or "import my CLAUDE.md into rosita")
+```
+
 ## Commands
 
 | Command | What it does |
