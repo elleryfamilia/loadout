@@ -1368,6 +1368,44 @@ mod tests {
     }
 
     #[test]
+    fn script_capability_is_editable_not_advanced() {
+        // A command cap with no guidance template opens in the editor (script
+        // field + highlight overlay), not the read-only "advanced — edit in TOML"
+        // dialog. (Pairing a command with a guidance template is what makes a cap
+        // advanced; a plain script is fully editable.)
+        let cfg = "[[capabilities]]\nid = \"host\"\ndescription = \"Host\"\n\
+             script_lang = \"bash\"\ncommand = \"uname -a\"\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+        let body = body_of(route(
+            &st,
+            &req("GET", "/capabilities/host/edit", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(body.contains("Edit capability"));
+        assert!(!body.contains("Advanced capability"));
+        // The highlight-overlay script field is present, prefilled with the command.
+        assert!(body.contains("code-edit") && body.contains("name=\"command\""));
+        assert!(body.contains("uname -a"));
+    }
+
+    #[test]
+    fn dynamic_cap_without_cache_shows_placeholder_card() {
+        // A provider cap doesn't run in the read-only preview; with nothing cached
+        // the overlay drops its section, but the profile detail keeps a "runs at
+        // render" placeholder card so it's still listed (and openable).
+        let cfg = "[[capabilities]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
+             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"host\"]\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+        let body = body_of(route(
+            &st,
+            &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(body.contains("cap-detail")); // the card is present
+        assert!(body.contains("runs at render")); // with the placeholder body
+    }
+
+    #[test]
     fn save_as_copy_creates_a_new_capability_under_a_new_name() {
         let cfg =
             "[[capabilities]]\nid = \"rc\"\ndescription = \"Rust conv\"\nguidance = \"Old.\"\n";

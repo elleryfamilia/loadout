@@ -288,22 +288,48 @@ pub fn render_profile_config(
         .iter()
         .filter(|rc| rc.capability.applies_to_agent(&agent_id))
         .count();
-    // Per-capability cards: the rendered sections, with each cap's icon looked
-    // up from the staged library (inline/synthetic caps fall back to a default).
-    let caps: Vec<PreviewCap> = out
+    // Per-capability cards. Built from the *composition* (every cap the profile
+    // pulls in, agent-filtered) rather than only the rendered sections: a dynamic
+    // cap that resolves to nothing in ReadOnly (its provider/command doesn't run
+    // and there's no cache) is dropped from the overlay, which would hide its
+    // card. Such caps get a "runs at render" placeholder so the preview still
+    // lists — and can open/edit — them. Each cap's icon/editability is looked up
+    // from the staged library (inline/synthetic caps fall back to a default).
+    let rendered: std::collections::HashMap<&str, _> =
+        out.capabilities.iter().map(|c| (c.id.as_str(), c)).collect();
+    let caps: Vec<PreviewCap> = composition
         .capabilities
         .iter()
-        .map(|c| {
-            let owned = cfg.capabilities.iter().find(|x| x.id == c.id);
-            PreviewCap {
-                icon: owned.and_then(|x| x.icon.clone()),
-                editable: owned.is_some(),
-                id: c.id.clone(),
-                title: c.title.clone(),
-                risk: c.risk,
-                markdown: c.body.clone(),
-                dynamic: c.dynamic,
-                skipped: c.skipped,
+        .filter(|rc| rc.capability.applies_to_agent(&agent_id))
+        .filter_map(|rc| {
+            let cap = &rc.capability;
+            let owned = cfg.capabilities.iter().find(|x| x.id == cap.id);
+            let icon = owned.and_then(|x| x.icon.clone());
+            let editable = owned.is_some();
+            if let Some(c) = rendered.get(cap.id.as_str()) {
+                Some(PreviewCap {
+                    icon,
+                    editable,
+                    id: c.id.clone(),
+                    title: c.title.clone(),
+                    risk: c.risk,
+                    markdown: c.body.clone(),
+                    dynamic: c.dynamic,
+                    skipped: c.skipped,
+                })
+            } else if cap.is_dynamic() {
+                Some(PreviewCap {
+                    icon,
+                    editable,
+                    id: cap.id.clone(),
+                    title: cap.title().to_string(),
+                    risk: cap.risk,
+                    markdown: "_Dynamic — runs at render; no preview output yet._".to_string(),
+                    dynamic: true,
+                    skipped: false,
+                })
+            } else {
+                None // static cap that rendered nothing — omit, as the overlay does
             }
         })
         .collect();

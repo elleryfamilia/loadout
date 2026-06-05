@@ -328,6 +328,38 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .kind-sc { display: none; flex-direction: column; gap: 10px; }
 .cap-form:has(#kind-sc:checked) .kind-md { display: none; }
 .cap-form:has(#kind-sc:checked) .kind-sc { display: flex; }
+
+/* Script editor with a syntax-highlight backdrop: a <pre> mirror sits behind a
+   transparent-text <textarea>. Both share identical metrics so glyphs line up.
+   The backdrop only shows once JS marks the wrap `.code-live`, so with no JS the
+   textarea stays a normal visible editor (graceful degradation). */
+.code-edit-wrap { position: relative; }
+.code-edit-wrap .code-hl,
+.code-edit-wrap textarea.code-edit {
+  margin: 0; box-sizing: border-box; width: 100%;
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  padding: 8px 10px;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.5; letter-spacing: 0;
+  tab-size: 2; white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word;
+}
+.code-edit-wrap .code-hl {
+  position: absolute; inset: 0; display: none; overflow: auto;
+  pointer-events: none; background: var(--panel-2); color: var(--muted);
+  border-color: transparent;
+}
+.code-edit-wrap .code-hl code { font: inherit; }
+.code-edit-wrap textarea.code-edit { position: relative; resize: vertical; min-height: 7.5em; }
+.code-edit-wrap.code-live .code-hl { display: block; }
+.code-edit-wrap.code-live textarea.code-edit { background: transparent; color: transparent; caret-color: var(--fg); }
+.code-edit-wrap.code-live textarea.code-edit::selection { background: var(--accent-soft); color: transparent; }
+/* Token colors (dark-theme palette). */
+.code-hl .t-c { color: var(--faint); font-style: italic; }
+.code-hl .t-s { color: #9ece6a; }
+.code-hl .t-v { color: #7aa2f7; }
+.code-hl .t-k { color: #bb9af7; font-weight: 600; }
+.code-hl .t-b { color: #e0af68; }
+.code-hl .t-n { color: #ff9e64; }
+.code-hl .t-o { color: var(--muted); }
 .script-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .exec-check { align-self: flex-start; }
 

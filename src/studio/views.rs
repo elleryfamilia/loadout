@@ -687,7 +687,10 @@ pub fn cap_dialog(
                                     }
                                 }
                             }
-                            textarea name="command" rows="7" class="mono" placeholder="echo 'last deploy: green'" { (cap.and_then(|c| c.command.as_deref()).unwrap_or("")) }
+                            div class="code-edit-wrap" {
+                                pre class="code-hl" aria-hidden="true" { code {} }
+                                textarea name="command" rows="7" class="mono code-edit" spellcheck="false" placeholder="echo 'last deploy: green'" { (cap.and_then(|c| c.command.as_deref()).unwrap_or("")) }
+                            }
                             label class="check exec-check" { input type="checkbox" name="allow_exec" checked[allow_exec]; span { "Allow execution" } }
                             p class="hint small" { "Runs only when the repo is trusted (" code { "rosita allow" } ") and execution is allowed. Review trust in the diff before applying." }
                         }

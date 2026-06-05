@@ -22,6 +22,7 @@
     if (!el) return;
     el.innerHTML = html;
     process(el);
+    enhanceCode(el);
   }
 
   function methodOf(el) {
@@ -179,9 +180,80 @@
     });
   }
 
+  // --- script editor: bash syntax highlighting -------------------------------
+  // A transparent-text <textarea> over a <pre> backdrop we repaint on input. All
+  // values are escaped before they reach innerHTML (the backdrop never receives
+  // raw user text), matching the rest of studio's no-unescaped-innerHTML rule.
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>]/g, function (c) {
+      return c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;";
+    });
+  }
+
+  var BASH_KW = {
+    if: 1, then: 1, elif: 1, else: 1, fi: 1, for: 1, in: 1, do: 1, done: 1,
+    while: 1, until: 1, case: 1, esac: 1, function: 1, return: 1, exit: 1,
+    break: 1, continue: 1, local: 1, select: 1, time: 1,
+  };
+  var BASH_BUILTIN = {
+    echo: 1, printf: 1, cd: 1, command: 1, read: 1, export: 1, set: 1, unset: 1,
+    eval: 1, source: 1, test: 1, trap: 1, shift: 1, getopts: 1, hash: 1,
+    type: 1, alias: 1, declare: 1, kill: 1, wait: 1,
+  };
+
+  // Pragmatic bash tokenizer — good enough to read by, not a full grammar.
+  function highlightBash(src) {
+    var re = /(#[^\n]*)|("(?:[^"\\]|\\.)*"?)|('[^']*'?)|(\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9*@?#!$-])|(\b\d+\b)|([A-Za-z_][A-Za-z0-9_]*)|([^\sA-Za-z0-9_#"'$]+)/g;
+    var out = "";
+    var last = 0;
+    var m;
+    while ((m = re.exec(src))) {
+      if (m.index > last) out += escapeHtml(src.slice(last, m.index));
+      last = re.lastIndex;
+      var t = m[0];
+      var cls = null;
+      if (m[1]) cls = "c";
+      else if (m[2] || m[3]) cls = "s";
+      else if (m[4]) cls = "v";
+      else if (m[5]) cls = "n";
+      else if (m[6]) cls = BASH_KW[t] ? "k" : BASH_BUILTIN[t] ? "b" : null;
+      else if (m[7]) cls = "o";
+      out += cls
+        ? '<span class="t-' + cls + '">' + escapeHtml(t) + "</span>"
+        : escapeHtml(t);
+      if (re.lastIndex === m.index) re.lastIndex++; // never spin on a zero-width match
+    }
+    if (last < src.length) out += escapeHtml(src.slice(last));
+    return out;
+  }
+
+  function enhanceCode(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll("textarea.code-edit").forEach(function (ta) {
+      if (ta.dataset.codeBound) return;
+      ta.dataset.codeBound = "1";
+      var wrap = ta.closest(".code-edit-wrap");
+      var code = wrap && wrap.querySelector(".code-hl code");
+      if (!code) return;
+      wrap.classList.add("code-live");
+      function paint() { code.innerHTML = highlightBash(ta.value); }
+      function sync() {
+        var pre = code.parentNode;
+        pre.scrollTop = ta.scrollTop;
+        pre.scrollLeft = ta.scrollLeft;
+      }
+      ta.addEventListener("input", function () { paint(); sync(); });
+      ta.addEventListener("scroll", sync);
+      paint();
+      sync();
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     process(document.body);
     wireActiveGroups();
     wireIconPicker();
+    enhanceCode(document.body);
   });
 })();
