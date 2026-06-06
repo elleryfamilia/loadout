@@ -1,8 +1,8 @@
 //! rosita — the library behind the `rosita` CLI.
 //!
-//! `rosita` is "direnv for AI coding agents": it detects the current
-//! project/runtime context, selects a profile via rules, renders an
-//! agent-specific instruction overlay, and writes it safely (atomic writes,
+//! `rosita` injects your global context into your AI coding agents: it detects
+//! the current project/runtime context, selects the profile that fits, renders
+//! an agent-specific instruction overlay, and writes it safely (atomic writes,
 //! managed marker blocks). The binary is a thin shell over this library so the
 //! behaviour is fully unit/integration testable.
 //!

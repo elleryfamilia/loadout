@@ -4,11 +4,11 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// rosita — direnv for AI coding agents.
+/// rosita — inject your global context into your AI coding agents.
 ///
-/// Detects the current project/runtime context, selects a profile, renders an
-/// agent-specific instruction overlay, writes it safely, and can launch the
-/// agent. Generated files are agent *guidance*, not enforced policy.
+/// Detects the current project/runtime context, selects the profile that fits,
+/// renders an agent-specific instruction overlay, writes it safely, and can
+/// launch the agent. Generated files are agent *guidance*, not enforced policy.
 #[derive(Debug, Parser)]
 #[command(name = "rosita", version, about, long_about = None)]
 pub struct Cli {
