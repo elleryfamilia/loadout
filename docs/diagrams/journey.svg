@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 396" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" role="img" aria-label="How you use rosita. Step 1, rosita studio: author once — create capabilities and reusable profiles. Step 2, rosita run claude: rosita detects your stack, selects the right profile, and injects the global context into the agent. The inject step works per agent through each one's native gitignored hook.">
+  <style>
+    .bg{fill:#ffffff}
+    .card{fill:#f6f8fa;stroke:#d0d7de;stroke-width:1.5}
+    .card-accent{fill:#ddf4ff;stroke:#54aeff;stroke-width:1.5}
+    .panel{fill:#f6f8fa;stroke:#d0d7de;stroke-width:1}
+    .badge{fill:#0969da}
+    .badge-num{fill:#ffffff}
+    .t{fill:#1f2328}
+    .t-muted{fill:#656d76}
+    .t-accent{fill:#0969da}
+    .s-line{stroke:#8c959f;stroke-width:1.5;fill:none}
+    .arrow{fill:#8c959f}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#0d1117}
+      .card{fill:#161b22;stroke:#30363d}
+      .card-accent{fill:#121d2f;stroke:#1f6feb}
+      .panel{fill:#161b22;stroke:#30363d}
+      .badge{fill:#1f6feb}
+      .badge-num{fill:#ffffff}
+      .t{fill:#e6edf3}
+      .t-muted{fill:#8b949e}
+      .t-accent{fill:#58a6ff}
+      .s-line{stroke:#6e7681}
+      .arrow{fill:#6e7681}
+    }
+    .title{font-size:19px;font-weight:700}
+    .sub{font-size:12.5px}
+    .cmd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13.5px;font-weight:700}
+    .num{font-size:13px;font-weight:700}
+    .h{font-size:14.5px;font-weight:700}
+    .node{font-size:13.5px;font-weight:600}
+    .small{font-size:11px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;font-weight:700}
+    .legh{font-size:11.5px;font-weight:700}
+  </style>
+  <marker id="ahj" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" class="arrow"/>
+  </marker>
+
+  <rect class="bg" x="0" y="0" width="960" height="396"/>
+
+  <text class="title t" x="480" y="32" text-anchor="middle">How you use rosita</text>
+  <text class="sub t-muted" x="480" y="54" text-anchor="middle">author your context once — then run, and rosita injects the right slice into whichever agent you launch</text>
+
+  <!-- Step 1: author -->
+  <circle class="badge" cx="40" cy="88" r="13"/>
+  <text class="num badge-num" x="40" y="93" text-anchor="middle">1</text>
+  <text class="cmd t-accent" x="62" y="93">$ rosita studio</text>
+  <rect class="card" x="24" y="108" width="912" height="54" rx="11"/>
+  <text class="h t" x="46" y="132">Author once — create capabilities and reusable profiles</text>
+  <text class="small t-muted" x="46" y="150">your global library: reusable units of guidance, composed into profiles you own</text>
+
+  <!-- Step 2: use -->
+  <circle class="badge" cx="40" cy="196" r="13"/>
+  <text class="num badge-num" x="40" y="201" text-anchor="middle">2</text>
+  <text class="cmd t-accent" x="62" y="201">$ rosita run claude</text>
+
+  <rect class="card"        x="24"  y="214" width="274" height="54" rx="11"/>
+  <rect class="card-accent" x="343" y="214" width="274" height="54" rx="11"/>
+  <rect class="card"        x="662" y="214" width="274" height="54" rx="11"/>
+
+  <text class="node t"        x="161" y="238" text-anchor="middle">detect your stack</text>
+  <text class="small t-muted" x="161" y="256" text-anchor="middle">rust · node · go · python…</text>
+  <text class="node t-accent" x="480" y="238" text-anchor="middle">select the right profile</text>
+  <text class="small t-muted" x="480" y="256" text-anchor="middle">the one whose targets match</text>
+  <text class="node t"        x="799" y="238" text-anchor="middle">inject* into the agent</text>
+  <text class="small t-muted" x="799" y="256" text-anchor="middle">…then launch it</text>
+
+  <line x1="300" y1="241" x2="339" y2="241" class="s-line" marker-end="url(#ahj)"/>
+  <line x1="619" y1="241" x2="658" y2="241" class="s-line" marker-end="url(#ahj)"/>
+
+  <!-- Legend: how inject works per agent -->
+  <rect class="panel" x="24" y="292" width="912" height="92" rx="11"/>
+  <text class="legh t-accent" x="44" y="314">* inject — each agent gets the overlay through its own native, gitignored hook (never your committed files):</text>
+
+  <text x="44"  y="340"><tspan class="mono t-accent">claude</tspan><tspan class="small t-muted">  →  @import in CLAUDE.local.md</tspan></text>
+  <text x="496" y="340"><tspan class="mono t-accent">codex</tspan><tspan class="small t-muted">  →  gitignored AGENTS.override.md</tspan></text>
+  <text x="44"  y="360"><tspan class="mono t-accent">gemini</tspan><tspan class="small t-muted">  →  GEMINI.local.md + ~/.gemini settings</tspan></text>
+  <text x="496" y="360"><tspan class="mono t-accent">opencode</tspan><tspan class="small t-muted">  →  overlay path in opencode.json</tspan></text>
+  <text x="44"  y="380"><tspan class="mono t-accent">copilot</tspan><tspan class="small t-muted">  →  COPILOT_CUSTOM_INSTRUCTIONS_DIRS</tspan></text>
+  <text x="496" y="380"><tspan class="mono t-accent">generic</tspan><tspan class="small t-muted">  →  emit-only; you wire it in</tspan></text>
+</svg>

@@ -6,12 +6,13 @@ Author reusable guidance once, globally — conventions, preferences, safety rul
 and `rosita` delivers it into whichever agent you use (Claude, Codex, Gemini,
 opencode, Copilot) without touching your committed files. It picks the guidance
 that fits each project, so you're not pasting the same `CLAUDE.md` into every repo
-and every tool. The repo carries almost nothing; your library lives in one place
-and adapts to where you are.
+and every tool.
 
 <p align="center">
-  <img src="docs/diagrams/pipeline.svg" alt="rosita pipeline: detect context, match coarse targets, select one profile, compose its capabilities, render and deliver the overlay" width="860">
+  <img src="docs/diagrams/journey.svg" alt="How you use rosita: run rosita studio to author capabilities and reusable profiles; run rosita run to detect your stack, select the right profile, and inject the global context into the agent — wired per agent through each one's native gitignored hook." width="900">
 </p>
+
+<p align="center"><sub><i>* how the overlay reaches each agent is detailed in <a href="#agents--one-overlay-n-deliveries">Agents — one overlay, N deliveries</a>.</i></sub></p>
 
 > ⚠️ Generated overlays are **agent guidance, not enforced policy.** They are
 > regular files an agent reads; nothing here is a security control. The only real
@@ -136,13 +137,19 @@ command-trust attack surface.
 
 ## Install
 
-Requires a stable Rust toolchain (1.85+). Git is used for repo detection (via the
-`git` CLI — no libgit2 build dependency).
+Requires a stable Rust toolchain (1.85+) and the `git` CLI (used for repo
+detection — no libgit2 build dependency).
 
 ```bash
-cargo install --path .      # installs the `rosita` binary
-# or, during development:
-cargo build --release       # ./target/release/rosita
+cargo install --git https://github.com/elleryfamilia/rosita
+```
+
+That builds and installs the `rosita` binary straight from the repo — no clone
+needed. For local development instead:
+
+```bash
+git clone https://github.com/elleryfamilia/rosita && cd rosita
+cargo install --path .       # or: cargo build --release  → ./target/release/rosita
 ```
 
 ## Already have a `CLAUDE.md` / `AGENTS.md`?
