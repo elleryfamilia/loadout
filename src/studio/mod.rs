@@ -13,7 +13,8 @@
 //! The full read+write UI is shipped: the library and ReadOnly live preview,
 //! the capability editor (static + script caps, run-on-demand), the profile
 //! composer (targets + capability picker), stage → diff → apply, the leak
-//! banner, and the fresh-config onboarding (`GET /onboarding/quickstart`).
+//! banner, the starter-pack gallery (`GET /packs`, `POST /packs/<id>/apply`),
+//! and the fresh-config onboarding (`GET /onboarding/quickstart`).
 //! See `docs/studio-design.md`.
 
 pub mod assets;

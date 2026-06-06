@@ -35,6 +35,7 @@ pub mod context;
 pub mod dynamic;
 pub mod hash;
 pub mod lint;
+pub mod pack;
 pub mod profile;
 pub mod providers;
 pub mod redact;

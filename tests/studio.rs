@@ -188,6 +188,84 @@ fn studio_binds_and_serves_secured_spine() {
     );
 }
 
+#[test]
+fn studio_packs_gallery_applies_a_pack_over_socket() {
+    let (mut child, dir, port, token) = spawn_studio();
+
+    // Bootstrap (the session cookie is just the token).
+    let _ = http(
+        port,
+        &format!(
+            "GET /__studio/bootstrap?token={token} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+
+    // The starter-pack gallery renders with per-pack apply actions.
+    let gallery = http(
+        port,
+        &format!(
+            "GET /packs HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+
+    // Apply the everyday pack (stages caps + profile), then commit to disk.
+    let apply_pack = http(
+        port,
+        &format!(
+            "POST /packs/everyday/apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    let apply = http(
+        port,
+        &format!(
+            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    let written =
+        std::fs::read_to_string(dir.path().join("empty-global/config.toml")).unwrap_or_default();
+
+    // Kill before asserting so a failure never leaks the server process.
+    child.kill().ok();
+    child.wait().ok();
+
+    assert!(
+        gallery.starts_with("HTTP/1.1 200"),
+        "gallery → 200; got:\n{}",
+        head(&gallery)
+    );
+    assert!(
+        gallery.contains("Starter packs"),
+        "gallery renders; got head:\n{}",
+        head(&gallery)
+    );
+    assert!(
+        gallery.contains("/packs/everyday/apply"),
+        "gallery offers the everyday pack"
+    );
+    assert!(
+        apply_pack.starts_with("HTTP/1.1 200"),
+        "apply-pack → 200; got:\n{}",
+        head(&apply_pack)
+    );
+    assert!(
+        apply_pack.contains("staged the"),
+        "apply-pack stages the pack; got:\n{apply_pack}"
+    );
+    assert!(
+        apply.starts_with("HTTP/1.1 200"),
+        "apply → 200; got:\n{}",
+        head(&apply)
+    );
+    assert!(
+        written.contains("name = \"everyday\""),
+        "apply wrote the everyday profile; got:\n{written}"
+    );
+    assert!(
+        written.contains("id = \"terse-comms\""),
+        "apply wrote the pack's capabilities; got:\n{written}"
+    );
+}
+
 fn head(resp: &str) -> String {
     resp.lines().take(3).collect::<Vec<_>>().join("\n")
 }

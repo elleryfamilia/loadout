@@ -208,11 +208,15 @@ impl Capability {
 /// resolves a profile's capability refs against your *own* library only, so a
 /// profile that names a palette id you haven't duplicated renders nothing for it.
 pub fn palette() -> Vec<Capability> {
-    fn cap(id: &str, description: &str, guidance: &str) -> Capability {
+    // Build a static (markdown) palette capability: a curated icon + discovery
+    // tags + templated guidance. Risk defaults to Info; the caution starters
+    // wrap the result with `caution(..)`.
+    fn cap(id: &str, description: &str, icon: &str, tags: &[&str], guidance: &str) -> Capability {
         Capability {
             id: id.to_string(),
             description: Some(description.to_string()),
-            tags: Vec::new(),
+            icon: Some(icon.to_string()),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
             risk: Risk::Info,
             when: Vec::new(),
             requires: Vec::new(),
@@ -222,122 +226,177 @@ pub fn palette() -> Vec<Capability> {
             provider: None,
             command: None,
             script_lang: None,
-            icon: None,
             allow_exec: true,
             cache: None,
             origin: Layer::default(),
         }
     }
-    fn tagged(mut c: Capability, tags: &[&str]) -> Capability {
-        c.tags = tags.iter().map(|t| t.to_string()).collect();
-        c
+    // Raise a starter's attention level to Caution (a warning annotation in the
+    // rendered overlay and a colored risk spine in studio).
+    fn caution(c: Capability) -> Capability {
+        Capability {
+            risk: Risk::Caution,
+            ..c
+        }
     }
 
     vec![
-        // --- a sensible baseline starter -----------------------------------
-        tagged(
-            cap(
-                "baseline",
-                "Baseline",
-                "Follow the repository's existing conventions and keep changes \
-                 minimal, focused, and well-tested.",
-            ),
+        // --- baseline awareness --------------------------------------------
+        cap(
+            "baseline",
+            "Baseline",
+            "box",
             &["awareness"],
+            "Follow the repository's existing conventions and keep changes minimal, \
+             focused, and well-tested. Match the surrounding code's style and naming \
+             rather than imposing your own.",
+        ),
+        // --- communication -------------------------------------------------
+        cap(
+            "terse-comms",
+            "Terse communication",
+            "bolt",
+            &["comms"],
+            "Be terse: lead with the result and what changed; skip preamble. For \
+             non-trivial decisions, briefly note the reasoning, the tradeoffs, and the \
+             alternatives considered.",
         ),
         // --- stack conventions (one per detected language/platform) --------
-        tagged(
-            cap(
-                "rust-conventions",
-                "Rust conventions",
-                "Rust project. Build with cargo, format with rustfmt, lint with \
-                 clippy (`cargo clippy --all-targets`). Prefer `?`/`Result` over \
-                 `unwrap()` in non-test code.",
-            ),
+        cap(
+            "rust-conventions",
+            "Rust conventions",
+            "code",
             &["stack"],
+            "Rust project. Build with cargo, format with rustfmt, lint with clippy \
+             (`cargo clippy --all-targets`). Prefer `?`/`Result` over `unwrap()` or \
+             `panic!` in non-test code.",
         ),
-        tagged(
-            cap(
-                "nextjs-conventions",
-                "Next.js conventions",
-                "Next.js app. Respect the existing app/pages router convention. \
-                 Use the detected package manager. Keep server/client component \
-                 boundaries explicit.",
-            ),
+        cap(
+            "node-conventions",
+            "Node.js conventions",
+            "code",
             &["stack"],
+            "Node.js project. Use pnpm for scripts and dependencies, and prefer \
+             TypeScript over plain JavaScript. Keep the type-checker and linter clean \
+             before committing.",
         ),
-        tagged(
-            cap(
-                "node-conventions",
-                "Node.js conventions",
-                "Node.js project. Use the detected package manager for scripts; \
-                 prefer TypeScript where the project already uses it.",
-            ),
+        cap(
+            "nextjs-conventions",
+            "Next.js conventions",
+            "code",
             &["stack"],
+            "Next.js app. Respect the existing app/pages router convention and keep \
+             server/client component boundaries explicit. Use pnpm for scripts and \
+             dependencies.",
         ),
-        tagged(
-            cap(
-                "go-conventions",
-                "Go conventions",
-                "Go project. Use the standard toolchain: `go build`, `go test`, \
-                 `go vet`, `gofmt`.",
-            ),
+        cap(
+            "go-conventions",
+            "Go conventions",
+            "code",
             &["stack"],
+            "Go project. Use the standard toolchain (`go build`, `go test`, `go vet`, \
+             `gofmt`); add golangci-lint for stricter checks. Handle errors explicitly \
+             — don't silently discard them.",
         ),
-        tagged(
-            cap(
-                "python-conventions",
-                "Python conventions",
-                "Python project. Prefer the detected tool (uv/poetry) for envs \
-                 and deps; run tests with pytest.",
-            ),
+        cap(
+            "python-conventions",
+            "Python conventions",
+            "code",
             &["stack"],
+            "Python project. Use uv for environments and dependencies, ruff for \
+             linting and formatting, and pytest for tests.",
         ),
-        // --- safety / workflow starters ------------------------------------
-        Capability {
-            risk: Risk::Caution,
-            ..tagged(
-                cap(
-                    "infra-caution",
-                    "Infrastructure caution",
-                    "This is infrastructure code. Be conservative: prefer plans \
-                     over direct mutation, never apply changes to shared/remote \
-                     state without explicit confirmation, and call out anything \
-                     that touches production.",
-                ),
-                &["infra", "safety"],
-            )
-        },
-        tagged(
-            cap(
-                "experimental-iteration",
-                "Experimental iteration",
-                "Experimental branch — optimize for iteration speed. Throwaway \
-                 spikes are fine; keep changes scoped to this branch and don't \
-                 wire them into shared modules yet.",
-            ),
+        // --- workflow ------------------------------------------------------
+        cap(
+            "conventional-commits",
+            "Conventional commits",
+            "git-branch",
             &["dev-workflow"],
+            "Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, …). \
+             Imperative subject ≤72 chars; the body explains *why* when it is \
+             non-obvious.",
         ),
-        // --- reusable cross-cutting starters -------------------------------
-        tagged(
-            cap(
-                "terse-comms",
-                "Terse communication",
-                "Be terse: lead with the result and what changed; skip preamble. \
-                 For non-trivial decisions, briefly note the reasoning and the \
-                 alternatives considered.",
-            ),
-            &["comms"],
-        ),
-        tagged(
-            cap(
-                "conventional-commits",
-                "Conventional commits",
-                "Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, \
-                 …). Imperative subject ≤72 chars; the body explains *why* when \
-                 it is non-obvious.",
-            ),
+        cap(
+            "commit-checkpoints",
+            "Commit at checkpoints",
+            "git-branch",
             &["dev-workflow"],
+            "Commit at logical checkpoints with clear, descriptive messages rather \
+             than one giant commit at the end — don't wait to be told.",
         ),
+        cap(
+            "plan-nontrivial",
+            "Plan non-trivial work",
+            "book",
+            &["dev-workflow"],
+            "For non-trivial work, sketch a short plan before implementing: the \
+             objective, the approach, and the risks. Skip the ceremony for typos and \
+             obvious one-line fixes.",
+        ),
+        cap(
+            "experimental-iteration",
+            "Experimental iteration",
+            "rocket",
+            &["dev-workflow"],
+            "Experimental branch — optimize for iteration speed. Throwaway spikes are \
+             fine; keep changes scoped to this branch and don't wire them into shared \
+             modules yet.",
+        ),
+        // --- quality -------------------------------------------------------
+        cap(
+            "validate-before-done",
+            "Validate before done",
+            "terminal",
+            &["quality"],
+            "Before declaring work done, run the build, the tests, and the linter, and \
+             report the results honestly. If something failed or was skipped, say so \
+             plainly — don't claim success you didn't verify.",
+        ),
+        cap(
+            "testing-discipline",
+            "Testing discipline",
+            "flask",
+            &["quality"],
+            "Add or update tests to match the change: unit or integration tests for \
+             logic, end-to-end tests for user-facing behavior. If a real harness is \
+             impractical, say so instead of skipping silently.",
+        ),
+        // --- safety --------------------------------------------------------
+        caution(cap(
+            "branch-discipline",
+            "Branch discipline",
+            "git-branch",
+            &["safety"],
+            "Never commit or push directly to the main/master branch — always work on \
+             a branch and open a pull request instead of pushing to shared branches.",
+        )),
+        caution(cap(
+            "ask-before-risky",
+            "Ask before risky actions",
+            "shield",
+            &["safety"],
+            "Confirm before destructive or hard-to-reverse actions (`rm -rf`, database \
+             drops, bulk deletes, file overwrites, history rewrites). Prefer a dry run \
+             or a plan first.",
+        )),
+        caution(cap(
+            "infra-caution",
+            "Infrastructure caution",
+            "server",
+            &["infra", "safety"],
+            "This is infrastructure code. Be conservative: prefer plans over direct \
+             mutation, never apply changes to shared/remote state without explicit \
+             confirmation, and call out anything that touches production.",
+        )),
+        // --- security ------------------------------------------------------
+        caution(cap(
+            "secrets-hygiene",
+            "Secrets hygiene",
+            "lock",
+            &["security"],
+            "Never print, log, or commit secrets, credentials, tokens, or `.env` \
+             files. Keep sensitive values out of code and out of command output.",
+        )),
     ]
 }
 
@@ -352,9 +411,24 @@ mod tests {
         for c in &caps {
             assert!(ids.insert(c.id.clone()), "duplicate capability id {}", c.id);
             assert!(!c.guidance.trim().is_empty(), "{} has empty guidance", c.id);
+            // Every shipped cap carries a curated icon and at least one tag so the
+            // studio gallery renders a glyph and groups it under a category.
+            assert!(
+                c.icon.as_deref().is_some_and(|i| !i.is_empty()),
+                "{} has no icon",
+                c.id
+            );
+            assert!(!c.tags.is_empty(), "{} has no tags", c.id);
         }
         // A representative spread of palette atoms is present to pick from.
-        for needed in ["rust-conventions", "terse-comms", "conventional-commits"] {
+        for needed in [
+            "rust-conventions",
+            "terse-comms",
+            "conventional-commits",
+            "branch-discipline",
+            "secrets-hygiene",
+            "validate-before-done",
+        ] {
             assert!(ids.contains(needed), "missing palette capability {needed}");
         }
     }

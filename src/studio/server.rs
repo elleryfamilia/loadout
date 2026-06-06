@@ -24,6 +24,7 @@ use crate::commands::Runtime;
 use crate::config::{self, Config};
 use crate::context;
 use crate::dynamic::DynamicMode;
+use crate::pack::Pack;
 use crate::profile::ProfileConfig;
 use crate::studio::assets;
 use crate::studio::edit::{Session, StagedOp};
@@ -138,6 +139,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
             Resp::html(views::cap_dialog(None, Layer::Global, true, None, &[]))
         }
         ("POST", "/capabilities") => handle_cap_save(state, req),
+        ("GET", "/packs") => handle_packs(state),
         ("POST", "/onboarding/quickstart") => handle_quickstart(state),
         ("GET", "/profiles/new") => handle_profile_new(state),
         ("POST", "/profiles") => handle_profile_save(state, req),
@@ -149,6 +151,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         },
         (_, p) if p.starts_with("/capabilities/") => handle_cap_param(state, req),
         (_, p) if p.starts_with("/profiles/") => handle_profile_param(state, req),
+        (_, p) if p.starts_with("/packs/") => handle_pack_param(state, req),
         _ => Resp::not_found(),
     }
 }
@@ -274,6 +277,12 @@ fn profiles_tab_resp(
     // shows the first-launch welcome instead of the bare "no profiles" prompt.
     let onboarding = (detail.is_none() && lib.profiles.is_empty() && lib.yours.is_empty())
         .then(|| state::onboarding(&snap.base_context));
+    // The starter-pack gallery is only rendered inside the first-launch welcome.
+    let packs = if onboarding.is_some() {
+        state::pack_views(&snap).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let markup = match &detail {
         Some((name, outcome, disabled)) => views::profiles_tab(
             &lib,
@@ -284,8 +293,9 @@ fn profiles_tab_resp(
             }),
             flash,
             None,
+            &[],
         ),
-        None => views::profiles_tab(&lib, None, flash, onboarding.as_ref()),
+        None => views::profiles_tab(&lib, None, flash, onboarding.as_ref(), &packs),
     };
     let mut html = markup.into_string();
     if with_staged {
@@ -583,48 +593,61 @@ fn handle_profile_new(state: &Arc<Mutex<StudioState>>) -> Resp {
     Resp::html(views::profile_editor(&draft, true, &lib, &preview, None))
 }
 
-/// First-launch quick start: duplicate the suggested palette starter caps into
-/// the library (staged), then open the composer pre-filled with a starter
-/// profile (detected target + those caps). Everything is staged — the user
-/// reviews and Applies, or discards, like any other edit.
+// --- starter packs -----------------------------------------------------------
+
+/// `GET /packs` — the starter-pack gallery (swapped into `#main`). Reachable from
+/// the welcome screen and the Capabilities tab's "Add from packs" button.
+fn handle_packs(state: &Arc<Mutex<StudioState>>) -> Resp {
+    let snap = state.lock().unwrap().snapshot();
+    match state::pack_views(&snap) {
+        Ok(packs) => Resp::html(views::packs_gallery_fragment(&packs)),
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
+    }
+}
+
+fn handle_pack_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+    let (id, action) = id_and_action(&req.path, "/packs/");
+    match (req.method.as_str(), action) {
+        ("POST", "apply") => handle_pack_apply(state, &id),
+        _ => Resp::not_found(),
+    }
+}
+
+/// `POST /packs/<id>/apply` — stage a pack (duplicate its caps + create its
+/// profile), then show the Profiles tab with the new profile selected.
+fn handle_pack_apply(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
+    match crate::pack::packs().into_iter().find(|p| p.id == id) {
+        Some(p) => apply_pack_and_show(state, &p),
+        None => Resp::html(views::error_fragment(&format!("unknown pack '{id}'"))),
+    }
+}
+
+/// First-launch quick start: apply the pack recommended for the detected context.
+/// Falls back to the full gallery when nothing is recommended (e.g. a repo whose
+/// stack rosita doesn't recognize).
 fn handle_quickstart(state: &Arc<Mutex<StudioState>>) -> Resp {
-    let onb = {
-        let s = state.lock().unwrap();
-        state::onboarding(&s.base_context)
+    let pack = {
+        let snap = state.lock().unwrap().snapshot();
+        state::recommended_pack(&snap)
     };
-    // Duplicate each suggested palette cap that isn't already owned. `onboarding`
-    // already filtered `caps` to real palette ids, so each is duplicate-able.
+    match pack {
+        Some(p) => apply_pack_and_show(state, &p),
+        None => handle_packs(state),
+    }
+}
+
+/// Stage `pack` into the session, then render the Profiles tab with its profile
+/// selected, a flash, and a staged-indicator refresh. Shared by the gallery's
+/// per-pack Apply and the recommended-pack quick start.
+fn apply_pack_and_show(state: &Arc<Mutex<StudioState>>, pack: &Pack) -> Resp {
     {
         let mut s = state.lock().unwrap();
-        let owned: std::collections::HashSet<String> = s
-            .session
-            .staged_config()
-            .map(|cfg| cfg.capabilities.iter().map(|c| c.id.clone()).collect())
-            .unwrap_or_default();
-        for id in &onb.caps {
-            if owned.contains(id) {
-                continue;
-            }
-            if let Err(e) = s.session.stage(StagedOp::DuplicatePaletteItem {
-                id: id.clone(),
-                to_layer: Layer::Global,
-            }) {
-                return Resp::html(views::error_fragment(&e.to_string()));
-            }
+        if let Err(e) = state::apply_pack(&mut s.session, pack) {
+            return Resp::html(views::error_fragment(&e.to_string()));
         }
     }
-    let snap = state.lock().unwrap().snapshot();
-    let lib = match state::library_view(&snap) {
-        Ok(l) => l,
-        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
-    };
-    let draft = state::quickstart_draft(&onb);
-    let preview = profile_preview_or_empty(&snap, &draft, "");
-    // The editor swaps `#main`; append the staged-indicator refresh so the top
-    // bar reflects the just-staged capability duplications.
-    let mut html = views::profile_editor(&draft, true, &lib, &preview, None);
-    html.push_str(&views::staged_indicator_loader());
-    Resp::html(html)
+    let flash = format!("staged the “{}” pack — review and Apply", pack.name);
+    profiles_tab_resp(state, Some(pack.profile_name), Some(&flash), true)
 }
 
 fn handle_profile_edit(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
@@ -1200,16 +1223,19 @@ mod tests {
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Welcome to rosita studio"), "welcome missing");
+        // The welcome embeds the starter-pack gallery; the detected stack's pack
+        // is the recommended one with an Apply action.
         assert!(
-            body.contains("/onboarding/quickstart"),
-            "quick-start action missing"
+            body.contains("/packs/rust/apply"),
+            "rust pack action missing"
         );
+        assert!(body.contains("recommended"), "recommended badge missing");
         // The detection readout names the detected stack as a chip.
         assert!(body.contains(">rust<"), "detected-stack chip missing");
     }
 
     #[test]
-    fn quickstart_stages_starters_and_prefills_composer() {
+    fn quickstart_applies_recommended_pack() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         let r = route(
@@ -1223,16 +1249,85 @@ mod tests {
             ),
         );
         assert_eq!(r.status, 200);
-        // Duplicated the three suggested starters (rust + the two universals).
-        assert_eq!(st.lock().unwrap().session.ops().len(), 3);
+        // Applied the recommended Rust pack: its 9 capabilities are duplicated and
+        // its profile is created (9 + 1 staged ops).
+        assert_eq!(st.lock().unwrap().session.ops().len(), 10);
         let body = String::from_utf8(r.body).unwrap();
-        // The composer opened, pre-filled with the detected target as the name…
-        assert!(body.contains("New profile"));
-        assert!(body.contains("name=\"name\" value=\"rust\""));
-        // …and the suggested capabilities are present in the picker to compose.
+        // The Profiles tab now shows the staged "rust" profile and its caps.
+        assert!(body.contains("staged the"), "pack flash missing");
         assert!(body.contains("Rust conventions"));
         assert!(body.contains("Terse communication"));
-        assert!(body.contains("Conventional commits"));
+    }
+
+    #[test]
+    fn packs_gallery_lists_packs_recommended_first() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/packs", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Starter packs"));
+        assert!(
+            body.contains("/packs/rust/apply"),
+            "rust pack action missing"
+        );
+        assert!(
+            body.contains("/packs/everyday/apply"),
+            "everyday pack action missing"
+        );
+        // In a Rust repo the Rust pack is recommended → badged + ordered first.
+        let rust_at = body.find("/packs/rust/apply").unwrap();
+        let everyday_at = body.find("/packs/everyday/apply").unwrap();
+        assert!(rust_at < everyday_at, "recommended pack should come first");
+        assert!(body.contains("recommended"));
+    }
+
+    #[test]
+    fn apply_pack_stages_caps_and_profile() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/packs/everyday/apply",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        // The 7 everyday caps are duplicated and the "everyday" profile is created.
+        assert_eq!(st.lock().unwrap().session.ops().len(), 8);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("staged the"), "pack flash missing");
+        assert!(body.contains("Terse communication"));
+    }
+
+    #[test]
+    fn applying_a_pack_twice_does_not_re_duplicate_caps() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let apply = || {
+            route(
+                &st,
+                &req(
+                    "POST",
+                    "/packs/everyday/apply",
+                    "",
+                    &[HOST, COOKIE, ORIGIN],
+                    "",
+                ),
+            )
+        };
+        assert_eq!(apply().status, 200);
+        let after_first = st.lock().unwrap().session.ops().len();
+        assert_eq!(apply().status, 200);
+        let after_second = st.lock().unwrap().session.ops().len();
+        // The second apply owns every cap already, so it re-stages only the
+        // profile (EditProfile) — exactly one new op, no re-duplication.
+        assert_eq!(after_first, 8);
+        assert_eq!(after_second, 9);
     }
 
     #[test]

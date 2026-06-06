@@ -19,8 +19,8 @@ use crate::context::Scope;
 use crate::profile::ProfileConfig;
 use crate::studio::edit::FileDiff;
 use crate::studio::state::{
-    AtomDot, AtomState, BindingState, CapView, LibraryView, Onboarding, PreviewCap, PreviewOutcome,
-    ProfileView,
+    AtomDot, AtomState, BindingState, CapView, LibraryView, Onboarding, PackView, PreviewCap,
+    PreviewOutcome, ProfileView,
 };
 
 /// Language/platform targets a profile can declare.
@@ -308,6 +308,7 @@ pub fn profiles_tab(
     selected: Option<ProfileDetail>,
     flash: Option<&str>,
     onboarding: Option<&Onboarding>,
+    packs: &[PackView],
 ) -> Markup {
     let sel_name = selected.as_ref().map(|d| d.name);
     html! {
@@ -332,7 +333,7 @@ pub fn profiles_tab(
                     None => {
                         @if lib.profiles.is_empty() {
                             @match onboarding {
-                                Some(o) => (studio_welcome(o)),
+                                Some(o) => (studio_welcome(o, packs)),
                                 None => (profiles_empty_main()),
                             }
                         } @else { (profile_pick_prompt()) }
@@ -345,14 +346,13 @@ pub fn profiles_tab(
 
 /// First-launch welcome shown on the Profiles tab when the config is fresh (no
 /// profiles and no own capabilities): confirm what was detected, explain what a
-/// profile is for (and why the overlay is empty), and offer a quick start
-/// (pre-filled starter profile) or a from-scratch composer.
-fn studio_welcome(o: &Onboarding) -> Markup {
+/// profile is for (and why the overlay is empty), then offer the starter-pack
+/// gallery (recommended pack first) or a from-scratch composer.
+fn studio_welcome(o: &Onboarding, packs: &[PackView]) -> Markup {
     let scope_label = match o.scope {
         Scope::Repo => "repo",
         Scope::Machine => "machine",
     };
-    let n = o.caps.len();
     html! {
         div class="welcome" {
             div class="welcome-head" {
@@ -370,18 +370,12 @@ fn studio_welcome(o: &Onboarding) -> Markup {
                     @if let Some(b) = &o.branch { span class="target-chip muted" { "branch " (b) } }
                 }
             }
-            p class="welcome-lead" { "A " strong { "profile" } " decides what guidance your agent gets here — you have none yet." }
-            p class="muted" { "That's why the preview is empty: no profile applies until you make one." }
+            p class="welcome-lead" { "A " strong { "profile" } " decides what guidance your agent gets here — you have none yet. Apply a " strong { "starter pack" } " to get one in a click." }
+            p class="muted" { "Each pack copies a curated set of capabilities into your library and creates a ready-made profile — all staged; nothing is saved until you Apply." }
+            (legend())
+            div class="pack-grid" { @for p in packs { (pack_card(p)) } }
             div class="welcome-actions" {
-                button class="btn btn-primary" hx-post="/onboarding/quickstart" hx-target="#main" { (icon("rocket")) "Quick start" }
                 button class="btn btn-ghost" hx-get="/profiles/new" hx-target="#main" { (icon("plus")) "Start from scratch" }
-            }
-            @if n > 0 {
-                p class="hint small welcome-note" {
-                    "Quick start pre-fills a “" (o.name) "” profile with " (n) " starter "
-                    (if n == 1 { "capability" } else { "capabilities" })
-                    " — all staged, nothing saved until you Apply."
-                }
             }
         }
     }
@@ -576,14 +570,21 @@ pub fn capabilities_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
         div class="tab-capabilities" {
             div class="dash-head" {
                 h1 { "Capabilities" }
-                button class="btn btn-primary" hx-get="/capabilities/new" hx-target="#modal" { (icon("plus")) "New capability" }
+                div class="head-actions" {
+                    (legend())
+                    button class="btn btn-ghost" hx-get="/packs" hx-target="#main" { (icon("grid")) "Add from packs" }
+                    button class="btn btn-primary" hx-get="/capabilities/new" hx-target="#modal" { (icon("plus")) "New capability" }
+                }
             }
             @if let Some(msg) = flash { p class="flash" { (icon("check")) (msg) } }
             @if lib.yours.is_empty() {
                 div class="empty-card" {
                     p { "No capabilities yet." }
-                    p class="muted" { "A capability is a reusable chunk of guidance (or a script) that profiles compose." }
-                    button class="btn btn-primary" hx-get="/capabilities/new" hx-target="#modal" { (icon("plus")) "Write your first capability" }
+                    p class="muted" { "A capability is a reusable chunk of guidance (or a script) that profiles compose. The quickest start is a pack." }
+                    div class="empty-actions" {
+                        button class="btn btn-primary" hx-get="/packs" hx-target="#main" { (icon("grid")) "Browse starter packs" }
+                        button class="btn btn-ghost" hx-get="/capabilities/new" hx-target="#modal" { (icon("plus")) "Write your first capability" }
+                    }
                 }
             } @else {
                 @let groups = group_capabilities(&lib.yours);
@@ -613,6 +614,7 @@ const CATEGORY_ORDER: &[&str] = &[
     "stack",
     "comms",
     "dev-workflow",
+    "quality",
     "infra",
     "safety",
     "security",
@@ -627,6 +629,7 @@ fn category_label(cat: Option<&str>) -> String {
         Some("infra") => "Infrastructure".to_string(),
         Some("safety") => "Safety".to_string(),
         Some("security") => "Security".to_string(),
+        Some("quality") => "Quality".to_string(),
         Some("dev-workflow") => "Workflow".to_string(),
         Some(other) => title_case(other),
         None => "General".to_string(),
@@ -694,6 +697,95 @@ fn cap_card(c: &CapView) -> Markup {
                 @else if c.kind == "provider" { span class="tag script-tag" { (icon("bolt")) "dynamic" } }
                 @if c.private { span class="tag" { (icon("lock")) "private" } }
                 @else { span class="tag" { "shared" } }
+            }
+        }
+    }
+}
+
+// --- starter packs + legend --------------------------------------------------
+
+/// A compact, collapsible key to studio's visual language: the risk spine,
+/// capability kind badges, and the profile/pack atom-dot states.
+fn legend() -> Markup {
+    html! {
+        details class="legend" {
+            summary { (icon("eye")) "Legend" }
+            div class="legend-body" {
+                div class="legend-group" {
+                    span class="legend-head" { "Risk" }
+                    span class="legend-row" { span class="legend-spine risk-info" {} "info" }
+                    span class="legend-row" { span class="legend-spine risk-caution" {} "caution" }
+                    span class="legend-row" { span class="legend-spine risk-dangerous" {} "dangerous" }
+                }
+                div class="legend-group" {
+                    span class="legend-head" { "Kind" }
+                    span class="legend-row" { span class="tag" { "shared" } "config.toml" }
+                    span class="legend-row" { span class="tag" { (icon("lock")) "private" } "local.toml" }
+                    span class="legend-row" { span class="tag script-tag" { (icon("terminal")) "script" } "runs at render" }
+                    span class="legend-row" { span class="tag script-tag" { (icon("bolt")) "dynamic" } "live provider" }
+                }
+                div class="legend-group" {
+                    span class="legend-head" { "Capability dots" }
+                    span class="legend-row" { span class="atom owned" {} "owned — composes" }
+                    span class="legend-row" { span class="atom palette" {} "palette only" }
+                    span class="legend-row" { span class="atom unknown" {} "unknown id" }
+                }
+            }
+        }
+    }
+}
+
+/// The starter-pack gallery (`#main`): a header, the legend, and a grid of pack
+/// cards (recommended first). Applying a card stages the pack's caps + profile.
+pub fn packs_gallery(packs: &[PackView]) -> Markup {
+    html! {
+        div class="tab-packs" {
+            div class="dash-head" {
+                div class="editor-head" {
+                    button type="button" class="icon-btn" title="Back" hx-get="/tab/capabilities" hx-target="#main" { (icon("arrow-right")) }
+                    h1 { "Starter packs" }
+                }
+                (legend())
+            }
+            p class="muted gallery-lead" { "A pack copies a curated set of capabilities into your library and creates a ready-made profile — all staged for you to review and Apply." }
+            div class="pack-grid" { @for p in packs { (pack_card(p)) } }
+        }
+    }
+}
+
+pub fn packs_gallery_fragment(packs: &[PackView]) -> String {
+    packs_gallery(packs).into_string()
+}
+
+/// One starter-pack card: icon + name (+ recommended/applied badge), a short
+/// description, the composed capabilities as risk-colored atom dots, and an
+/// Apply action (disabled once the pack's profile already exists).
+fn pack_card(p: &PackView) -> Markup {
+    let e = enc(&p.id);
+    let mut cls = String::from("pack-card");
+    if p.recommended {
+        cls.push_str(" recommended");
+    }
+    if p.applied {
+        cls.push_str(" applied");
+    }
+    html! {
+        div class=(cls) {
+            div class="pack-head" {
+                span class="pack-glyph" { (icon(&p.icon)) }
+                span class="pack-name" { (p.name) }
+                @if p.recommended { span class="tag bound-tag" { (icon("check")) "recommended" } }
+            }
+            p class="pack-desc" { (p.description) }
+            div class="pack-foot" {
+                span class="atoms" { @for a in &p.atoms { (atom_dot(a)) } }
+                span class="muted small" { (p.atoms.len()) " caps" }
+                span class="pack-spacer" {}
+                @if p.applied {
+                    button class="btn btn-ghost btn-sm" disabled { (icon("check")) "Applied" }
+                } @else {
+                    button class="btn btn-primary btn-sm" hx-post=(format!("/packs/{e}/apply")) hx-target="#main" { (icon("plus")) "Apply" }
+                }
             }
         }
     }

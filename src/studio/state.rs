@@ -13,9 +13,10 @@ use crate::capability::{palette, Capability, Layer, Risk};
 use crate::config::Config;
 use crate::context::{Context, GitContext, Scope};
 use crate::dynamic::DynamicMode;
+use crate::pack::{self, Pack};
 use crate::profile::{self, CapabilityRef, ProfileConfig, Selection};
 use crate::render::{self, RenderRequest};
-use crate::studio::edit::Session;
+use crate::studio::edit::{Session, StagedOp};
 
 /// The simulated context the preview is rendered for. Each field overrides the
 /// real detected context; `None`/empty means "use what was detected".
@@ -591,18 +592,120 @@ pub fn onboarding(base: &Context) -> Onboarding {
     }
 }
 
-/// The pre-filled profile draft a quick-start opens the composer with. Its
-/// capability refs are the suggested palette ids (duplicated into the library
-/// before this draft is rendered, so they resolve as owned).
-pub fn quickstart_draft(o: &Onboarding) -> ProfileConfig {
-    ProfileConfig {
-        name: o.name.clone(),
-        targets: o.targets.clone(),
-        capabilities: o.caps.iter().cloned().map(CapabilityRef::Id).collect(),
-        template: None,
-        guidance: None,
-        disabled: false,
+/// One starter-pack card for the gallery: the pack's metadata plus resolved
+/// risk-colored atom dots and whether it's already been applied in this context.
+pub struct PackView {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon: String,
+    /// True when this pack matches the detected context (badged + ordered first).
+    pub recommended: bool,
+    /// True when a profile with this pack's name already exists in the staged
+    /// config (the card shows an "applied" state instead of an "Apply" button).
+    pub applied: bool,
+    /// One atom dot per composed capability (owned vs palette-only vs unknown).
+    pub atoms: Vec<AtomDot>,
+}
+
+/// The pack recommended for the snapshot's detected context, if any (the first
+/// pack whose `recommended_for` matches a selection target).
+pub fn recommended_pack(snap: &Snapshot) -> Option<Pack> {
+    let ctx = simulated_context(&snap.base_context, &snap.sim);
+    let targets = ctx.selection_targets();
+    pack::packs()
+        .into_iter()
+        .find(|p| targets.iter().any(|t| p.is_recommended_for(t)))
+}
+
+/// Build the starter-pack gallery for the snapshot's (simulated) context:
+/// recommended packs first, each with its capabilities' atom dots and an
+/// already-applied flag. No probes — purely from the staged snapshot.
+pub fn pack_views(snap: &Snapshot) -> crate::Result<Vec<PackView>> {
+    let cfg = staged_config(snap)?;
+    let ctx = simulated_context(&snap.base_context, &snap.sim);
+    let targets = ctx.selection_targets();
+
+    let owned_risk: std::collections::HashMap<&str, Risk> = cfg
+        .capabilities
+        .iter()
+        .map(|c| (c.id.as_str(), c.risk))
+        .collect();
+    let palette_items = palette();
+    let palette_risk: std::collections::HashMap<&str, Risk> = palette_items
+        .iter()
+        .map(|c| (c.id.as_str(), c.risk))
+        .collect();
+    let resolve_atom = |id: &str| -> AtomDot {
+        let (risk, state) = if let Some(&r) = owned_risk.get(id) {
+            (r, AtomState::Owned)
+        } else if let Some(&r) = palette_risk.get(id) {
+            (r, AtomState::Palette)
+        } else {
+            (Risk::Info, AtomState::Unknown)
+        };
+        AtomDot {
+            id: id.to_string(),
+            risk,
+            state,
+        }
+    };
+    let existing: std::collections::HashSet<&str> =
+        cfg.profiles.iter().map(|p| p.name.as_str()).collect();
+
+    let mut views: Vec<PackView> = pack::packs()
+        .into_iter()
+        .map(|p| PackView {
+            recommended: targets.iter().any(|t| p.is_recommended_for(t)),
+            applied: existing.contains(p.profile_name),
+            atoms: p.caps.iter().map(|c| resolve_atom(c)).collect(),
+            id: p.id.to_string(),
+            name: p.name.to_string(),
+            description: p.description.to_string(),
+            icon: p.icon.to_string(),
+        })
+        .collect();
+    // Recommended packs first; catalog order is otherwise preserved (stable sort).
+    views.sort_by_key(|v| !v.recommended);
+    Ok(views)
+}
+
+/// Apply a starter pack into the staged session: duplicate each of its palette
+/// capabilities that isn't already owned, then create (or replace) its profile.
+/// Everything is staged — the user reviews the diff and Applies like any edit.
+/// Used by both the gallery's per-pack Apply and the recommended-pack quick start.
+pub fn apply_pack(session: &mut Session, pack: &Pack) -> crate::Result<()> {
+    let owned: std::collections::HashSet<String> = session
+        .staged_config()
+        .map(|cfg| cfg.capabilities.iter().map(|c| c.id.clone()).collect())
+        .unwrap_or_default();
+    for id in pack.caps {
+        if owned.contains(*id) {
+            continue;
+        }
+        session.stage(StagedOp::DuplicatePaletteItem {
+            id: id.to_string(),
+            to_layer: Layer::Global,
+        })?;
     }
+    let exists = session
+        .staged_config()
+        .map(|cfg| cfg.profiles.iter().any(|p| p.name == pack.profile_name))
+        .unwrap_or(false);
+    let profile = Box::new(pack.profile());
+    if exists {
+        session.stage(StagedOp::EditProfile {
+            layer: Layer::Global,
+            name: pack.profile_name.to_string(),
+            profile,
+        })?;
+    } else {
+        session.stage(StagedOp::CreateProfile {
+            layer: Layer::Global,
+            profile,
+        })?;
+    }
+    Ok(())
 }
 
 fn kind_of(has_command: bool, has_provider: bool) -> &'static str {
