@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// rosita — inject your global context into your AI coding agents.
+/// rosita — inject global context into your AI coding agents.
 ///
 /// Detects the current project/runtime context, selects the profile that fits,
 /// renders an agent-specific instruction overlay, writes it safely, and can

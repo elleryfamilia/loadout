@@ -1,6 +1,6 @@
 //! rosita — the library behind the `rosita` CLI.
 //!
-//! `rosita` injects your global context into your AI coding agents: it detects
+//! `rosita` injects global context into your AI coding agents: it detects
 //! the current project/runtime context, selects the profile that fits, renders
 //! an agent-specific instruction overlay, and writes it safely (atomic writes,
 //! managed marker blocks). The binary is a thin shell over this library so the
