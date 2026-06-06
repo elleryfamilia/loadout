@@ -1,12 +1,13 @@
 # rosita
 
-**direnv for AI coding agents.** When you `cd` into a project, your tools adapt
-(direnv, asdf, nvm…). Your AI agent doesn't — it reads whatever `CLAUDE.md` /
-`AGENTS.md` happens to be lying around. `rosita` closes that gap: it detects what
-you're working on, picks the **one** profile that fits, composes its
-capabilities into a single instruction overlay, and wires that overlay into each
-agent's instruction file — without ever touching your hand-written, committed
-content.
+**Inject your global context into your AI coding agents.**
+
+Author reusable guidance once, globally — conventions, preferences, safety rules —
+and `rosita` delivers it into whichever agent you use (Claude, Codex, Gemini,
+opencode, Copilot) without touching your committed files. It picks the guidance
+that fits each project, so you're not pasting the same `CLAUDE.md` into every repo
+and every tool. The repo carries almost nothing; your library lives in one place
+and adapts to where you are.
 
 <p align="center">
   <img src="docs/diagrams/pipeline.svg" alt="rosita pipeline: detect context, match coarse targets, select one profile, compose its capabilities, render and deliver the overlay" width="860">
