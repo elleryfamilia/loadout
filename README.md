@@ -22,10 +22,22 @@ and every tool.
 
 ## Quick start
 
+**1. Install** — straight from the repo, no clone needed:
+
 ```bash
-cargo install --git https://github.com/elleryfamilia/rosita  # install rosita (no clone needed)
-rosita studio  # author your context: reusable capabilities + profiles, in a local web UI
-rosita run claude  # in any project: launch your agent with the matching context injected
+cargo install --git https://github.com/elleryfamilia/rosita
+```
+
+**2. Author your context** — reusable capabilities and profiles, in a local web UI:
+
+```bash
+rosita studio
+```
+
+**3. Run your agent** in any project, with the matching context injected:
+
+```bash
+rosita run claude
 ```
 
 ## The model in 60 seconds
