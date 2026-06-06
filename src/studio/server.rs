@@ -141,6 +141,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
             Resp::html(views::cap_dialog(None, Layer::Global, true, None, &[]))
         }
         ("POST", "/capabilities") => handle_cap_save(state, req),
+        ("POST", "/onboarding/quickstart") => handle_quickstart(state),
         ("GET", "/profiles/new") => handle_profile_new(state),
         ("POST", "/profiles") => handle_profile_save(state, req),
         ("POST", "/profiles/preview") => handle_editor_preview(state, req),
@@ -272,6 +273,10 @@ fn profiles_tab_resp(
             .unwrap_or_else(|e| empty_preview(&name, format!("preview error: {e}")));
         (name, outcome, disabled)
     });
+    // On a fresh config (no profiles and no own caps), the empty Profiles tab
+    // shows the first-launch welcome instead of the bare "no profiles" prompt.
+    let onboarding = (detail.is_none() && lib.profiles.is_empty() && lib.yours.is_empty())
+        .then(|| state::onboarding(&snap.base_context));
     let markup = match &detail {
         Some((name, outcome, disabled)) => views::profiles_tab(
             &lib,
@@ -281,8 +286,9 @@ fn profiles_tab_resp(
                 disabled: *disabled,
             }),
             flash,
+            None,
         ),
-        None => views::profiles_tab(&lib, None, flash),
+        None => views::profiles_tab(&lib, None, flash, onboarding.as_ref()),
     };
     let mut html = markup.into_string();
     if with_staged {
@@ -578,6 +584,50 @@ fn handle_profile_new(state: &Arc<Mutex<StudioState>>) -> Resp {
     let draft = state::draft_profile_from_form(&[]);
     let preview = profile_preview_or_empty(&snap, &draft, "");
     Resp::html(views::profile_editor(&draft, true, &lib, &preview, None))
+}
+
+/// First-launch quick start: duplicate the suggested palette starter caps into
+/// the library (staged), then open the composer pre-filled with a starter
+/// profile (detected target + those caps). Everything is staged — the user
+/// reviews and Applies, or discards, like any other edit.
+fn handle_quickstart(state: &Arc<Mutex<StudioState>>) -> Resp {
+    let onb = {
+        let s = state.lock().unwrap();
+        state::onboarding(&s.base_context)
+    };
+    // Duplicate each suggested palette cap that isn't already owned. `onboarding`
+    // already filtered `caps` to real palette ids, so each is duplicate-able.
+    {
+        let mut s = state.lock().unwrap();
+        let owned: std::collections::HashSet<String> = s
+            .session
+            .staged_config()
+            .map(|cfg| cfg.capabilities.iter().map(|c| c.id.clone()).collect())
+            .unwrap_or_default();
+        for id in &onb.caps {
+            if owned.contains(id) {
+                continue;
+            }
+            if let Err(e) = s.session.stage(StagedOp::DuplicatePaletteItem {
+                id: id.clone(),
+                to_layer: Layer::Global,
+            }) {
+                return Resp::html(views::error_fragment(&e.to_string()));
+            }
+        }
+    }
+    let snap = state.lock().unwrap().snapshot();
+    let lib = match state::library_view(&snap) {
+        Ok(l) => l,
+        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
+    };
+    let draft = state::quickstart_draft(&onb);
+    let preview = profile_preview_or_empty(&snap, &draft, "");
+    // The editor swaps `#main`; append the staged-indicator refresh so the top
+    // bar reflects the just-staged capability duplications.
+    let mut html = views::profile_editor(&draft, true, &lib, &preview, None);
+    html.push_str(&views::staged_indicator_loader());
+    Resp::html(html)
 }
 
 fn handle_profile_edit(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
@@ -1158,6 +1208,63 @@ mod tests {
         // The shell renders the Profiles tab (dashboard) by default.
         assert!(body.contains("Profiles"));
         assert!(body.contains("Capabilities"));
+    }
+
+    #[test]
+    fn fresh_config_shows_welcome_onboarding() {
+        // No config at all → no profiles and no own caps → the Profiles tab
+        // greets a first-time user instead of a bare "no profiles" prompt.
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/tab/profiles", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Welcome to rosita studio"), "welcome missing");
+        assert!(
+            body.contains("/onboarding/quickstart"),
+            "quick-start action missing"
+        );
+        // The detection readout names the detected stack as a chip.
+        assert!(body.contains(">rust<"), "detected-stack chip missing");
+    }
+
+    #[test]
+    fn quickstart_stages_starters_and_prefills_composer() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/onboarding/quickstart",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        // Duplicated the three suggested starters (rust + the two universals).
+        assert_eq!(st.lock().unwrap().session.ops().len(), 3);
+        let body = String::from_utf8(r.body).unwrap();
+        // The composer opened, pre-filled with the detected target as the name…
+        assert!(body.contains("New profile"));
+        assert!(body.contains("name=\"name\" value=\"rust\""));
+        // …and the suggested capabilities are present in the picker to compose.
+        assert!(body.contains("Rust conventions"));
+        assert!(body.contains("Terse communication"));
+        assert!(body.contains("Conventional commits"));
+    }
+
+    #[test]
+    fn welcome_hidden_once_a_profile_exists() {
+        let cfg = "[[capabilities]]\nid = \"rc\"\nguidance = \"Use clippy.\"\n\n\
+                   [[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\"]\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+        let r = route(&st, &req("GET", "/tab/profiles", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(!body.contains("Welcome to rosita studio"));
     }
 
     #[test]

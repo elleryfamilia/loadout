@@ -10,10 +10,11 @@
 //! - [`views`] — `maud` server-rendered HTML (shell + htmx fragments).
 //! - [`assets`] — CSS + the htmx-shim JS, embedded via `rust-embed`.
 //!
-//! Slice 1 is **read-only**: `GET /` shell, `GET /library`, `POST /preview`
-//! (ReadOnly render), `GET /fs-status`, `GET /assets/*`. The write routes
-//! (editor, composer, diff/apply, trust) arrive in Slice 2. See
-//! `docs/studio-design.md`.
+//! The full read+write UI is shipped: the library and ReadOnly live preview,
+//! the capability editor (static + script caps, run-on-demand), the profile
+//! composer (targets + capability picker), stage → diff → apply, the trust and
+//! leak banners, and the fresh-config onboarding (`GET /onboarding/quickstart`).
+//! See `docs/studio-design.md`.
 
 pub mod assets;
 pub mod edit;

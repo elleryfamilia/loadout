@@ -526,6 +526,85 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
     })
 }
 
+/// First-launch onboarding readout for a fresh config (no profiles **and** no
+/// own capabilities yet): what rosita detected here, plus a "quick start"
+/// suggestion — a starter profile pre-filled from the detected target and a few
+/// palette capabilities. The palette items are only *suggested*; quick-start
+/// duplicates them into your library (staged) so you own and can edit them.
+pub struct Onboarding {
+    /// The detected primary stack (`rust`, `node`, …), or `None` when none was
+    /// recognized / outside a repo.
+    pub stack: Option<String>,
+    /// Repo vs machine, derived from the detected context.
+    pub scope: Scope,
+    /// The current branch, when in a repo.
+    pub branch: Option<String>,
+    /// Suggested profile name (the detected target, `machine`, or `project`).
+    pub name: String,
+    /// Suggested `targets` (the detected target, or empty when none was found).
+    pub targets: Vec<String>,
+    /// Palette capability ids the quick-start composes (each duplicated into the
+    /// library on use). Already filtered to real palette ids and de-duplicated.
+    pub caps: Vec<String>,
+}
+
+/// Compute the [`Onboarding`] suggestion for a detected context. The mapping is
+/// deliberately coarse: the matching `<stack>-conventions` palette cap (or
+/// `infra-caution` for the machine context), plus the universal `terse-comms`
+/// and `conventional-commits` starters.
+pub fn onboarding(base: &Context) -> Onboarding {
+    let scope = base.scope();
+    let stack = base.stacks.first().cloned();
+    let branch = base.git.as_ref().and_then(|g| g.branch.clone());
+    let (name, targets) = match (&stack, scope) {
+        (Some(s), _) => (s.clone(), vec![s.clone()]),
+        (None, Scope::Machine) => ("machine".to_string(), vec!["machine".to_string()]),
+        (None, Scope::Repo) => ("project".to_string(), Vec::new()),
+    };
+    let stack_cap = match stack.as_deref() {
+        Some("rust") => Some("rust-conventions"),
+        Some("nextjs") => Some("nextjs-conventions"),
+        Some("node") => Some("node-conventions"),
+        Some("go") => Some("go-conventions"),
+        Some("python") => Some("python-conventions"),
+        _ => None,
+    };
+    let mut caps: Vec<String> = Vec::new();
+    if let Some(c) = stack_cap {
+        caps.push(c.to_string());
+    } else if scope == Scope::Machine {
+        caps.push("infra-caution".to_string());
+    }
+    caps.push("terse-comms".to_string());
+    caps.push("conventional-commits".to_string());
+    // Keep only ids that really exist in the palette, de-duplicated, order-stable.
+    let pal: std::collections::HashSet<String> = palette().into_iter().map(|c| c.id).collect();
+    let mut seen = std::collections::HashSet::new();
+    caps.retain(|id| pal.contains(id) && seen.insert(id.clone()));
+    Onboarding {
+        stack,
+        scope,
+        branch,
+        name,
+        targets,
+        caps,
+    }
+}
+
+/// The pre-filled profile draft a quick-start opens the composer with. Its
+/// capability refs are the suggested palette ids (duplicated into the library
+/// before this draft is rendered, so they resolve as owned).
+pub fn quickstart_draft(o: &Onboarding) -> ProfileConfig {
+    ProfileConfig {
+        name: o.name.clone(),
+        targets: o.targets.clone(),
+        capabilities: o.caps.iter().cloned().map(CapabilityRef::Id).collect(),
+        template: None,
+        guidance: None,
+        disabled: false,
+    }
+}
+
 fn kind_of(has_command: bool, has_provider: bool) -> &'static str {
     if has_command {
         "command"
@@ -588,7 +667,7 @@ pub fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-// --- form → typed model (Slice 2 write engine) -------------------------------
+// --- form → typed model (the write engine) -----------------------------------
 
 fn value_of<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
     pairs

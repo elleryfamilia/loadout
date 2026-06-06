@@ -15,10 +15,12 @@ use maud::{html, Markup, PreEscaped, DOCTYPE};
 use pulldown_cmark::{html as md_html, Event, Options, Parser};
 
 use crate::capability::{Capability, Layer, Risk};
+use crate::context::Scope;
 use crate::profile::ProfileConfig;
 use crate::studio::edit::FileDiff;
 use crate::studio::state::{
-    AtomDot, AtomState, BindingState, CapView, LibraryView, PreviewCap, PreviewOutcome, ProfileView,
+    AtomDot, AtomState, BindingState, CapView, LibraryView, Onboarding, PreviewCap, PreviewOutcome,
+    ProfileView,
 };
 
 /// Language/platform targets a profile can declare.
@@ -305,6 +307,7 @@ pub fn profiles_tab(
     lib: &LibraryView,
     selected: Option<ProfileDetail>,
     flash: Option<&str>,
+    onboarding: Option<&Onboarding>,
 ) -> Markup {
     let sel_name = selected.as_ref().map(|d| d.name);
     html! {
@@ -327,9 +330,57 @@ pub fn profiles_tab(
                 @match &selected {
                     Some(detail) => (profile_detail(detail)),
                     None => {
-                        @if lib.profiles.is_empty() { (profiles_empty_main()) }
-                        @else { (profile_pick_prompt()) }
+                        @if lib.profiles.is_empty() {
+                            @match onboarding {
+                                Some(o) => (studio_welcome(o)),
+                                None => (profiles_empty_main()),
+                            }
+                        } @else { (profile_pick_prompt()) }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// First-launch welcome shown on the Profiles tab when the config is fresh (no
+/// profiles and no own capabilities): confirm what was detected, explain what a
+/// profile is for (and why the overlay is empty), and offer a quick start
+/// (pre-filled starter profile) or a from-scratch composer.
+fn studio_welcome(o: &Onboarding) -> Markup {
+    let scope_label = match o.scope {
+        Scope::Repo => "repo",
+        Scope::Machine => "machine",
+    };
+    let n = o.caps.len();
+    html! {
+        div class="welcome" {
+            div class="welcome-head" {
+                span class="welcome-wave" { "👋" }
+                h1 { "Welcome to rosita studio" }
+            }
+            div class="welcome-detect" {
+                span class="muted small" { "rosita detected" }
+                span class="welcome-chips" {
+                    @match &o.stack {
+                        Some(s) => span class="target-chip" { (s) },
+                        None => span class="target-chip muted" { "no specific stack" },
+                    }
+                    span class="target-chip" { (scope_label) }
+                    @if let Some(b) = &o.branch { span class="target-chip muted" { "branch " (b) } }
+                }
+            }
+            p class="welcome-lead" { "A " strong { "profile" } " decides what guidance your agent gets here — you have none yet." }
+            p class="muted" { "That's why the preview is empty: no profile applies until you make one." }
+            div class="welcome-actions" {
+                button class="btn btn-primary" hx-post="/onboarding/quickstart" hx-target="#main" { (icon("rocket")) "Quick start" }
+                button class="btn btn-ghost" hx-get="/profiles/new" hx-target="#main" { (icon("plus")) "Start from scratch" }
+            }
+            @if n > 0 {
+                p class="hint small welcome-note" {
+                    "Quick start pre-fills a “" (o.name) "” profile with " (n) " starter "
+                    (if n == 1 { "capability" } else { "capabilities" })
+                    " — all staged, nothing saved until you Apply."
                 }
             }
         }
@@ -517,9 +568,9 @@ fn profile_pick_prompt() -> Markup {
 
 // --- Capabilities tab --------------------------------------------------------
 
-/// The Capabilities tab: a grid of capability cards (open a dialog on click).
-/// Starters are seeded into the config on first open, so they appear here as
-/// ordinary, editable/deletable cards — there is no separate read-only palette.
+/// The Capabilities tab: a grid of *your* capability cards (open a dialog on
+/// click). Only owned caps appear here — the shipped palette is a read-only
+/// catalog you duplicate from when composing a profile, not an active layer.
 pub fn capabilities_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
     html! {
         div class="tab-capabilities" {

@@ -240,7 +240,7 @@ pub fn palette() -> Vec<Capability> {
     }
 
     vec![
-        // --- baseline (pulled by the always-on `default` profile) ----------
+        // --- a sensible baseline starter -----------------------------------
         tagged(
             cap(
                 "baseline",
@@ -250,7 +250,7 @@ pub fn palette() -> Vec<Capability> {
             ),
             &["awareness"],
         ),
-        // --- stack conventions (pulled by the stack profiles) --------------
+        // --- stack conventions (one per detected language/platform) --------
         tagged(
             cap(
                 "rust-conventions",
@@ -298,7 +298,7 @@ pub fn palette() -> Vec<Capability> {
             ),
             &["stack"],
         ),
-        // --- safety / workflow (pulled by path/branch profiles) ------------
+        // --- safety / workflow starters ------------------------------------
         Capability {
             risk: Risk::Caution,
             ..tagged(
@@ -323,7 +323,7 @@ pub fn palette() -> Vec<Capability> {
             ),
             &["dev-workflow"],
         ),
-        // --- reusable starter set (not pulled by built-in profiles) --------
+        // --- reusable cross-cutting starters -------------------------------
         tagged(
             cap(
                 "terse-comms",
