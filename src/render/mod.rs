@@ -128,8 +128,6 @@ struct FragmentModel<'a> {
     profile: &'a str,
     context: &'a Context,
     fragment: &'a Fragment,
-    /// Back-compat alias for `fragment` (pre-rename templates used `{{ capability }}`).
-    capability: &'a Fragment,
     /// Convenience alias for `fragment.params`.
     params: &'a toml::Value,
     /// Live provider/command output for a dynamic fragment (`{{ provider.output }}`,
@@ -261,7 +259,6 @@ fn render_fragment_list(
                 profile: &rc.via_profile,
                 context: ctx,
                 fragment: cap,
-                capability: cap,
                 params: &cap.params,
                 provider: provider.map(|o| ProviderRef {
                     output: &o.text,

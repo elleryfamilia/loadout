@@ -59,7 +59,6 @@ pub enum Command {
     /// Diagnose the environment and configuration.
     Doctor,
     /// List fragments, or show one (`rosita fragments [list|show <id>]`).
-    #[command(alias = "capabilities")]
     Fragments(FragmentsArgs),
     /// List configured profiles and which match the current context.
     Profiles(ProfilesArgs),

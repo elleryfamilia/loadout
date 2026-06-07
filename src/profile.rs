@@ -42,8 +42,7 @@ pub struct ProfileConfig {
     /// either a bare id (`"rust-conventions"`) or an id with inline `params`
     /// overrides (`{ id = "ssh", params = { user = "deploy" } }`). A saved
     /// profile needs ≥1 (enforced by studio validation, not the parser).
-    /// `capabilities = [...]` is the pre-rename inner key, still accepted.
-    #[serde(default, alias = "capabilities")]
+    #[serde(default)]
     pub fragments: Vec<FragmentRef>,
     /// Optional base-template override (per agent the renderer appends the
     /// agent suffix). Rarely needed.

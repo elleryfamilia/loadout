@@ -2,9 +2,8 @@
 //!
 //! A **fragment** is one atom of agent guidance ("Rust conventions", "be
 //! conservative with infrastructure", "be terse"). Fragments are authored
-//! once, kept in a library (built-ins plus `[[fragments]]` config entries — the
-//! legacy `[[capabilities]]` key is still accepted), and **composed by
-//! profiles** (see [`crate::profile::compose`]). This is the reuse seam: many
+//! once, kept in a library (built-ins plus `[[fragments]]` config entries), and
+//! **composed by profiles** (see [`crate::profile::compose`]). This is the reuse seam: many
 //! profiles can pull the same fragment instead of repeating inline guidance.
 //!
 //! A fragment can self-gate with `when` rules, declare `requires`

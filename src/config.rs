@@ -208,11 +208,9 @@ struct RawConfig {
     sync: Option<RawSync>,
     #[serde(default)]
     profiles: Vec<ProfileConfig>,
-    // `[[capabilities]]` is the pre-rename key, still accepted so existing
-    // configs load unchanged; studio re-writes them as `[[fragments]]`.
-    #[serde(default, alias = "capabilities")]
+    #[serde(default)]
     fragments: Vec<Fragment>,
-    #[serde(default, alias = "capability_params")]
+    #[serde(default)]
     fragment_params: BTreeMap<String, toml::Value>,
     #[serde(default)]
     agents: Vec<AgentDescriptor>,
@@ -608,39 +606,6 @@ mod tests {
         assert!(c.fragments.iter().any(|x| x.id == "ssh-tailnet"));
         // Only the two authored fragments exist — nothing is auto-injected.
         assert_eq!(c.fragments.len(), 2);
-    }
-
-    #[test]
-    fn legacy_capabilities_key_still_loads_via_alias() {
-        // A pre-rename config using `[[capabilities]]`, the inner profile key
-        // `capabilities = [...]`, and `[capability_params]` must load unchanged.
-        let raw: RawConfig = toml::from_str(
-            r#"
-            [[capabilities]]
-            id = "rc"
-            guidance = "rust"
-
-            [[profiles]]
-            name = "rust"
-            targets = ["rust"]
-            capabilities = ["rc"]
-
-            [capability_params.rc]
-            host = "box"
-            "#,
-        )
-        .unwrap();
-        let c = raw.finalize(vec![]);
-        assert!(
-            c.fragments.iter().any(|f| f.id == "rc"),
-            "alias on [[capabilities]]"
-        );
-        let prof = c.profiles.iter().find(|p| p.name == "rust").unwrap();
-        assert_eq!(prof.fragments.len(), 1, "alias on inner capabilities key");
-        assert!(
-            c.fragment_params.contains_key("rc"),
-            "alias on [capability_params]"
-        );
     }
 
     #[test]

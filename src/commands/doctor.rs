@@ -296,9 +296,7 @@ fn repo_declares_caps_or_profiles(path: &Path) -> Option<&'static str> {
             .and_then(|v| v.as_array())
             .is_some_and(|a| !a.is_empty())
     };
-    // Accept the pre-rename `[[capabilities]]` key alongside `[[fragments]]`.
-    let has_fragments = has("fragments") || has("capabilities");
-    match (has_fragments, has("profiles")) {
+    match (has("fragments"), has("profiles")) {
         (true, true) => Some("fragments and profiles"),
         (true, false) => Some("fragments"),
         (false, true) => Some("profiles"),

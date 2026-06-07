@@ -167,12 +167,6 @@ personal = ["my-laptop", "*.tailnet.ts.net"]
 
 ## `[[fragments]]` (implemented)
 
-> Renamed from `[[capabilities]]`. The old key (and the inner profile key
-> `capabilities = [...]`, and `[fragment_params]`'s former `[capability_params]`)
-> is still accepted, so existing configs load unchanged; studio writes the new
-> `[[fragments]]` form. Guidance templates may use `{{ fragment }}` or the
-> back-compat alias `{{ capability }}`.
-
 ```toml
 [[fragments]]
 id          = "ssh-tailnet"

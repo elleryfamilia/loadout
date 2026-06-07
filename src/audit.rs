@@ -22,7 +22,7 @@ pub struct AuditEvent {
     /// The selected profile (or `none` when no profile applied).
     pub profile: String,
     /// Active fragment ids, in render order.
-    #[serde(default, alias = "capabilities")]
+    #[serde(default)]
     pub fragments: Vec<String>,
     /// Detected stacks.
     #[serde(default)]

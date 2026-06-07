@@ -188,10 +188,7 @@ impl Session {
     pub fn fragment_layer(&self, id: &str) -> Option<Layer> {
         self.layers
             .iter()
-            .find(|lf| {
-                has_entry(&lf.staged, "fragments", "id", id)
-                    || has_entry(&lf.staged, "capabilities", "id", id)
-            })
+            .find(|lf| has_entry(&lf.staged, "fragments", "id", id))
             .map(|lf| lf.layer)
     }
 
@@ -359,16 +356,13 @@ impl LayerFile {
 fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
     match op {
         StagedOp::CreateFragment { cap, .. } => {
-            let key = fragment_aot_key(doc);
-            aot_mut(doc, key).push(fragment_table(cap)?);
+            aot_mut(doc, "fragments").push(fragment_table(cap)?);
         }
         StagedOp::EditFragment { id, cap, .. } => {
-            let key = fragment_aot_key(doc);
-            upsert(aot_mut(doc, key), "id", id, fragment_table(cap)?);
+            upsert(aot_mut(doc, "fragments"), "id", id, fragment_table(cap)?);
         }
         StagedOp::DeleteFragment { id, .. } => {
-            let key = fragment_aot_key(doc);
-            remove(aot_mut(doc, key), "id", id);
+            remove(aot_mut(doc, "fragments"), "id", id);
         }
         StagedOp::CreateProfile { profile, .. } => {
             aot_mut(doc, "profiles").push(profile_table(profile)?);
@@ -390,24 +384,10 @@ fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
                 .find(|c| &c.id == id)
                 .ok_or_else(|| anyhow!("unknown palette fragment '{id}'"))?;
             // Duplicating an existing id replaces it (you own the copy now).
-            let key = fragment_aot_key(doc);
-            upsert(aot_mut(doc, key), "id", id, fragment_table(&cap)?);
+            upsert(aot_mut(doc, "fragments"), "id", id, fragment_table(&cap)?);
         }
     }
     Ok(())
-}
-
-/// The top-level array-of-tables key to write fragments under. Reuses the
-/// pre-rename `capabilities` table if the doc already has one (and no
-/// `fragments` table) so a file never ends up with BOTH keys — which would fail
-/// to deserialize. New files get the canonical `fragments`.
-fn fragment_aot_key(doc: &DocumentMut) -> &'static str {
-    let is_aot = |k: &str| doc.get(k).and_then(Item::as_array_of_tables).is_some();
-    if is_aot("capabilities") && !is_aot("fragments") {
-        "capabilities"
-    } else {
-        "fragments"
-    }
 }
 
 /// Get (or create) an array-of-tables at `key`.
@@ -678,35 +658,6 @@ mod tests {
         assert!(after.contains("guidance = \"B body\""));
         // The staged text must re-parse through the strict config parser.
         s.validate().unwrap();
-    }
-
-    #[test]
-    fn create_fragment_appends_to_legacy_capabilities_table() {
-        // A pre-rename file uses `[[capabilities]]`. A new fragment must append
-        // to that same array-of-tables — never add a second `[[fragments]]`
-        // table, which would make the file fail to deserialize (serde would see
-        // both keys for one field).
-        let body = "[[capabilities]]\nid = \"a\"\nguidance = \"A\"\n";
-        let (d, gdir) = repo_with_global(body);
-        let mut s = session_global(d.path(), &gdir);
-        s.stage(StagedOp::CreateFragment {
-            layer: Layer::Global,
-            cap: Box::new(cap("b", "B body")),
-        })
-        .unwrap();
-        let after = s.diff()[0].staged_after.clone();
-        assert!(
-            after.contains("[[capabilities]]"),
-            "appends into the existing legacy table"
-        );
-        assert!(
-            !after.contains("[[fragments]]"),
-            "must not create a duplicate table:\n{after}"
-        );
-        assert!(after.contains("id = \"b\""));
-        // Re-parses without a duplicate-field error; both fragments are present.
-        s.validate().unwrap();
-        assert_eq!(s.staged_config().unwrap().fragments.len(), 2);
     }
 
     #[test]
