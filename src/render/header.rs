@@ -51,10 +51,10 @@ pub fn build(meta: &HeaderMeta) -> String {
          \x20 sources   : {sources}\n\
          -->\n\
          \n\
-         > **What is rosita?** This block was injected by **rosita**, a tool that manages your \
-         personal, global context — your standing conventions and preferences — and injects it \
-         into AI coding agents like this one. The guidance below is *yours*, carried across \
-         projects; it is not this repository's own policy.\n\
+         > **What is rosita?** rosita is a tool the user runs to inject their personal, global \
+         context — their standing conventions and preferences — into AI coding agents like you. \
+         The guidance below comes from the user and applies across their projects; it is not this \
+         repository's own policy.\n\
          > \n\
          > 🕒 rosita snapshot — **{host}**, **{generated_at}**, profile **{profile}** (context {hash}).\n\
          > This is point-in-time **agent guidance, not enforced policy**, and may be stale.\n\
@@ -120,9 +120,10 @@ mod tests {
         assert!(h.contains("host      : mac-air"));
         assert!(h.contains("DO NOT EDIT"));
         assert!(h.contains("not enforced policy"));
-        // explains what rosita is so the agent can make sense of the context
+        // explains what rosita is so the agent can make sense of the context,
+        // addressed to the agent and attributing the guidance to the user
         assert!(h.contains("What is rosita?"));
-        assert!(h.contains("injects it"));
+        assert!(h.contains("comes from the user"));
         // self-healing instructions + launch-mode signal
         assert!(h.contains("rosita refresh"));
         assert!(h.contains("rosita clean"));
