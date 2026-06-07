@@ -4,8 +4,8 @@
 
 use std::path::PathBuf;
 
-use rosita::fragment::Layer;
 use rosita::config::Config;
+use rosita::fragment::Layer;
 
 /// Every fenced ```toml block in `md`, trimmed.
 fn toml_blocks(md: &str) -> Vec<String> {

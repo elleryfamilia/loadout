@@ -607,9 +607,20 @@ pub fn fragments_tab_fragment(lib: &LibraryView, flash: Option<&str>) -> String 
     fragments_tab(lib, flash).into_string()
 }
 
-/// Order known categories sensibly; unknown tags fall after them (alphabetical),
-/// and the untagged "General" bucket sorts last.
+/// Order known categories sensibly; unknown categories fall after them
+/// (alphabetical), and the uncategorized "General" bucket sorts last. Lists the
+/// friendly `category` values first, then the legacy first-tag fallback keys.
 const CATEGORY_ORDER: &[&str] = &[
+    // friendly `category` values (the dedicated field)
+    "Operating Style",
+    "Local Environment",
+    "Stack Conventions",
+    "Dev Workflow",
+    "Engineering Standards",
+    "Quality",
+    "Safety",
+    "Security",
+    // legacy first-tag fallback (fragments with no explicit category)
     "awareness",
     "stack",
     "comms",
@@ -618,6 +629,18 @@ const CATEGORY_ORDER: &[&str] = &[
     "infra",
     "safety",
     "security",
+];
+
+/// Friendly category names offered as autocomplete in the fragment editor.
+const CATEGORY_SUGGESTIONS: &[&str] = &[
+    "Operating Style",
+    "Local Environment",
+    "Stack Conventions",
+    "Dev Workflow",
+    "Engineering Standards",
+    "Quality",
+    "Safety",
+    "Security",
 ];
 
 /// A friendly heading for a fragment category (its primary tag).
@@ -893,6 +916,27 @@ pub fn fragment_dialog(
                             }
                             label class="check exec-check" { input type="checkbox" name="allow_exec" checked[allow_exec]; span { "Allow execution" } }
                             p class="hint small" { "The script runs at render and its output is embedded. Uncheck " strong { "Allow execution" } " to keep it from running." }
+                        }
+                        @let cur_category = cap.and_then(|c| c.category.as_deref()).unwrap_or("");
+                        @let cur_tags = cap.map(|c| c.tags.join(", ")).unwrap_or_default();
+                        @let cur_risk = cap.map(|c| c.risk).unwrap_or_default();
+                        div class="meta-row" {
+                            label class="field grow" { span class="field-label" { "category" span class="field-hint" { "groups it in the tree" } }
+                                input type="text" name="category" value=(cur_category) placeholder="Operating Style" list="fragment-categories";
+                            }
+                            label class="field risk-field" { span class="field-label" { "risk" }
+                                select name="risk" {
+                                    option value="info" selected[cur_risk == Risk::Info] { "info" }
+                                    option value="caution" selected[cur_risk == Risk::Caution] { "caution" }
+                                    option value="dangerous" selected[cur_risk == Risk::Dangerous] { "dangerous" }
+                                }
+                            }
+                        }
+                        label class="field" { span class="field-label" { "tags" span class="field-hint" { "comma-separated, for discovery" } }
+                            input type="text" name="tags" value=(cur_tags) placeholder="comms, safety";
+                        }
+                        datalist id="fragment-categories" {
+                            @for c in CATEGORY_SUGGESTIONS { option value=(c) {} }
                         }
                         (lives_in(layer))
                         @if !is_new {
@@ -1305,5 +1349,26 @@ mod tests {
         assert_eq!(category_label(Some("stack")), "Stack conventions");
         assert_eq!(category_label(Some("my-custom_tag")), "My custom tag");
         assert_eq!(category_label(None), "General");
+    }
+
+    #[test]
+    fn friendly_categories_group_by_name_in_logical_order() {
+        // The dedicated `category` field carries friendly names; they keep their
+        // own label and sort in CATEGORY_ORDER before the legacy tag fallback.
+        let caps = vec![
+            cv("a", Some("Engineering Standards")),
+            cv("b", Some("Operating Style")),
+            cv("c", Some("Local Environment")),
+        ];
+        let groups = group_fragments(&caps);
+        let labels: Vec<&str> = groups.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Operating Style",
+                "Local Environment",
+                "Engineering Standards"
+            ]
+        );
     }
 }

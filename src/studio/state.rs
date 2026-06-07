@@ -1179,6 +1179,48 @@ mod tests {
     }
 
     #[test]
+    fn fragment_from_form_parses_category_tags_risk() {
+        let cap = fragment_from_form(
+            None,
+            &parse_pairs(
+                "name=Guardrails&kind=markdown&guidance=g\
+                 &category=Operating+Style&tags=safety,+comms+&risk=caution",
+            ),
+        )
+        .unwrap();
+        assert_eq!(cap.category.as_deref(), Some("Operating Style"));
+        assert_eq!(cap.tags, vec!["safety".to_string(), "comms".to_string()]); // trimmed
+        assert_eq!(cap.risk, Risk::Caution);
+    }
+
+    #[test]
+    fn fragment_from_form_present_field_clears_absent_field_preserves() {
+        // Start from a fragment that has metadata set.
+        let base = fragment_from_form(
+            None,
+            &parse_pairs("name=X&kind=markdown&guidance=g&category=Safety&tags=a,b&risk=dangerous"),
+        )
+        .unwrap();
+        // A post that *includes* an empty category/tags clears them (and risk
+        // falls back to info when the select says so).
+        let cleared = fragment_from_form(
+            Some(&base),
+            &parse_pairs("id=x&kind=markdown&guidance=g&category=&tags=&risk=info"),
+        )
+        .unwrap();
+        assert_eq!(cleared.category, None);
+        assert!(cleared.tags.is_empty());
+        assert_eq!(cleared.risk, Risk::Info);
+        // A post that *omits* the fields entirely preserves the base values
+        // (the simple editor never silently drops metadata).
+        let preserved =
+            fragment_from_form(Some(&base), &parse_pairs("id=x&kind=markdown&guidance=g")).unwrap();
+        assert_eq!(preserved.category.as_deref(), Some("Safety"));
+        assert_eq!(preserved.tags, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(preserved.risk, Risk::Dangerous);
+    }
+
+    #[test]
     fn fragment_from_form_edit_preserves_hidden_fields() {
         // A base fragment carrying fields the simple editor never shows.
         let mut base = crate::fragment::palette()

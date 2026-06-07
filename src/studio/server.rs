@@ -1656,6 +1656,10 @@ mod tests {
         assert!(owned.contains("Save as a copy"));
         assert!(owned.contains("Delete"));
         assert!(owned.contains("/fragments/mine"));
+        // The editor exposes the category / tags / risk metadata fields.
+        assert!(owned.contains("name=\"category\""));
+        assert!(owned.contains("name=\"tags\""));
+        assert!(owned.contains("name=\"risk\""));
 
         // Opened from a profile's detail, the form carries a return_profile so
         // Save re-renders that profile rather than the Fragments tab.

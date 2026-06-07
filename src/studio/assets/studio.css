@@ -320,6 +320,14 @@ body {
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field.grow { flex: 1; }
 .title-row { display: flex; gap: 12px; align-items: flex-end; }
+.meta-row { display: flex; gap: 12px; align-items: flex-end; }
+.meta-row .field.grow { flex: 1; }
+.risk-field { min-width: 8rem; }
+.fragment-form select {
+  width: 100%; background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  padding: 8px 10px; font: 400 13px var(--sans);
+}
 .field-label { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 600; color: var(--fg); }
 .field-hint { font-weight: 400; color: var(--faint); font-size: 11px; }
 input[type="text"], textarea, .editor-form input[type="text"] {
