@@ -292,6 +292,7 @@ fn profiles_tab_resp(
                 name,
                 outcome,
                 disabled: *disabled,
+                expand: views::Expand::None,
             }),
             flash,
             None,
@@ -314,6 +315,7 @@ fn handle_profile_detail(
     name: &str,
     agent: &str,
     mode: DynamicMode,
+    expand: views::Expand,
 ) -> Resp {
     let snap = state.lock().unwrap().snapshot();
     let disabled = state::staged_config(&snap)
@@ -330,6 +332,7 @@ fn handle_profile_detail(
             name,
             outcome: &outcome,
             disabled,
+            expand,
         })),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
@@ -339,12 +342,19 @@ fn handle_profile_detail(
 /// every script/provider shows real output. Scripts run (subject to `allow_exec`)
 /// and their (redacted) output is cached, so the read-only preview keeps it.
 fn handle_profile_run(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
-    handle_profile_detail(state, name, "", DynamicMode::Live)
+    handle_profile_detail(
+        state,
+        name,
+        "",
+        DynamicMode::Live,
+        views::Expand::AllDynamic,
+    )
 }
 
 /// Run one dynamic cap now (Live) so its output caches, then re-render the
 /// profile detail (ReadOnly) — only the run cap shows fresh output; the rest keep
 /// their placeholder until they're run too. `profile` scopes the render context.
+/// The run fragment re-renders expanded so its output stays visible.
 fn handle_fragment_run(state: &Arc<Mutex<StudioState>>, id: &str, profile: &str) -> Resp {
     {
         let snap = state.lock().unwrap().snapshot();
@@ -352,7 +362,13 @@ fn handle_fragment_run(state: &Arc<Mutex<StudioState>>, id: &str, profile: &str)
             return Resp::html(views::error_fragment(&e.to_string()));
         }
     }
-    handle_profile_detail(state, profile, "", DynamicMode::ReadOnly)
+    handle_profile_detail(
+        state,
+        profile,
+        "",
+        DynamicMode::ReadOnly,
+        views::Expand::One(id),
+    )
 }
 
 /// An empty preview outcome (used when a profile can't be composed/rendered).
@@ -680,11 +696,17 @@ fn handle_profile_edit(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
 }
 
 fn handle_profile_select(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
-    handle_profile_detail(state, name, "", DynamicMode::ReadOnly)
+    handle_profile_detail(state, name, "", DynamicMode::ReadOnly, views::Expand::None)
 }
 
 fn handle_profile_preview(state: &Arc<Mutex<StudioState>>, name: &str, agent: &str) -> Resp {
-    handle_profile_detail(state, name, agent, DynamicMode::ReadOnly)
+    handle_profile_detail(
+        state,
+        name,
+        agent,
+        DynamicMode::ReadOnly,
+        views::Expand::None,
+    )
 }
 
 fn handle_profile_disable(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
@@ -1620,6 +1642,42 @@ mod tests {
             !body.contains(" open>"),
             "fragment cards must start collapsed"
         );
+    }
+
+    #[test]
+    fn running_a_dynamic_fragment_re_renders_it_open() {
+        let cfg = "[[fragments]]\n\
+             id = \"deploy\"\n\
+             description = \"Deploy status\"\n\
+             command = \"echo green\"\n\
+             \n\
+             [[profiles]]\n\
+             name = \"rust\"\n\
+             targets = [\"rust\"]\n\
+             fragments = [\"deploy\"]\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+
+        // Selecting the profile leaves the card collapsed...
+        let sel = body_of(route(
+            &st,
+            &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(!sel.contains(" open>"));
+
+        // ...but running it re-renders that card expanded so its output shows.
+        let ran = body_of(route(
+            &st,
+            &req(
+                "POST",
+                "/fragments/deploy/run",
+                "profile=rust",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        ));
+        assert!(ran.contains(" open>"), "the run fragment stays open");
+        assert!(ran.contains("fragment-output"), "and shows its output");
     }
 
     #[test]

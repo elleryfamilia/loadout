@@ -266,8 +266,10 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str) -> String {
                 header class="topbar" {
                     div class="brand" { span class="brand-mark" { (brand_mark()) } span class="brand-name" { "Rosita" } }
                     (tab_bar(active_tab))
-                    div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
-                    (theme_toggle())
+                    div class="topbar-right" {
+                        div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
+                        (theme_toggle())
+                    }
                 }
                 main class="main" id="main" { (main) }
                 div id="modal" class="modal-root" {}
@@ -336,6 +338,19 @@ pub struct ProfileDetail<'a> {
     pub name: &'a str,
     pub outcome: &'a PreviewOutcome,
     pub disabled: bool,
+    /// Which fragment card(s) to render expanded. Cards collapse by default; a
+    /// fragment that was just run opens so its fresh output is visible.
+    pub expand: Expand<'a>,
+}
+
+/// Which fragment cards open after an action. Passive views ([`Expand::None`])
+/// collapse everything; running one fragment opens that one ([`Expand::One`]);
+/// "Run all" opens every dynamic card ([`Expand::AllDynamic`]).
+#[derive(Clone, Copy)]
+pub enum Expand<'a> {
+    None,
+    One(&'a str),
+    AllDynamic,
 }
 
 /// The Profiles tab: a vertical profile rail (left) + the selected profile's
@@ -507,7 +522,7 @@ pub fn profile_detail(d: &ProfileDetail) -> Markup {
                     p class="muted" { "This profile composes no guidance for " (p.agent.as_str()) " in this context." }
                 }
             } @else {
-                div class="detail-doc" { @for c in &p.caps { (preview_fragment_card(c, name)) } }
+                div class="detail-doc" { @for c in &p.caps { (preview_fragment_card(c, name, d.expand)) } }
             }
         }
     }
@@ -520,21 +535,26 @@ pub fn profile_detail_fragment(d: &ProfileDetail) -> String {
 /// One collapsible fragment section inside the profile "document": a compact
 /// summary row that, when opened, reveals the fragment's rendered-markdown
 /// guidance (the prominent content) plus an "Edit fragment" action.
-fn preview_fragment_card(c: &PreviewCap, profile: &str) -> Markup {
+fn preview_fragment_card(c: &PreviewCap, profile: &str, expand: Expand) -> Markup {
     let glyph = c
         .icon
         .as_deref()
         .unwrap_or(if c.dynamic { "bolt" } else { "box" });
-    // Every fragment starts collapsed (the user opens the ones they care about).
-    // `has_output`/`prompt` still pick what the body shows once expanded: live
-    // output for a dynamic cap that ran, or a centered "Run" prompt for one that
-    // hasn't. A dynamic cap can still be run from the summary's corner button
-    // without expanding.
+    // Cards start collapsed on a passive view (the user opens what they care
+    // about), but a just-run fragment stays open so its fresh output is visible.
+    // `has_output`/`prompt` pick what the body shows once expanded: live output
+    // for a dynamic cap that ran, or a centered "Run" prompt for one that hasn't.
+    // A dynamic cap can also be run from the summary's corner button.
     let has_output = c.dynamic && !c.pending && !c.skipped;
     let prompt = c.dynamic && c.pending;
+    let open = match expand {
+        Expand::None => false,
+        Expand::One(id) => c.id == id,
+        Expand::AllDynamic => c.dynamic,
+    };
     let run_url = format!("/fragments/{}/run?profile={}", enc(&c.id), enc(profile));
     html! {
-        details class=(format!("fragment-detail {}", risk_class(c.risk))) {
+        details class=(format!("fragment-detail {}", risk_class(c.risk))) open[open] {
             summary class="fragment-detail-head" {
                 span class="fragment-glyph" { (icon(glyph)) }
                 span class="fragment-detail-title" { (c.title) }
@@ -1425,6 +1445,8 @@ mod tests {
         // not what the chrome shows.
         assert!(html.contains(r#"<span class="brand-name">Rosita</span>"#));
         assert!(html.contains("Rosita studio"));
+        // Right-side controls are grouped so the nav tabs can center.
+        assert!(html.contains(r#"class="topbar-right""#));
         // Theme toggle button with all three preference glyphs present.
         assert!(html.contains(r#"id="theme-toggle""#));
         assert!(html.contains("ti-auto"));
