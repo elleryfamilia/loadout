@@ -126,6 +126,13 @@ pub fn run_command(
     .unwrap_or(None)
 }
 
+/// Run a command once, bypassing the cache — for studio's "test run" of a draft
+/// script in the editor. Same interpreter + capture path as render-time
+/// execution ([`run_command`]), so what the user sees is what would be embedded.
+pub fn run_once(command: &str, lang: Option<&str>) -> ProviderOutput {
+    exec_command(command, lang)
+}
+
 /// The interpreter program + leading args for a script `lang` (or a plain
 /// `sh -c` shell line when `lang` is `None`/unrecognized).
 fn interpreter(lang: Option<&str>) -> (&'static str, &'static [&'static str]) {

@@ -954,8 +954,18 @@ pub fn fragment_dialog(
                                 pre class="code-hl" aria-hidden="true" { code {} }
                                 textarea name="command" rows="7" class="mono code-edit" spellcheck="false" placeholder="echo 'last deploy: green'" { (cap.and_then(|c| c.command.as_deref()).unwrap_or("")) }
                             }
-                            label class="check exec-check" { input type="checkbox" name="allow_exec" checked[allow_exec]; span { "Allow execution" } }
-                            p class="hint small" { "The script runs at render and its output is embedded. Uncheck " strong { "Allow execution" } " to keep it from running." }
+                            div class="script-actions" {
+                                label class="check exec-check" { input type="checkbox" name="allow_exec" checked[allow_exec]; span { "Allow execution" } }
+                                button type="button" class="btn btn-ghost btn-sm script-try"
+                                    hx-post="/fragments/try" hx-target="#script-tryout"
+                                    title="Run this script now and show its output (nothing is saved)" {
+                                    (icon("play")) "Run"
+                                }
+                            }
+                            // Empty until the user clicks Run; `.script-tryout:empty`
+                            // is hidden so this adds no noise to the editor.
+                            div id="script-tryout" class="script-tryout" {}
+                            p class="hint small" { "The script runs at render and its output is embedded. Uncheck " strong { "Allow execution" } " to keep it from running. " strong { "Run" } " tests it now without saving." }
                         }
                         @let cur_category = cap.and_then(|c| c.category.as_deref()).unwrap_or("");
                         @let cur_tags = cap.map(|c| c.tags.join(", ")).unwrap_or_default();
@@ -1002,6 +1012,61 @@ pub fn fragment_dialog(
         }
     }
     .into_string()
+}
+
+/// The output panel for a draft script "test run" (swapped into `#script-tryout`).
+/// Shows stdout, an exit-code badge, and stderr when present — what the script
+/// actually produces, so the user can confirm it works before saving.
+pub fn script_tryout(out: &crate::providers::ProviderOutput) -> String {
+    // `data` is Null only when the interpreter itself failed to spawn; then the
+    // human-readable reason lives in `text`.
+    let spawn_err = out.data.is_null();
+    let stdout = out
+        .data
+        .get("stdout")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let stderr = out
+        .data
+        .get("stderr")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let status = out.data.get("status").and_then(|v| v.as_i64());
+    html! {
+        div class="tryout" {
+            div class="tryout-head" {
+                span class="tryout-label" { "Output" }
+                @if spawn_err {
+                    span class="tryout-status err" { "failed to run" }
+                } @else if let Some(code) = status {
+                    span class=(if code == 0 { "tryout-status ok" } else { "tryout-status err" }) {
+                        "exit " (code)
+                    }
+                } @else {
+                    span class="tryout-status err" { "killed" }
+                }
+            }
+            @if spawn_err {
+                pre class="tryout-body err" { (out.text) }
+            } @else {
+                @if stdout.is_empty() && stderr.is_empty() {
+                    p class="tryout-empty muted small" { "(ran, no output)" }
+                }
+                @if !stdout.is_empty() { pre class="tryout-body" { (stdout) } }
+                @if !stderr.is_empty() {
+                    div class="tryout-stderr small muted" { "stderr" }
+                    pre class="tryout-body err" { (stderr) }
+                }
+            }
+        }
+    }
+    .into_string()
+}
+
+/// Shown when Run is clicked with an empty script.
+pub fn script_tryout_empty() -> String {
+    html! { p class="tryout-empty muted small" { "Nothing to run — the script is empty." } }
+        .into_string()
 }
 
 fn close_btn() -> Markup {

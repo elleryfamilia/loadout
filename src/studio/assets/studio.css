@@ -464,6 +464,21 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .modal:has(.fragment-form) { width: min(900px, 95vw); }
 .code-edit-wrap textarea.code-edit { min-height: 17em; }
 
+/* Script "test run" controls + output. The output panel is hidden until it has
+   content (`:empty`), so an un-run editor shows no extra chrome. */
+.script-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.script-tryout:empty { display: none; }
+.tryout { border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; }
+.tryout-head { display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+.tryout-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.tryout-status { font-family: var(--mono); font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: var(--r-sm); background: var(--elevated); }
+.tryout-status.ok { color: var(--ok); }
+.tryout-status.err { color: var(--danger); }
+.tryout-body { margin: 0; padding: 8px 10px; font-family: var(--mono); font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; color: var(--fg); }
+.tryout-body.err { color: var(--error-fg); }
+.tryout-stderr { padding: 5px 10px 0; }
+.tryout-empty { margin: 0; padding: 8px 10px; }
+
 /* Live output of a dynamic cap (script/provider) — verbatim, monospace, scrollable. */
 .fragment-output {
   margin: 14px 18px 8px; padding: 12px 14px;

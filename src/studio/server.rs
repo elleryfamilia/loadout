@@ -140,6 +140,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
             Resp::html(views::fragment_dialog(None, Layer::Global, true, None, &[]))
         }
         ("POST", "/fragments") => handle_fragment_save(state, req),
+        ("POST", "/fragments/try") => handle_fragment_try(req),
         ("GET", "/packs") => handle_packs(state),
         ("POST", "/onboarding/quickstart") => handle_quickstart(state),
         ("GET", "/profiles/new") => handle_profile_new(state),
@@ -883,6 +884,22 @@ fn handle_diff(state: &Arc<Mutex<StudioState>>) -> Resp {
     Resp::html(views::diff_view(&diffs, &leaks, &fs_changed, staged))
 }
 
+/// `POST /fragments/try` — run the *draft* script from the editor form right now
+/// and return its output as a panel. Reuses the render-time executor so what you
+/// see is what would be embedded. Stateless: nothing is staged, cached, or
+/// written. A manual test always executes (the `allow_exec` toggle only governs
+/// automatic render-time execution). CSRF-guarded like every other POST.
+fn handle_fragment_try(req: &Req) -> Resp {
+    let command = field(&req.body, "command");
+    if command.trim().is_empty() {
+        return Resp::html(views::script_tryout_empty());
+    }
+    let lang = field(&req.body, "script_lang");
+    let lang = (!lang.is_empty()).then_some(lang.as_str());
+    let out = crate::providers::run_once(&command, lang);
+    Resp::html(views::script_tryout(&out))
+}
+
 fn handle_discard(state: &Arc<Mutex<StudioState>>) -> Resp {
     if let Err(e) = state.lock().unwrap().session.discard() {
         return Resp::html(views::error_fragment(&format!("discard failed: {e}")));
@@ -1510,6 +1527,72 @@ mod tests {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         let r = route(&st, &req("POST", "/discard", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 403);
+    }
+
+    #[test]
+    fn script_test_run_executes_draft_side_effect_free() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+
+        // A draft script runs and its stdout + exit code come back.
+        let out = body_of(route(
+            &st,
+            &req(
+                "POST",
+                "/fragments/try",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "command=echo+hello-draft&script_lang=bash",
+            ),
+        ));
+        assert!(out.contains("hello-draft"));
+        assert!(out.contains("exit 0"));
+        // Nothing was staged or written — a test run is side-effect-free.
+        assert!(st.lock().unwrap().session.ops().is_empty());
+        assert!(!std::path::Path::new(&global_config_path(d.path())).exists());
+
+        // A non-zero exit surfaces as an error badge.
+        let failed = body_of(route(
+            &st,
+            &req(
+                "POST",
+                "/fragments/try",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "command=exit+2&script_lang=bash",
+            ),
+        ));
+        assert!(failed.contains("exit 2"));
+
+        // Empty script → a note, no execution.
+        let empty = body_of(route(
+            &st,
+            &req(
+                "POST",
+                "/fragments/try",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "command=&script_lang=bash",
+            ),
+        ));
+        assert!(empty.to_lowercase().contains("nothing to run"));
+    }
+
+    #[test]
+    fn script_test_run_is_csrf_guarded() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/fragments/try",
+                "",
+                &[HOST, COOKIE],
+                "command=echo+x&script_lang=bash",
+            ),
+        );
         assert_eq!(r.status, 403);
     }
 
