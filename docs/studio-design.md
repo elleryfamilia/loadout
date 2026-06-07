@@ -352,8 +352,8 @@ hidden, so it's current the moment it's revealed.
 │ Profiles      │  ──────────────────────────────────  │ # demo — agent context  │
 │  YOURS        │  id       rust-conventions           │ _profile: rust—browser_ │
 │  ● rust-conv ✎│  desc     Rust conventions           │ ## Rust conventions     │
-│  ● terse     ✎│  tags     [stack] [＋]               │ Build with cargo, lint  │
-│  PALETTE      │  risk     ◉info ○caution ○dangerous  │ with clippy; prefer ?/  │
+│  ● terse     ✎│  category Stack Conventions          │ Build with cargo, lint  │
+│  PALETTE      │                                      │ with clippy; prefer ?/  │
 │  ○ go-conv  ⎘ │  guidance ┌──────────────────────┐   │ Result over unwrap()…   │
 │  ○ python   ⎘ │           │Rust project. Build…  │   │                         │
 │  ○ infra-…  ⎘ │           └──────────────────────┘   │ ⟳ updates as you type   │

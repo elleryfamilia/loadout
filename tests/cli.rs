@@ -88,7 +88,6 @@ impl Fixture {
             "[[fragments]]\n\
              id = \"rust-conventions\"\n\
              description = \"Rust conventions\"\n\
-             tags = [\"stack\"]\n\
              guidance = \"Rust project. Build with cargo, lint with clippy.\"\n\
              \n\
              [[profiles]]\n\
@@ -952,7 +951,6 @@ fn user_fragment_via_config_is_composed() {
         "[[fragments]]\n\
          id = \"house-style\"\n\
          description = \"House style\"\n\
-         risk = \"caution\"\n\
          guidance = \"Always run the formatter before committing.\"\n\
          \n\
          [[fragments]]\n\
@@ -972,8 +970,8 @@ fn user_fragment_via_config_is_composed() {
         .success();
 
     let overlay = fx.read(".rosita/generated/claude.md");
-    // The custom fragment renders with its risk annotation and body…
-    assert!(overlay.contains("### House style — ⚠️ caution"));
+    // The custom fragment renders with its body…
+    assert!(overlay.contains("### House style"));
     assert!(overlay.contains("Always run the formatter before committing."));
     // …and still composes alongside the stack fragment.
     assert!(overlay.contains("### Rust conventions"));

@@ -411,7 +411,7 @@ fn handle_fragment_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
     // The existing fragment (if editing) so the simple editor's merge preserves
-    // fields it doesn't expose (tags/risk/requires/agents/cache/…).
+    // fields it doesn't expose (requires/agents/cache/…).
     let base = state::editor_fragment_id(&pairs)
         .and_then(|id| cfg.fragments.iter().find(|c| c.id == id).cloned());
     let mut cap = match state::fragment_from_form(base.as_ref(), &pairs) {
@@ -1876,10 +1876,8 @@ mod tests {
         assert!(owned.contains("Save as a copy"));
         assert!(owned.contains("Delete"));
         assert!(owned.contains("/fragments/mine"));
-        // The editor exposes the category / tags / risk metadata fields.
+        // The editor exposes the category metadata field.
         assert!(owned.contains("name=\"category\""));
-        assert!(owned.contains("name=\"tags\""));
-        assert!(owned.contains("name=\"risk\""));
 
         // Opened from a profile's detail, the form carries a return_profile so
         // Save re-renders that profile rather than the Fragments tab.

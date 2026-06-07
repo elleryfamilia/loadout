@@ -29,9 +29,9 @@ Two flavors:
   machine/network am I on?"
 
 Fragments are parameterized (`params`), can self-gate (`when`), declare
-dependencies (`requires`), can be restricted to specific `agents`, and carry
-`risk`/`tags` metadata. Each renders as its own `###` section, annotated when its
-risk is not `Info`. See [configuration](configuration.md#fragments-implemented).
+dependencies (`requires`), can be restricted to specific `agents`, and carry a
+`category`. Each renders as its own `###` section. See
+[configuration](configuration.md#fragments-implemented).
 
 ## Profiles & selection **(implemented)**
 

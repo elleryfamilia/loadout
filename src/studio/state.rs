@@ -12,7 +12,7 @@ use crate::adapters;
 use crate::config::Config;
 use crate::context::{Context, GitContext, Scope};
 use crate::dynamic::DynamicMode;
-use crate::fragment::{palette, Fragment, Layer, Risk};
+use crate::fragment::{palette, Fragment, Layer};
 use crate::pack::{self, Pack};
 use crate::profile::{self, FragmentRef, ProfileConfig, Selection};
 use crate::render::{self, RenderRequest};
@@ -128,7 +128,6 @@ pub struct PreviewOutcome {
 pub struct PreviewCap {
     pub id: String,
     pub title: String,
-    pub risk: Risk,
     /// The fragment's curated icon, if any (else the card uses a default).
     pub icon: Option<String>,
     /// Rendered guidance markdown (or the skip note).
@@ -153,7 +152,7 @@ pub struct FragmentView {
     /// meaningful line of its guidance, or a kind-based phrase for dynamic caps).
     pub summary: Option<String>,
     pub kind: &'static str,
-    /// Primary category for grouping the library (the fragment's first tag).
+    /// Primary category for grouping the library.
     pub category: Option<String>,
     /// Optional curated icon name.
     pub icon: Option<String>,
@@ -161,8 +160,6 @@ pub struct FragmentView {
     pub script_lang: Option<String>,
     /// True when authored in a `*local.toml` layer (private / gitignored).
     pub private: bool,
-    /// The fragment's risk (drives the row's risk spine).
-    pub risk: Risk,
     /// Composed into the current preview overlay.
     pub active: bool,
 }
@@ -183,7 +180,6 @@ pub enum AtomState {
 /// One "atom dot" on a profile card: a referenced fragment and how it resolves.
 pub struct AtomDot {
     pub id: String,
-    pub risk: Risk,
     pub state: AtomState,
 }
 
@@ -322,7 +318,6 @@ pub fn render_profile_config(
                     editable,
                     id: c.id.clone(),
                     title: c.title.clone(),
-                    risk: c.risk,
                     markdown: c.body.clone(),
                     dynamic: c.dynamic,
                     skipped: c.skipped,
@@ -334,7 +329,6 @@ pub fn render_profile_config(
                     editable,
                     id: cap.id.clone(),
                     title: cap.title().to_string(),
-                    risk: cap.risk,
                     markdown: "_Dynamic — runs at render; no preview output yet._".to_string(),
                     dynamic: true,
                     skipped: false,
@@ -449,57 +443,48 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
         .iter()
         .map(|c| FragmentView {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
-            category: c.category.clone().or_else(|| c.tags.first().cloned()),
+            category: c.category.clone(),
             active: active_ids.contains(&c.id),
             title: c.title().to_string(),
             summary: fragment_summary(c),
             icon: c.icon.clone(),
             script_lang: c.script_lang.clone(),
             private: matches!(c.origin, Layer::RepoLocal | Layer::GlobalLocal),
-            risk: c.risk,
             id: c.id.clone(),
         })
         .collect();
     // The palette (called once; the local `palette` below would shadow the fn).
     let palette_items = palette();
-    // Resolve each profile's fragment refs to risk + provenance for the atom
-    // dots: owned (contributes) vs palette-only (named but not duplicated, so it
+    // Resolve each profile's fragment refs to provenance for the atom dots:
+    // owned (contributes) vs palette-only (named but not duplicated, so it
     // renders nothing) vs unknown. No extra requests — all from the snapshot.
-    let owned_risk: std::collections::HashMap<&str, Risk> = cfg
-        .fragments
-        .iter()
-        .map(|c| (c.id.as_str(), c.risk))
-        .collect();
-    let palette_risk: std::collections::HashMap<&str, Risk> = palette_items
-        .iter()
-        .map(|c| (c.id.as_str(), c.risk))
-        .collect();
+    let owned_ids: std::collections::HashSet<&str> =
+        cfg.fragments.iter().map(|c| c.id.as_str()).collect();
+    let palette_ids: std::collections::HashSet<&str> =
+        palette_items.iter().map(|c| c.id.as_str()).collect();
     let resolve_atom = |id: String| -> AtomDot {
-        let (risk, state) = if let Some(&r) = owned_risk.get(id.as_str()) {
-            (r, AtomState::Owned)
-        } else if let Some(&r) = palette_risk.get(id.as_str()) {
-            (r, AtomState::Palette)
+        let state = if owned_ids.contains(id.as_str()) {
+            AtomState::Owned
+        } else if palette_ids.contains(id.as_str()) {
+            AtomState::Palette
         } else {
-            (Risk::Info, AtomState::Unknown)
+            AtomState::Unknown
         };
-        AtomDot { id, risk, state }
+        AtomDot { id, state }
     };
     // Palette items not already owned (by id) in your library.
-    let owned: std::collections::HashSet<&str> =
-        cfg.fragments.iter().map(|c| c.id.as_str()).collect();
     let palette: Vec<FragmentView> = palette_items
         .iter()
-        .filter(|c| !owned.contains(c.id.as_str()))
+        .filter(|c| !owned_ids.contains(c.id.as_str()))
         .map(|c| FragmentView {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
-            category: c.category.clone().or_else(|| c.tags.first().cloned()),
+            category: c.category.clone(),
             active: false,
             title: c.title().to_string(),
             summary: fragment_summary(c),
             icon: c.icon.clone(),
             script_lang: c.script_lang.clone(),
             private: false,
-            risk: c.risk,
             id: c.id.clone(),
         })
         .collect();
@@ -594,7 +579,7 @@ pub fn onboarding(base: &Context) -> Onboarding {
 }
 
 /// One starter-pack card for the gallery: the pack's metadata plus resolved
-/// risk-colored atom dots and whether it's already been applied in this context.
+/// atom dots and whether it's already been applied in this context.
 pub struct PackView {
     pub id: String,
     pub name: String,
@@ -627,27 +612,21 @@ pub fn pack_views(snap: &Snapshot) -> crate::Result<Vec<PackView>> {
     let ctx = simulated_context(&snap.base_context, &snap.sim);
     let targets = ctx.selection_targets();
 
-    let owned_risk: std::collections::HashMap<&str, Risk> = cfg
-        .fragments
-        .iter()
-        .map(|c| (c.id.as_str(), c.risk))
-        .collect();
+    let owned_ids: std::collections::HashSet<&str> =
+        cfg.fragments.iter().map(|c| c.id.as_str()).collect();
     let palette_items = palette();
-    let palette_risk: std::collections::HashMap<&str, Risk> = palette_items
-        .iter()
-        .map(|c| (c.id.as_str(), c.risk))
-        .collect();
+    let palette_ids: std::collections::HashSet<&str> =
+        palette_items.iter().map(|c| c.id.as_str()).collect();
     let resolve_atom = |id: &str| -> AtomDot {
-        let (risk, state) = if let Some(&r) = owned_risk.get(id) {
-            (r, AtomState::Owned)
-        } else if let Some(&r) = palette_risk.get(id) {
-            (r, AtomState::Palette)
+        let state = if owned_ids.contains(id) {
+            AtomState::Owned
+        } else if palette_ids.contains(id) {
+            AtomState::Palette
         } else {
-            (Risk::Info, AtomState::Unknown)
+            AtomState::Unknown
         };
         AtomDot {
             id: id.to_string(),
-            risk,
             state,
         }
     };
@@ -886,8 +865,8 @@ pub fn is_advanced_fragment(c: &Fragment) -> bool {
 
 /// Build a [`Fragment`] from the content-first editor form. `base` is the
 /// existing fragment when editing — fields the simple form doesn't expose
-/// (tags, risk, requires, agents, cache, provider, when, params) are preserved
-/// from it, so editing never silently drops them. `origin` is left default; it
+/// (requires, agents, cache, provider, when, params) are preserved from it, so
+/// editing never silently drops them. `origin` is left default; it
 /// is re-tagged by layer when the staged config is assembled.
 pub fn fragment_from_form(
     base: Option<&Fragment>,
@@ -934,42 +913,20 @@ pub fn fragment_from_form(
             true,
         )
     };
-    // `category`/`tags`/`risk` are editable in the form. When a field is present
-    // in the post we honor it (even cleared); when absent we preserve the base
-    // fragment's value, so the simple editor never drops advanced metadata.
+    // `category` is editable in the form. When the field is present in the post
+    // we honor it (even cleared); when absent we preserve the base fragment's
+    // value, so the simple editor never drops advanced metadata.
     let present = |key: &str| pairs.iter().any(|(k, _)| k == key);
     let category = if present("category") {
         opt(value_of(pairs, "category"))
     } else {
         base.and_then(|c| c.category.clone())
     };
-    let tags = if present("tags") {
-        value_of(pairs, "tags")
-            .unwrap_or("")
-            .split(',')
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .map(str::to_string)
-            .collect()
-    } else {
-        base.map(|c| c.tags.clone()).unwrap_or_default()
-    };
-    let risk = if present("risk") {
-        match value_of(pairs, "risk") {
-            Some("caution") => Risk::Caution,
-            Some("dangerous") => Risk::Dangerous,
-            _ => Risk::Info,
-        }
-    } else {
-        base.map(|c| c.risk).unwrap_or_default()
-    };
     Ok(Fragment {
         id,
         description: name.or_else(|| base.and_then(|c| c.description.clone())),
         icon: opt(value_of(pairs, "icon")),
-        tags,
         category,
-        risk,
         when: base.map(|c| c.when.clone()).unwrap_or_default(),
         requires: base.map(|c| c.requires.clone()).unwrap_or_default(),
         params: base
@@ -1035,9 +992,7 @@ pub fn inline_fragment_from_form(pairs: &[(String, String)]) -> Option<(Fragment
         id,
         description: Some(name),
         icon: None,
-        tags: Vec::new(),
         category: None,
-        risk: Risk::Info,
         when: Vec::new(),
         requires: Vec::new(),
         params: toml::Value::Table(Default::default()),
@@ -1179,45 +1134,35 @@ mod tests {
     }
 
     #[test]
-    fn fragment_from_form_parses_category_tags_risk() {
+    fn fragment_from_form_parses_category() {
         let cap = fragment_from_form(
             None,
-            &parse_pairs(
-                "name=Guardrails&kind=markdown&guidance=g\
-                 &category=Operating+Style&tags=safety,+comms+&risk=caution",
-            ),
+            &parse_pairs("name=Guardrails&kind=markdown&guidance=g&category=Operating+Style"),
         )
         .unwrap();
         assert_eq!(cap.category.as_deref(), Some("Operating Style"));
-        assert_eq!(cap.tags, vec!["safety".to_string(), "comms".to_string()]); // trimmed
-        assert_eq!(cap.risk, Risk::Caution);
     }
 
     #[test]
     fn fragment_from_form_present_field_clears_absent_field_preserves() {
-        // Start from a fragment that has metadata set.
+        // Start from a fragment that has category set.
         let base = fragment_from_form(
             None,
-            &parse_pairs("name=X&kind=markdown&guidance=g&category=Safety&tags=a,b&risk=dangerous"),
+            &parse_pairs("name=X&kind=markdown&guidance=g&category=Safety"),
         )
         .unwrap();
-        // A post that *includes* an empty category/tags clears them (and risk
-        // falls back to info when the select says so).
+        // A post that *includes* an empty category clears it.
         let cleared = fragment_from_form(
             Some(&base),
-            &parse_pairs("id=x&kind=markdown&guidance=g&category=&tags=&risk=info"),
+            &parse_pairs("id=x&kind=markdown&guidance=g&category="),
         )
         .unwrap();
         assert_eq!(cleared.category, None);
-        assert!(cleared.tags.is_empty());
-        assert_eq!(cleared.risk, Risk::Info);
-        // A post that *omits* the fields entirely preserves the base values
+        // A post that *omits* the field entirely preserves the base value
         // (the simple editor never silently drops metadata).
         let preserved =
             fragment_from_form(Some(&base), &parse_pairs("id=x&kind=markdown&guidance=g")).unwrap();
         assert_eq!(preserved.category.as_deref(), Some("Safety"));
-        assert_eq!(preserved.tags, vec!["a".to_string(), "b".to_string()]);
-        assert_eq!(preserved.risk, Risk::Dangerous);
     }
 
     #[test]
@@ -1227,11 +1172,9 @@ mod tests {
             .into_iter()
             .find(|c| c.id == "rust-conventions")
             .unwrap();
-        base.tags = vec!["stack".into()];
-        base.risk = Risk::Caution;
         base.requires = vec!["baseline".into()];
         base.agents = vec!["claude".into()];
-        // Editing just the content must not drop tags/risk/requires/agents.
+        // Editing just the content must not drop requires/agents.
         let edited = fragment_from_form(
             Some(&base),
             &parse_pairs("name=Rust+conventions&kind=markdown&guidance=Updated+body"),
@@ -1239,8 +1182,6 @@ mod tests {
         .unwrap();
         assert_eq!(edited.id, "rust-conventions"); // id stays fixed on edit
         assert_eq!(edited.guidance, "Updated body");
-        assert_eq!(edited.tags, vec!["stack".to_string()]);
-        assert_eq!(edited.risk, Risk::Caution);
         assert_eq!(edited.requires, vec!["baseline".to_string()]);
         assert_eq!(edited.agents, vec!["claude".to_string()]);
     }

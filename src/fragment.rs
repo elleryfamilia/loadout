@@ -7,8 +7,8 @@
 //! profiles can pull the same fragment instead of repeating inline guidance.
 //!
 //! A fragment can self-gate with `when` rules, declare `requires`
-//! dependencies, carry `category`/`risk`/`tags` metadata, be restricted to
-//! specific `agents`, and expose free-form `params` to its guidance template.
+//! dependencies, carry a `category`, be restricted to specific `agents`, and
+//! expose free-form `params` to its guidance template.
 //!
 //! Phase 1 ships only **static** fragments (fixed, templated `guidance`).
 //! Dynamic fragments (provider/command-backed live output) arrive in a later
@@ -53,31 +53,6 @@ impl Layer {
     }
 }
 
-/// How attention-worthy a fragment's guidance is. Rendered as an annotation
-/// when it is not [`Risk::Info`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Risk {
-    /// Ordinary guidance (the default); rendered without annotation.
-    #[default]
-    Info,
-    /// Worth flagging — touches shared state, has side effects, etc.
-    Caution,
-    /// High-stakes — destructive or hard to reverse.
-    Dangerous,
-}
-
-impl Risk {
-    /// A short annotation for headings, or `None` for [`Risk::Info`].
-    pub fn annotation(self) -> Option<&'static str> {
-        match self {
-            Risk::Info => None,
-            Risk::Caution => Some("⚠️ caution"),
-            Risk::Dangerous => Some("🚨 dangerous"),
-        }
-    }
-}
-
 /// A reusable unit of guidance composed by profiles.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,18 +66,11 @@ pub struct Fragment {
     /// cosmetic — surfaced in studio, never in the rendered overlay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
-    /// Free-form tags for discovery (`comms`, `safety`, `dev-workflow`, …).
-    #[serde(default)]
-    pub tags: Vec<String>,
     /// Optional human-friendly category that groups this fragment in studio's
-    /// tree (e.g. `Operating Style`, `Local Environment`). Distinct from the
-    /// free-form `tags`. `skip_serializing_if` keeps the freshness fingerprint
-    /// of an uncategorized fragment unchanged.
+    /// tree (e.g. `Operating Style`, `Local Environment`). `skip_serializing_if`
+    /// keeps the freshness fingerprint of an uncategorized fragment unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
-    /// Attention level; annotated in the overlay when not [`Risk::Info`].
-    #[serde(default)]
-    pub risk: Risk,
     /// Self-gate: all clauses must match the context. Empty = always applies
     /// (the composing profile's own rules still gate when it is pulled in).
     #[serde(default)]
@@ -183,9 +151,7 @@ impl Fragment {
         Fragment {
             id: format!("{profile}:inline"),
             description: None,
-            tags: Vec::new(),
             category: None,
-            risk: Risk::Info,
             when: Vec::new(),
             requires: Vec::new(),
             params: empty_params(),
@@ -215,23 +181,13 @@ impl Fragment {
 /// profile that names a palette id you haven't duplicated renders nothing for it.
 pub fn palette() -> Vec<Fragment> {
     // Build a static (markdown) palette fragment: a curated icon + a friendly
-    // category + discovery tags + templated guidance. Risk defaults to Info; the
-    // caution starters wrap the result with `caution(..)`.
-    fn frag(
-        id: &str,
-        description: &str,
-        icon: &str,
-        category: &str,
-        tags: &[&str],
-        guidance: &str,
-    ) -> Fragment {
+    // category + templated guidance.
+    fn frag(id: &str, description: &str, icon: &str, category: &str, guidance: &str) -> Fragment {
         Fragment {
             id: id.to_string(),
             description: Some(description.to_string()),
             icon: Some(icon.to_string()),
-            tags: tags.iter().map(|t| t.to_string()).collect(),
             category: Some(category.to_string()),
-            risk: Risk::Info,
             when: Vec::new(),
             requires: Vec::new(),
             params: empty_params(),
@@ -245,14 +201,6 @@ pub fn palette() -> Vec<Fragment> {
             origin: Layer::default(),
         }
     }
-    // Raise a starter's attention level to Caution (a warning annotation in the
-    // rendered overlay and a colored risk spine in studio).
-    fn caution(c: Fragment) -> Fragment {
-        Fragment {
-            risk: Risk::Caution,
-            ..c
-        }
-    }
 
     vec![
         // --- baseline awareness --------------------------------------------
@@ -261,7 +209,6 @@ pub fn palette() -> Vec<Fragment> {
             "Follow repo conventions",
             "box",
             "Operating Style",
-            &["awareness"],
             "Follow the repository's existing conventions and keep changes minimal, \
              focused, and well-tested. Match the surrounding code's style and naming \
              rather than imposing your own.",
@@ -272,7 +219,6 @@ pub fn palette() -> Vec<Fragment> {
             "Terse communication",
             "bolt",
             "Operating Style",
-            &["comms"],
             "Be terse: lead with the result and what changed; skip preamble. For \
              non-trivial decisions, briefly note the reasoning, the tradeoffs, and the \
              alternatives considered.",
@@ -283,7 +229,6 @@ pub fn palette() -> Vec<Fragment> {
             "Rust conventions",
             "code",
             "Stack Conventions",
-            &["stack"],
             "Rust project. Build with cargo, format with rustfmt, lint with clippy \
              (`cargo clippy --all-targets`). Prefer `?`/`Result` over `unwrap()` or \
              `panic!` in non-test code.",
@@ -293,7 +238,6 @@ pub fn palette() -> Vec<Fragment> {
             "Node.js conventions",
             "code",
             "Stack Conventions",
-            &["stack"],
             "Node.js project. Use pnpm for scripts and dependencies, and prefer \
              TypeScript over plain JavaScript. Keep the type-checker and linter clean \
              before committing.",
@@ -303,7 +247,6 @@ pub fn palette() -> Vec<Fragment> {
             "Next.js conventions",
             "code",
             "Stack Conventions",
-            &["stack"],
             "Next.js app. Respect the existing app/pages router convention and keep \
              server/client component boundaries explicit. Use pnpm for scripts and \
              dependencies.",
@@ -313,7 +256,6 @@ pub fn palette() -> Vec<Fragment> {
             "Go conventions",
             "code",
             "Stack Conventions",
-            &["stack"],
             "Go project. Use the standard toolchain (`go build`, `go test`, `go vet`, \
              `gofmt`); add golangci-lint for stricter checks. Handle errors explicitly \
              — don't silently discard them.",
@@ -323,7 +265,6 @@ pub fn palette() -> Vec<Fragment> {
             "Python conventions",
             "code",
             "Stack Conventions",
-            &["stack"],
             "Python project. Use uv for environments and dependencies, ruff for \
              linting and formatting, and pytest for tests.",
         ),
@@ -333,7 +274,6 @@ pub fn palette() -> Vec<Fragment> {
             "Conventional commits",
             "git-branch",
             "Dev Workflow",
-            &["dev-workflow"],
             "Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, …). \
              Imperative subject ≤72 chars; the body explains *why* when it is \
              non-obvious.",
@@ -343,7 +283,6 @@ pub fn palette() -> Vec<Fragment> {
             "Commit at checkpoints",
             "git-branch",
             "Dev Workflow",
-            &["dev-workflow"],
             "Commit at logical checkpoints with clear, descriptive messages rather \
              than one giant commit at the end — don't wait to be told.",
         ),
@@ -352,7 +291,6 @@ pub fn palette() -> Vec<Fragment> {
             "Plan non-trivial work",
             "book",
             "Dev Workflow",
-            &["dev-workflow"],
             "For non-trivial work, sketch a short plan before implementing: the \
              objective, the approach, and the risks. Skip the ceremony for typos and \
              obvious one-line fixes.",
@@ -362,7 +300,6 @@ pub fn palette() -> Vec<Fragment> {
             "Spike fast on a throwaway branch",
             "rocket",
             "Dev Workflow",
-            &["dev-workflow"],
             "Experimental branch — optimize for iteration speed. Throwaway spikes are \
              fine; keep changes scoped to this branch and don't wire them into shared \
              modules yet.",
@@ -373,7 +310,6 @@ pub fn palette() -> Vec<Fragment> {
             "Build, test, and lint before done",
             "terminal",
             "Quality",
-            &["quality"],
             "Before declaring work done, run the build, the tests, and the linter, and \
              report the results honestly. If something failed or was skipped, say so \
              plainly — don't claim success you didn't verify.",
@@ -383,51 +319,46 @@ pub fn palette() -> Vec<Fragment> {
             "Cover changes with tests",
             "flask",
             "Quality",
-            &["quality"],
             "Add or update tests to match the change: unit or integration tests for \
              logic, end-to-end tests for user-facing behavior. If a real harness is \
              impractical, say so instead of skipping silently.",
         ),
         // --- safety --------------------------------------------------------
-        caution(frag(
+        frag(
             "branch-discipline",
             "Never commit to main",
             "git-branch",
             "Safety",
-            &["safety"],
             "Never commit or push directly to the main/master branch — always work on \
              a branch and open a pull request instead of pushing to shared branches.",
-        )),
-        caution(frag(
+        ),
+        frag(
             "ask-before-risky",
             "Ask before risky actions",
             "shield",
             "Safety",
-            &["safety"],
             "Confirm before destructive or hard-to-reverse actions (`rm -rf`, database \
              drops, bulk deletes, file overwrites, history rewrites). Prefer a dry run \
              or a plan first.",
-        )),
-        caution(frag(
+        ),
+        frag(
             "infra-caution",
             "Be conservative with infrastructure",
             "server",
             "Safety",
-            &["infra", "safety"],
             "This is infrastructure code. Be conservative: prefer plans over direct \
              mutation, never apply changes to shared/remote state without explicit \
              confirmation, and call out anything that touches production.",
-        )),
+        ),
         // --- security ------------------------------------------------------
-        caution(frag(
+        frag(
             "secrets-hygiene",
             "Never commit or log secrets",
             "lock",
             "Security",
-            &["security"],
             "Never print, log, or commit secrets, credentials, tokens, or `.env` \
              files. Keep sensitive values out of code and out of command output.",
-        )),
+        ),
     ]
 }
 
@@ -442,8 +373,8 @@ mod tests {
         for c in &frags {
             assert!(ids.insert(c.id.clone()), "duplicate fragment id {}", c.id);
             assert!(!c.guidance.trim().is_empty(), "{} has empty guidance", c.id);
-            // Every shipped fragment carries a curated icon, a category, and at
-            // least one tag so the studio tree renders a glyph and groups it.
+            // Every shipped fragment carries a curated icon and a category so the
+            // studio tree renders a glyph and groups it.
             assert!(
                 c.icon.as_deref().is_some_and(|i| !i.is_empty()),
                 "{} has no icon",
@@ -454,7 +385,6 @@ mod tests {
                 "{} has no category",
                 c.id
             );
-            assert!(!c.tags.is_empty(), "{} has no tags", c.id);
         }
         // A representative spread of palette atoms is present to pick from.
         for needed in [
@@ -479,13 +409,6 @@ mod tests {
     }
 
     #[test]
-    fn risk_annotation_only_for_non_info() {
-        assert_eq!(Risk::Info.annotation(), None);
-        assert!(Risk::Caution.annotation().is_some());
-        assert!(Risk::Dangerous.annotation().is_some());
-    }
-
-    #[test]
     fn agent_restriction() {
         let mut c = palette()
             .into_iter()
@@ -501,7 +424,6 @@ mod tests {
     fn deserializes_minimal_and_full() {
         let minimal: Fragment = toml::from_str("id = \"x\"\nguidance = \"hi\"\n").unwrap();
         assert_eq!(minimal.id, "x");
-        assert_eq!(minimal.risk, Risk::Info);
         assert!(minimal.params.as_table().unwrap().is_empty());
 
         let full: Fragment = toml::from_str(
@@ -509,8 +431,6 @@ mod tests {
             id = "ssh"
             description = "SSH within my tailnet"
             category = "Local Environment"
-            tags = ["machine", "infra"]
-            risk = "caution"
             requires = ["baseline"]
             agents = ["claude"]
             guidance = "You may ssh to {{ params.host }}."
@@ -519,7 +439,6 @@ mod tests {
             "#,
         )
         .unwrap();
-        assert_eq!(full.risk, Risk::Caution);
         assert_eq!(full.category.as_deref(), Some("Local Environment"));
         assert_eq!(full.requires, vec!["baseline"]);
         assert_eq!(full.params.get("host").unwrap().as_str(), Some("box"));

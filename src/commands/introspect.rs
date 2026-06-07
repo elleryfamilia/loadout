@@ -67,8 +67,6 @@ pub fn fragments(rt: &Runtime, args: &FragmentsArgs) -> crate::Result<()> {
 struct FragmentRow {
     id: String,
     description: Option<String>,
-    risk: crate::fragment::Risk,
-    tags: Vec<String>,
     kind: &'static str,
     active: bool,
 }
@@ -87,8 +85,6 @@ fn fragment_row(c: &Fragment, active: bool) -> FragmentRow {
     FragmentRow {
         id: c.id.clone(),
         description: c.description.clone(),
-        risk: c.risk,
-        tags: c.tags.clone(),
         kind: kind_of(c),
         active,
     }
@@ -138,12 +134,6 @@ fn print_fragments_list(caps: &[Fragment], active: &[&str]) {
         if kind_of(c) != "static" {
             meta.push(format!("{}: {}", kind_of(c), dynamic_target(c)));
         }
-        if let Some(r) = c.risk.annotation() {
-            meta.push(r.to_string());
-        }
-        if !c.tags.is_empty() {
-            meta.push(format!("tags: {}", c.tags.join(", ")));
-        }
         let suffix = if meta.is_empty() {
             String::new()
         } else {
@@ -165,20 +155,11 @@ fn print_fragment_show(c: &Fragment, via: Option<&str>) {
     println!("Fragment: {}", c.id);
     println!("  description : {}", c.title());
     println!("  kind        : {}", kind_of(c));
-    println!("  risk        : {:?}", c.risk);
     println!("  origin      : {}", origin_label(c.origin));
     match via {
         Some(p) => println!("  active      : yes (via profile '{p}')"),
         None => println!("  active      : no (not composed for this context)"),
     }
-    println!(
-        "  tags        : {}",
-        if c.tags.is_empty() {
-            "-".into()
-        } else {
-            c.tags.join(", ")
-        }
-    );
     println!(
         "  requires    : {}",
         if c.requires.is_empty() {

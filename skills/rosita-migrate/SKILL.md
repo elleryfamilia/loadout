@@ -27,8 +27,8 @@ before writing any config.
   style, git conventions, guardrails, planning workflow, validation policy,
   tooling preferences, or a piece of live environment context. Fields: `id`
   (kebab-case), `description` (short), `guidance` (the actual instructions).
-  Optional: `risk` (`info`/`caution`/`danger`), `tags`, `agents` (restrict to
-  certain agents), and for live data a `command` (a bash script) or built-in
+  Optional: `category` (groups it in studio), `agents` (restrict to certain
+  agents), and for live data a `command` (a bash script) or built-in
   `provider` (`host`, `toolchain`, `ai-tools`, `tailnet`, `docker`).
 - A **profile** is a named set of fragments, selected when its `targets`
   match a repo's detected stack (`rust`, `node`, `python`, `go`, …) or the
@@ -44,8 +44,7 @@ before writing any config.
    boundaries — one fragment per coherent rule-group. Don't make one giant
    fragment, and don't over-split into trivia. For each: a kebab `id`, a short
    `description`, and the rules themselves (condensed, faithful — don't
-   editorialize) as `guidance`. Mark guardrails / "never do X" rules
-   `risk = "caution"`. Turn environment/host/toolchain-detection prose into
+   editorialize) as `guidance`. Turn environment/host/toolchain-detection prose into
    `command` script fragments (bash) — or a built-in `provider` fragment
    where one fits (host, toolchain, ai-tools, tailnet, docker).
 

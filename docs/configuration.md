@@ -172,8 +172,6 @@ personal = ["my-laptop", "*.tailnet.ts.net"]
 id          = "ssh-tailnet"
 description = "SSH into machines on my tailnet to do work"
 category    = "Local Environment"  # groups it in studio's tree (free-form)
-tags        = ["infra", "network"] # free-form discovery keywords
-risk        = "caution"            # info | caution | dangerous (informational)
 when        = [{ field = "host_class", op = "equals", value = "personal" }]   # self-gate
 requires    = ["network-awareness"]
 params      = { allowed_hosts = ["host-a", "host-b"] }   # value belongs in private layer

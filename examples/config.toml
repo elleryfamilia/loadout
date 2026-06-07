@@ -37,13 +37,12 @@ max_output_kib = 32
 # *palette* you can copy from (`rosita fragments`, or duplicate in studio),
 # but a profile only renders fragments that physically live in your config.
 # Fields:
-#   id (required); description, icon, category, tags, risk (info|caution|dangerous),
+#   id (required); description, icon, category,
 #   when (self-gate rules), requires (other fragment ids), params (table),
 #   agents (restrict to specific agent ids), guidance (templated markdown).
-#   `category` groups the fragment in studio's tree; `tags` are free-form
-#   discovery keywords. Dynamic: provider (built-in: host|toolchain|ai-tools|
-#   tailnet|docker), command (shell), cache (TTL). Authored globally, every
-#   fragment is trusted — there is no per-repo `rosita allow` gate.
+#   `category` groups the fragment in studio's tree. Dynamic: provider (built-in:
+#   host|toolchain|ai-tools|tailnet|docker), command (shell), cache (TTL).
+#   Authored globally, every fragment is trusted — no per-repo `rosita allow` gate.
 # Guidance is a minijinja template with { context, profile, fragment, params,
 # agent, provider } in scope (provider.output / provider.data for dynamic fragments).
 
@@ -52,37 +51,30 @@ max_output_kib = 32
 id = "terse-comms"
 description = "Terse communication"
 category = "Operating Style"
-tags = ["comms"]
 guidance = "Be terse: lead with the result and what changed; skip preamble. For non-trivial decisions, briefly note the reasoning, the tradeoffs, and the alternatives considered."
 
 [[fragments]]
 id = "conventional-commits"
 description = "Conventional commits"
 category = "Dev Workflow"
-tags = ["dev-workflow"]
 guidance = "Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`, …). Imperative subject ≤72 chars; the body explains *why* when it is non-obvious."
 
 [[fragments]]
 id = "branch-discipline"
 description = "Never commit to main"
 category = "Safety"
-tags = ["safety"]
-risk = "caution"
 guidance = "Never commit or push directly to the main/master branch — always work on a branch and open a pull request instead of pushing to shared branches."
 
 [[fragments]]
 id = "secrets-hygiene"
 description = "Secrets hygiene"
 category = "Security"
-tags = ["security"]
-risk = "caution"
 guidance = "Never print, log, or commit secrets, credentials, tokens, or `.env` files. Keep sensitive values out of code and out of command output."
 
 [[fragments]]
 id = "validate-before-done"
 description = "Build & verify before done"
 category = "Quality"
-tags = ["quality"]
 guidance = "Before declaring work done, run the build, the tests, and the linter, and report the results honestly. If something failed or was skipped, say so plainly."
 
 # --- stack conventions --------------------------------------------------------
@@ -90,7 +82,6 @@ guidance = "Before declaring work done, run the build, the tests, and the linter
 id = "rust-conventions"
 description = "Rust conventions"
 category = "Stack Conventions"
-tags = ["stack"]
 guidance = "Rust project. Build with cargo, format with rustfmt, lint with clippy (`cargo clippy --all-targets`). Prefer `?`/`Result` over `unwrap()` or `panic!` in non-test code."
 
 # A fragment that self-gates on a host class (defined privately in local.toml,
@@ -99,7 +90,6 @@ guidance = "Rust project. Build with cargo, format with rustfmt, lint with clipp
 id = "work-strict"
 description = "Work machine posture"
 category = "Safety"
-risk = "caution"
 when = [{ field = "host_class", op = "equals", value = "work" }]
 guidance = """
 Work machine. Be conservative: no force-pushes, no destructive commands without

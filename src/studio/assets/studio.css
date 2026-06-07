@@ -1,5 +1,5 @@
 /* rosita studio — refined dark, tabbed (Profiles / Fragments).
-   One accent (blue); risk as a semantic spine; a 4px grid and a real type scale.
+   One accent (blue); a 4px grid and a real type scale.
    Fonts are self-hosted (no external calls): Sail for the wordmark, Inter for
    body/UI. Both © their authors under the SIL Open Font License 1.1
    (https://scripts.sil.org/OFL); redistributed here in binary woff2 form. */
@@ -226,8 +226,6 @@ body {
 .target-chip.muted { font-family: var(--sans); font-style: italic; color: var(--faint); }
 .atoms { display: flex; flex-wrap: wrap; gap: 4px; }
 .atom { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-.atom.owned.risk-caution { background: var(--caution); }
-.atom.owned.risk-dangerous { background: var(--danger); }
 .atom.palette { background: transparent; border: 1.5px solid var(--faint); }
 .atom.unknown { background: transparent; border: 1.5px dashed var(--danger); opacity: .6; }
 .toggle { background: none; border: none; cursor: pointer; padding: 4px; }
@@ -288,8 +286,6 @@ body {
    summary is just a label — the expanded markdown is the prominent content */
 .fragment-detail { border-top: 1px solid var(--border); border-left: 2px solid transparent; }
 .fragment-detail:first-child { border-top: none; }
-.fragment-detail.risk-caution { border-left-color: var(--caution); }
-.fragment-detail.risk-dangerous { border-left-color: var(--danger); }
 .fragment-detail-head { display: flex; align-items: center; gap: 8px; padding: 7px 14px; cursor: pointer; list-style: none; }
 .fragment-detail-head::-webkit-details-marker { display: none; }
 .fragment-detail-head:hover { background: var(--panel-2); }
@@ -333,8 +329,6 @@ body {
 .fragment-card { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-left: 3px solid transparent; border-radius: var(--r); background: var(--panel-2); cursor: pointer; transition: border-color .12s; }
 .fragment-card:hover { border-color: var(--accent-line); }
 .fragment-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.fragment-card.risk-caution { border-left-color: var(--caution); }
-.fragment-card.risk-dangerous { border-left-color: var(--danger); }
 .fragment-glyph { color: var(--accent); display: inline-flex; }
 .fragment-glyph .icon { width: 20px; height: 20px; }
 .fragment-card .fragment-glyph { margin-top: 1px; }
@@ -394,7 +388,6 @@ body {
 .title-row { display: flex; gap: 12px; align-items: flex-end; }
 .meta-row { display: flex; gap: 12px; align-items: flex-end; }
 .meta-row .field.grow { flex: 1; }
-.risk-field { min-width: 8rem; }
 .fragment-form select {
   width: 100%; background: var(--panel-2); color: var(--fg);
   border: 1px solid var(--border-strong); border-radius: var(--r-sm);
@@ -612,9 +605,6 @@ pre.error { color: var(--error-fg); padding: 16px; font-family: var(--mono); whi
 .legend-group { display: flex; flex-direction: column; gap: 6px; }
 .legend-head { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); }
 .legend-row { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
-.legend-spine { width: 14px; height: 3px; border-radius: 2px; background: var(--faint); flex: none; }
-.legend-spine.risk-caution { background: var(--caution); }
-.legend-spine.risk-dangerous { background: var(--danger); }
 .legend-row .atom { flex: none; }
 
 @media (max-width: 1024px) {

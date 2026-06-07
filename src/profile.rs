@@ -202,7 +202,7 @@ impl Composition {
 
     /// A stable fingerprint of *what this composition would render*: the selected
     /// profile plus the ordered fragment definitions (their guidance, params,
-    /// provider/command, risk, …). Independent of any live dynamic output — it
+    /// provider/command, …). Independent of any live dynamic output — it
     /// hashes the fragment *source*, so it's deterministic across renders.
     ///
     /// Combined with the context hash, this is what lets a **global-config**
@@ -499,15 +499,12 @@ fn field_values(ctx: &Context, field: Field) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::context::test_support::sample_context;
-    use crate::fragment::Risk;
 
     fn cap(id: &str, guidance: &str) -> Fragment {
         Fragment {
             id: id.into(),
             description: Some(id.into()),
-            tags: vec![],
             category: None,
-            risk: Risk::Info,
             when: vec![],
             requires: vec![],
             params: toml::Value::Table(Default::default()),

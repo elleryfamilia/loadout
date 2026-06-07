@@ -15,8 +15,7 @@ A fragment is one reusable unit of context. The parser is strict
 | `id` | yes | kebab-case, unique. How profiles reference it. |
 | `description` | no | short title shown in listings. |
 | `guidance` | no¹ | the instructions. A minijinja template — may reference `{{ params.x }}` and (for dynamic caps) `{{ provider.data.x }}`. |
-| `risk` | no | `info` (default), `caution`, or `danger`. Rendered as an annotation when not `info`. |
-| `tags` | no | array of strings, for grouping. |
+| `category` | no | human-friendly group label shown in studio's tree, e.g. `"Safety"`. |
 | `agents` | no | restrict to certain agents, e.g. `["claude", "codex"]`. Empty/absent = all. |
 | `when` | no | conditions that gate the fragment (advanced; usually omit). |
 | `requires` | no | ids of other fragments to pull in first. |
@@ -63,7 +62,7 @@ For non-trivial decisions, briefly explain the reasoning and tradeoffs.
 [[fragments]]
 id = "guardrails"
 description = "Safety guardrails"
-risk = "caution"
+category = "Safety"
 guidance = """
 Never commit or push directly to main/master — always work on a branch.
 Never print, log, or commit secrets, credentials, or .env files.

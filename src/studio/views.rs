@@ -15,7 +15,7 @@ use maud::{html, Markup, PreEscaped, DOCTYPE};
 use pulldown_cmark::{html as md_html, Event, Options, Parser};
 
 use crate::context::Scope;
-use crate::fragment::{Fragment, Layer, Risk};
+use crate::fragment::{Fragment, Layer};
 use crate::profile::ProfileConfig;
 use crate::studio::edit::FileDiff;
 use crate::studio::state::{
@@ -205,14 +205,6 @@ fn fragment_icon_name(c: &FragmentView) -> &str {
         None if c.kind == "command" => "terminal",
         None if c.kind == "provider" => "bolt",
         None => "box",
-    }
-}
-
-fn risk_class(r: Risk) -> &'static str {
-    match r {
-        Risk::Info => "risk-info",
-        Risk::Caution => "risk-caution",
-        Risk::Dangerous => "risk-dangerous",
     }
 }
 
@@ -554,7 +546,7 @@ fn preview_fragment_card(c: &PreviewCap, profile: &str, expand: Expand) -> Marku
     };
     let run_url = format!("/fragments/{}/run?profile={}", enc(&c.id), enc(profile));
     html! {
-        details class=(format!("fragment-detail {}", risk_class(c.risk))) open[open] {
+        details class="fragment-detail" open[open] {
             summary class="fragment-detail-head" {
                 span class="fragment-glyph" { (icon(glyph)) }
                 span class="fragment-detail-title" { (c.title) }
@@ -751,8 +743,8 @@ fn group_fragments(caps: &[FragmentView]) -> Vec<(String, Vec<&FragmentView>)> {
         .collect()
 }
 
-/// Sort key: known categories by their `CATEGORY_ORDER` index, then unknown tags
-/// alphabetically, then the untagged "General" bucket last.
+/// Sort key: known categories by their `CATEGORY_ORDER` index, then unknown
+/// categories alphabetically, then the uncategorized "General" bucket last.
 fn category_rank(key: &str) -> (u8, String) {
     if key.is_empty() {
         return (3, String::new());
@@ -766,9 +758,8 @@ fn category_rank(key: &str) -> (u8, String) {
 fn fragment_card(c: &FragmentView) -> Markup {
     let id = c.id.as_str();
     let e = enc(id);
-    let cls = format!("fragment-card {}", risk_class(c.risk));
     html! {
-        div class=(cls) hx-get=(format!("/fragments/{e}/edit")) hx-target="#modal" role="button" tabindex="0" {
+        div class="fragment-card" hx-get=(format!("/fragments/{e}/edit")) hx-target="#modal" role="button" tabindex="0" {
             span class="fragment-glyph" { (icon(fragment_icon_name(c))) }
             div class="fragment-main" {
                 span class="fragment-title" { (c.title) }
@@ -788,19 +779,13 @@ fn fragment_card(c: &FragmentView) -> Markup {
 
 // --- starter packs + legend --------------------------------------------------
 
-/// A compact, collapsible key to studio's visual language: the risk spine,
-/// fragment kind badges, and the profile/pack atom-dot states.
+/// A compact, collapsible key to studio's visual language: fragment kind badges
+/// and the profile/pack atom-dot states.
 fn legend() -> Markup {
     html! {
         details class="legend" {
             summary { (icon("eye")) "Legend" }
             div class="legend-body" {
-                div class="legend-group" {
-                    span class="legend-head" { "Risk" }
-                    span class="legend-row" { span class="legend-spine risk-info" {} "info" }
-                    span class="legend-row" { span class="legend-spine risk-caution" {} "caution" }
-                    span class="legend-row" { span class="legend-spine risk-dangerous" {} "dangerous" }
-                }
                 div class="legend-group" {
                     span class="legend-head" { "Kind" }
                     span class="legend-row" { span class="tag" { "shared" } "config.toml" }
@@ -842,7 +827,7 @@ pub fn packs_gallery_fragment(packs: &[PackView]) -> String {
 }
 
 /// One starter-pack card: icon + name (+ recommended/applied badge), a short
-/// description, the composed fragments as risk-colored atom dots, and an
+/// description, the composed fragments as atom dots, and an
 /// Apply action (disabled once the pack's profile already exists).
 fn pack_card(p: &PackView) -> Markup {
     let e = enc(&p.id);
@@ -988,22 +973,10 @@ pub fn fragment_dialog(
                             p class="hint small" { "The script runs at render and its output is embedded. Uncheck " strong { "Allow execution" } " to keep it from running. " strong { "Run" } " tests it now without saving." }
                         }
                         @let cur_category = cap.and_then(|c| c.category.as_deref()).unwrap_or("");
-                        @let cur_tags = cap.map(|c| c.tags.join(", ")).unwrap_or_default();
-                        @let cur_risk = cap.map(|c| c.risk).unwrap_or_default();
                         div class="meta-row" {
                             label class="field grow" { span class="field-label" { "category" span class="field-hint" { "groups it in the tree" } }
                                 input type="text" name="category" value=(cur_category) placeholder="Operating Style" list="fragment-categories";
                             }
-                            label class="field risk-field" { span class="field-label" { "risk" }
-                                select name="risk" {
-                                    option value="info" selected[cur_risk == Risk::Info] { "info" }
-                                    option value="caution" selected[cur_risk == Risk::Caution] { "caution" }
-                                    option value="dangerous" selected[cur_risk == Risk::Dangerous] { "dangerous" }
-                                }
-                            }
-                        }
-                        label class="field" { span class="field-label" { "tags" span class="field-hint" { "comma-separated, for discovery" } }
-                            input type="text" name="tags" value=(cur_tags) placeholder="comms, safety";
                         }
                         datalist id="fragment-categories" {
                             @for c in CATEGORY_SUGGESTIONS { option value=(c) {} }
@@ -1374,10 +1347,7 @@ fn binding_chip(b: &BindingState) -> Markup {
 
 fn atom_dot(a: &AtomDot) -> Markup {
     let (cls, tip) = match a.state {
-        AtomState::Owned => (
-            format!("atom owned {}", risk_class(a.risk)),
-            format!("{} — composed", a.id),
-        ),
+        AtomState::Owned => ("atom owned".to_string(), format!("{} — composed", a.id)),
         AtomState::Palette => (
             "atom palette".to_string(),
             format!("{} — palette only (not duplicated)", a.id),
@@ -1433,7 +1403,6 @@ mod tests {
             icon: None,
             script_lang: None,
             private: false,
-            risk: Risk::Info,
             active: false,
         }
     }
@@ -1483,8 +1452,8 @@ mod tests {
         ];
         let groups = group_fragments(&caps);
         let labels: Vec<&str> = groups.iter().map(|(l, _)| l.as_str()).collect();
-        // Known categories in CATEGORY_ORDER, then unknown tags (alpha), then
-        // the untagged "General" bucket last.
+        // Known categories in CATEGORY_ORDER, then unknown categories (alpha),
+        // then the uncategorized "General" bucket last.
         assert_eq!(
             labels,
             vec![

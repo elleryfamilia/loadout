@@ -17,7 +17,7 @@ use serde::Serialize;
 use crate::config::{self, Config};
 use crate::context::Context;
 use crate::dynamic::{self, DynamicMode};
-use crate::fragment::{Fragment, Risk};
+use crate::fragment::Fragment;
 use crate::profile::Composition;
 use crate::providers::ProviderOutput;
 use crate::templates;
@@ -100,8 +100,6 @@ pub struct RenderedFragment {
     pub id: String,
     /// Section title (the inline profile name, else the fragment's title).
     pub title: String,
-    /// Risk, for the section's annotation / the card's spine.
-    pub risk: Risk,
     /// Rendered guidance markdown, or the skip note.
     pub body: String,
     /// True when this fragment resolved a dynamic provider/command.
@@ -327,7 +325,6 @@ fn render_fragment_list(
         out.push(RenderedFragment {
             id: cap.id.clone(),
             title,
-            risk: cap.risk,
             body,
             dynamic,
             skipped,
@@ -338,17 +335,11 @@ fn render_fragment_list(
 }
 
 /// Join rendered fragments into the overlay's guidance body: each becomes a
-/// `### <title>` section (risk-annotated when not `Info`), separated by a blank
-/// line. This is exactly the `profile_guidance` the base template embeds.
+/// `### <title>` section, separated by a blank line. This is exactly the
+/// `profile_guidance` the base template embeds.
 fn join_fragment_sections(caps: &[RenderedFragment]) -> String {
     caps.iter()
-        .map(|c| {
-            let heading = match c.risk.annotation() {
-                Some(ann) => format!("### {} — {ann}", c.title),
-                None => format!("### {}", c.title),
-            };
-            format!("{heading}\n\n{}", c.body)
-        })
+        .map(|c| format!("### {}\n\n{}", c.title, c.body))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -371,16 +362,14 @@ fn read_profile_template(repo_base: &Path, profile: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::context::test_support::sample_context;
-    use crate::fragment::{Fragment, Risk};
+    use crate::fragment::Fragment;
     use crate::profile::ResolvedFragment;
 
     fn named_cap(id: &str, guidance: &str) -> Fragment {
         Fragment {
             id: id.into(),
             description: Some(id.into()),
-            tags: vec![],
             category: None,
-            risk: Risk::Info,
             when: vec![],
             requires: vec![],
             params: toml::Value::Table(Default::default()),
@@ -460,12 +449,10 @@ mod tests {
     fn exposes_structured_per_fragment_output() {
         let ctx = sample_context();
         let cfg = Config::defaults();
-        let mut risky = named_cap("infra-caution", "Be careful.");
-        risky.risk = Risk::Caution;
         let comp = composition(
             "infra",
             vec![
-                resolved(risky, "infra", false),
+                resolved(named_cap("infra-caution", "Be careful."), "infra", false),
                 resolved(named_cap("baseline", "Keep it minimal."), "default", false),
             ],
         );
@@ -483,26 +470,21 @@ mod tests {
         // One structured entry per rendered fragment, in composition order.
         let ids: Vec<&str> = out.fragments.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, vec!["infra-caution", "baseline"]);
-        assert_eq!(out.fragments[0].risk, Risk::Caution);
         assert_eq!(out.fragments[0].body, "Be careful.");
         assert!(!out.fragments[0].dynamic && !out.fragments[0].skipped);
         // The structured list joins back to the overlay's guidance body exactly.
         assert_eq!(out.profile_guidance, join_fragment_sections(&out.fragments));
-        assert!(out
-            .profile_guidance
-            .contains("### infra-caution — ⚠️ caution"));
+        assert!(out.profile_guidance.contains("### infra-caution"));
     }
 
     #[test]
-    fn concatenates_fragments_in_order_with_risk_annotation() {
+    fn concatenates_fragments_in_order() {
         let ctx = sample_context();
         let cfg = Config::defaults();
-        let mut risky = named_cap("infra-caution", "Be careful.");
-        risky.risk = Risk::Caution;
         let comp = composition(
             "infra",
             vec![
-                resolved(risky, "infra", false),
+                resolved(named_cap("infra-caution", "Be careful."), "infra", false),
                 resolved(named_cap("baseline", "Keep it minimal."), "default", false),
             ],
         );
@@ -517,8 +499,8 @@ mod tests {
         })
         .unwrap();
 
-        // Risk is annotated on the caution fragment only.
-        assert!(out.content.contains("### infra-caution — ⚠️ caution"));
+        // Each fragment renders as its own `###` section.
+        assert!(out.content.contains("### infra-caution"));
         assert!(out.content.contains("### baseline"));
         // Order is preserved: infra before baseline.
         assert!(out.content.find("infra-caution").unwrap() < out.content.find("baseline").unwrap());

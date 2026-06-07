@@ -25,7 +25,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 use crate::config::{self, Config};
-use crate::fragment::{palette, Fragment, Layer, Risk};
+use crate::fragment::{palette, Fragment, Layer};
 use crate::profile::ProfileConfig;
 use crate::writer::{atomic_write, AtomicWriter, Writer, WrittenFile};
 
@@ -445,14 +445,6 @@ fn has_entry(doc: &DocumentMut, key: &str, field: &str, val: &str) -> bool {
 
 // --- typed → toml_edit table builders ----------------------------------------
 
-fn risk_str(r: Risk) -> &'static str {
-    match r {
-        Risk::Info => "info",
-        Risk::Caution => "caution",
-        Risk::Dangerous => "dangerous",
-    }
-}
-
 /// Build a clean array-of-tables entry for a fragment — only meaningful
 /// (non-default) fields, so studio writes TOML you could have authored.
 fn fragment_table(c: &Fragment) -> Result<Table> {
@@ -464,14 +456,8 @@ fn fragment_table(c: &Fragment) -> Result<Table> {
     if let Some(ic) = &c.icon {
         t["icon"] = value(ic.as_str());
     }
-    if !c.tags.is_empty() {
-        t["tags"] = str_array(&c.tags);
-    }
     if let Some(cat) = &c.category {
         t["category"] = value(cat.as_str());
-    }
-    if c.risk != Risk::Info {
-        t["risk"] = value(risk_str(c.risk));
     }
     if !c.when.is_empty() {
         let when = toml::Value::try_from(&c.when).context("serializing fragment `when`")?;
@@ -590,9 +576,7 @@ mod tests {
         Fragment {
             id: id.into(),
             description: Some(format!("{id} desc")),
-            tags: vec![],
             category: None,
-            risk: Risk::Info,
             when: vec![],
             requires: vec![],
             params: toml::Value::Table(Default::default()),
@@ -677,8 +661,7 @@ mod tests {
         let (d, gdir) = repo_with_global(body);
         let mut s = session_global(d.path(), &gdir);
 
-        let mut edited = cap("a", "new guidance");
-        edited.risk = Risk::Caution;
+        let edited = cap("a", "new guidance");
         s.stage(StagedOp::EditFragment {
             layer: Layer::Global,
             id: "a".into(),
@@ -693,7 +676,6 @@ mod tests {
 
         let after = s.diff()[0].staged_after.clone();
         assert!(after.contains("new guidance"));
-        assert!(after.contains("risk = \"caution\""));
         assert!(!after.contains("id = \"b\""));
         // Still valid TOML/config.
         s.validate().unwrap();

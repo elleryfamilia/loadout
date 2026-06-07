@@ -48,7 +48,6 @@ struct ExplainReport {
 struct ActiveFragment {
     id: String,
     via_profile: String,
-    risk: crate::fragment::Risk,
     reason: String,
 }
 
@@ -103,7 +102,6 @@ fn build_report(prep: &Prepared, agents: &[String]) -> crate::Result<ExplainRepo
         .map(|rc| ActiveFragment {
             id: rc.fragment.id.clone(),
             via_profile: rc.via_profile.clone(),
-            risk: rc.fragment.risk,
             reason: rc.reason.clone(),
         })
         .collect();
@@ -200,11 +198,7 @@ fn print_human(r: &ExplainReport) {
         println!("  (none)");
     } else {
         for c in &r.fragments {
-            let risk = match c.risk.annotation() {
-                Some(a) => format!(" [{a}]"),
-                None => String::new(),
-            };
-            println!("  • {}{risk}", c.id);
+            println!("  • {}", c.id);
             println!("        {}", c.reason);
         }
     }

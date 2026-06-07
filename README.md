@@ -308,12 +308,10 @@ applied, and `params` merged (fragment default ← profile-supplied ← private
 ```toml
 [[fragments]]
 id = "rust-conventions"
-tags = ["stack"]
 guidance = "Build with cargo, lint with clippy; prefer ?/Result over unwrap()."
 
 [[fragments]]
 id = "terse-comms"
-tags = ["comms"]
 guidance = "Be terse: lead with the result and what changed; skip preamble."
 
 [[profiles]]

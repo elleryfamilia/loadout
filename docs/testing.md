@@ -74,18 +74,14 @@ you'd do this visually with `rosita studio`; here we write the file directly.)
 cat > "$ROSITA_CONFIG_DIR/config.toml" <<'TOML'
 [[fragments]]
 id = "rust-conventions"
-tags = ["stack"]
 guidance = "Build with cargo, lint with clippy; prefer ?/Result over unwrap()."
 
 [[fragments]]
 id = "terse-comms"
-tags = ["comms"]
 guidance = "Be terse: lead with the result and what changed."
 
 [[fragments]]                          # self-gates: only contributes under infra/
 id = "infra-caution"
-risk = "caution"
-tags = ["safety"]
 when = [{ field = "path", op = "starts_with", value = "infra/" }]
 guidance = "Infrastructure path — prefer plans; confirm before touching shared state."
 
@@ -131,7 +127,7 @@ rosita --cwd "$SB/infra/db" explain
 Active fragments
   • rust-conventions
   • terse-comms
-  • infra-caution [⚠️ caution]
+  • infra-caution
   • host-info
 ```
 Same profile, but now `infra-caution` contributes — its `when` matches the
@@ -171,9 +167,9 @@ rosita profiles              # marks which match, and the selected one
 ```
 ```
 Fragments (4 in library, 3 active for this context)
-  ● rust-conventions — rust-conventions  (tags: stack)
-  ● terse-comms — terse-comms  (tags: comms)
-  · infra-caution — infra-caution  (⚠️ caution; tags: safety)
+  ● rust-conventions — rust-conventions
+  ● terse-comms — terse-comms
+  · infra-caution — infra-caution
   ● host-info — host-info  (provider: host)
 
 Profiles (1 configured; selected: rust)

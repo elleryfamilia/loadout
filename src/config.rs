@@ -587,7 +587,6 @@ mod tests {
 
             [[fragments]]
             id = "ssh-tailnet"
-            risk = "caution"
             guidance = "you may ssh within my tailnet"
             "#,
         )
