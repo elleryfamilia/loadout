@@ -1,4 +1,4 @@
-//! `rosita sync` — git-backed sync of the global config (capabilities & profiles)
+//! `rosita sync` — git-backed sync of the global config (fragments & profiles)
 //! across machines. `init` sets a machine up, `clone` onboards a new one, and a
 //! bare `rosita sync` pulls the latest and pushes local edits.
 

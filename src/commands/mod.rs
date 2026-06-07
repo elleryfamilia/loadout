@@ -47,7 +47,7 @@ pub struct Prepared {
     pub config: Config,
     /// Detected context.
     pub context: Context,
-    /// Composed capabilities + matching profiles.
+    /// Composed fragments + matching profiles.
     pub composition: Composition,
 }
 
@@ -104,7 +104,7 @@ impl ProfileChooser for SkipChooser {
     }
 }
 
-/// Load config, detect context, select a profile, and compose its capabilities
+/// Load config, detect context, select a profile, and compose its fragments
 /// for `rt` (non-interactively — see [`prepare_with`] to supply a chooser).
 pub fn prepare(rt: &Runtime) -> crate::Result<Prepared> {
     prepare_with(rt, &SkipChooser)
@@ -124,8 +124,8 @@ pub fn prepare_with(rt: &Runtime, chooser: &dyn ProfileChooser) -> crate::Result
     let composition = profile::compose_selection(
         &context,
         &resolved,
-        &config.capabilities,
-        &config.capability_params,
+        &config.fragments,
+        &config.fragment_params,
     );
     Ok(Prepared {
         repo_base,

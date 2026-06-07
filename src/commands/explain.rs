@@ -38,17 +38,17 @@ struct ExplainReport {
     selected_profile: String,
     /// Profiles whose `targets` match here (selection candidates).
     candidate_profiles: Vec<String>,
-    /// Active capabilities, in render order, with provenance.
-    capabilities: Vec<ActiveCapability>,
+    /// Active fragments, in render order, with provenance.
+    fragments: Vec<ActiveFragment>,
     considered: Vec<Considered>,
     plan: Vec<AgentPlan>,
 }
 
 #[derive(Serialize)]
-struct ActiveCapability {
+struct ActiveFragment {
     id: String,
     via_profile: String,
-    risk: crate::capability::Risk,
+    risk: crate::fragment::Risk,
     reason: String,
 }
 
@@ -96,14 +96,14 @@ fn build_report(prep: &Prepared, agents: &[String]) -> crate::Result<ExplainRepo
         })
         .collect();
 
-    let capabilities = prep
+    let fragments = prep
         .composition
-        .capabilities
+        .fragments
         .iter()
-        .map(|rc| ActiveCapability {
-            id: rc.capability.id.clone(),
+        .map(|rc| ActiveFragment {
+            id: rc.fragment.id.clone(),
             via_profile: rc.via_profile.clone(),
-            risk: rc.capability.risk,
+            risk: rc.fragment.risk,
             reason: rc.reason.clone(),
         })
         .collect();
@@ -153,7 +153,7 @@ fn build_report(prep: &Prepared, agents: &[String]) -> crate::Result<ExplainRepo
         selection_targets: tags,
         selected_profile: prep.profile_label().to_string(),
         candidate_profiles,
-        capabilities,
+        fragments,
         considered,
         plan,
     })
@@ -195,11 +195,11 @@ fn print_human(r: &ExplainReport) {
         );
     }
 
-    println!("\nActive capabilities");
-    if r.capabilities.is_empty() {
+    println!("\nActive fragments");
+    if r.fragments.is_empty() {
         println!("  (none)");
     } else {
-        for c in &r.capabilities {
+        for c in &r.fragments {
             let risk = match c.risk.annotation() {
                 Some(a) => format!(" [{a}]"),
                 None => String::new(),

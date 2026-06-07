@@ -62,11 +62,11 @@ pub fn apply_for_agents(
                 timestamp: generated_at.clone(),
                 agent: agent.clone(),
                 profile: prep.profile_label().to_string(),
-                capabilities: prep
+                fragments: prep
                     .composition
-                    .capabilities
+                    .fragments
                     .iter()
-                    .map(|c| c.capability.id.clone())
+                    .map(|c| c.fragment.id.clone())
                     .collect(),
                 stacks: prep.context.stacks.clone(),
                 files: result.files.clone(),

@@ -21,9 +21,9 @@ pub struct AuditEvent {
     pub agent: String,
     /// The selected profile (or `none` when no profile applied).
     pub profile: String,
-    /// Active capability ids, in render order.
-    #[serde(default)]
-    pub capabilities: Vec<String>,
+    /// Active fragment ids, in render order.
+    #[serde(default, alias = "capabilities")]
+    pub fragments: Vec<String>,
     /// Detected stacks.
     #[serde(default)]
     pub stacks: Vec<String>,
@@ -76,7 +76,7 @@ mod tests {
             timestamp: "2026-05-29T00:00:00Z".into(),
             agent: "claude".into(),
             profile: "rust".into(),
-            capabilities: vec!["rust-conventions".into()],
+            fragments: vec!["rust-conventions".into()],
             stacks: vec!["rust".into()],
             files: vec![WrittenFile {
                 path: ".rosita/generated/claude.md".into(),

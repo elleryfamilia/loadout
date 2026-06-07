@@ -1,11 +1,11 @@
-//! Resolving dynamic capabilities — live provider/command output.
+//! Resolving dynamic fragments — live provider/command output.
 //!
-//! A capability is *dynamic* when it has a `provider` (a built-in probe) or a
+//! A fragment is *dynamic* when it has a `provider` (a built-in probe) or a
 //! `command` (a shell command). At render time [`resolve`] produces its output,
 //! honoring the cache:
 //!
 //! - built-in `provider` → always run (safe probes),
-//! - `command` → run unless `allow_exec` is `false` (the per-capability
+//! - `command` → run unless `allow_exec` is `false` (the per-fragment
 //!   off-switch), in which case a skip note is rendered instead.
 //!
 //! [`DynamicMode::ReadOnly`] (used by `explain` and dry-run) never executes or
@@ -17,14 +17,14 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
-use crate::capability::Capability;
 use crate::context::Context;
+use crate::fragment::Fragment;
 use crate::providers::{self, ProviderOutput};
 
-/// Default cache TTL when a dynamic capability sets no `cache`.
+/// Default cache TTL when a dynamic fragment sets no `cache`.
 const DEFAULT_TTL: Duration = Duration::from_secs(60);
 
-/// How dynamic capabilities are resolved during a render.
+/// How dynamic fragments are resolved during a render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DynamicMode {
     /// May execute providers/commands and write the cache (real renders).
@@ -33,7 +33,7 @@ pub enum DynamicMode {
     ReadOnly,
 }
 
-/// The outcome of resolving one dynamic capability.
+/// The outcome of resolving one dynamic fragment.
 pub struct Resolution {
     /// Embedded output, if available (absent when unavailable or not cached).
     pub output: Option<ProviderOutput>,
@@ -42,9 +42,9 @@ pub struct Resolution {
     pub skipped: Option<String>,
 }
 
-/// Resolve a capability's dynamic output, or `None` if it isn't dynamic.
+/// Resolve a fragment's dynamic output, or `None` if it isn't dynamic.
 pub fn resolve(
-    cap: &Capability,
+    cap: &Fragment,
     ctx: &Context,
     repo_base: &Path,
     mode: DynamicMode,
@@ -62,12 +62,12 @@ pub fn resolve(
 
     // An explicit command wins over a provider when both are set.
     if let Some(command) = &cap.command {
-        // Per-capability off-switch (`allow_exec = false` disables execution).
+        // Per-fragment off-switch (`allow_exec = false` disables execution).
         if !cap.allow_exec {
             return Some(Resolution {
                 output: None,
                 skipped: Some(
-                    "execution disabled for this capability (allow_exec = false)".to_string(),
+                    "execution disabled for this fragment (allow_exec = false)".to_string(),
                 ),
             });
         }

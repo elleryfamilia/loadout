@@ -1,59 +1,62 @@
-//! `rosita capabilities` / `profiles` / `agents` — introspect the resolved
+//! `rosita fragments` / `profiles` / `agents` — introspect the resolved
 //! configuration and what's active for the current context.
 //!
 //! These are read-only debugging aids: they run the same config load + context
 //! detection + composition as a render (via [`super::prepare`]) and print the
-//! library plus which capabilities/profiles are active here.
+//! library plus which fragments/profiles are active here.
 
 use anyhow::bail;
 use serde::Serialize;
 
 use super::{prepare, Runtime};
 use crate::adapters::AgentDescriptor;
-use crate::capability::{Capability, Layer};
-use crate::cli::{AgentsArgs, CapabilitiesAction, CapabilitiesArgs, ProfilesArgs};
+use crate::cli::{AgentsArgs, FragmentsAction, FragmentsArgs, ProfilesArgs};
+use crate::fragment::{Fragment, Layer};
 use crate::profile::{self, ProfileConfig};
 
-// --- capabilities ------------------------------------------------------------
+// --- fragments ------------------------------------------------------------
 
-/// Entry point for `rosita capabilities`.
-pub fn capabilities(rt: &Runtime, args: &CapabilitiesArgs) -> crate::Result<()> {
+/// Entry point for `rosita fragments`.
+pub fn fragments(rt: &Runtime, args: &FragmentsArgs) -> crate::Result<()> {
     let prep = prepare(rt)?;
     let active: Vec<&str> = prep
         .composition
-        .capabilities
+        .fragments
         .iter()
-        .map(|rc| rc.capability.id.as_str())
+        .map(|rc| rc.fragment.id.as_str())
         .collect();
 
     match &args.action {
-        Some(CapabilitiesAction::Show { id }) => {
-            let Some(cap) = prep.config.capabilities.iter().find(|c| &c.id == id) else {
-                bail!("unknown capability '{id}'");
+        Some(FragmentsAction::Show { id }) => {
+            let Some(cap) = prep.config.fragments.iter().find(|c| &c.id == id) else {
+                bail!("unknown fragment '{id}'");
             };
             let via = prep
                 .composition
-                .capabilities
+                .fragments
                 .iter()
-                .find(|rc| &rc.capability.id == id)
+                .find(|rc| &rc.fragment.id == id)
                 .map(|rc| rc.via_profile.clone());
             if args.json {
-                println!("{}", serde_json::to_string_pretty(&cap_detail(cap, via))?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&fragment_detail(cap, via))?
+                );
             } else {
-                print_capability_show(cap, via.as_deref());
+                print_fragment_show(cap, via.as_deref());
             }
         }
         _ => {
             if args.json {
                 let rows: Vec<_> = prep
                     .config
-                    .capabilities
+                    .fragments
                     .iter()
-                    .map(|c| cap_row(c, active.contains(&c.id.as_str())))
+                    .map(|c| fragment_row(c, active.contains(&c.id.as_str())))
                     .collect();
                 println!("{}", serde_json::to_string_pretty(&rows)?);
             } else {
-                print_capabilities_list(&prep.config.capabilities, &active);
+                print_fragments_list(&prep.config.fragments, &active);
             }
         }
     }
@@ -61,16 +64,16 @@ pub fn capabilities(rt: &Runtime, args: &CapabilitiesArgs) -> crate::Result<()> 
 }
 
 #[derive(Serialize)]
-struct CapRow {
+struct FragmentRow {
     id: String,
     description: Option<String>,
-    risk: crate::capability::Risk,
+    risk: crate::fragment::Risk,
     tags: Vec<String>,
     kind: &'static str,
     active: bool,
 }
 
-fn kind_of(c: &Capability) -> &'static str {
+fn kind_of(c: &Fragment) -> &'static str {
     if c.command.is_some() {
         "command"
     } else if c.provider.is_some() {
@@ -80,8 +83,8 @@ fn kind_of(c: &Capability) -> &'static str {
     }
 }
 
-fn cap_row(c: &Capability, active: bool) -> CapRow {
-    CapRow {
+fn fragment_row(c: &Fragment, active: bool) -> FragmentRow {
+    FragmentRow {
         id: c.id.clone(),
         description: c.description.clone(),
         risk: c.risk,
@@ -92,17 +95,17 @@ fn cap_row(c: &Capability, active: bool) -> CapRow {
 }
 
 #[derive(Serialize)]
-struct CapDetail<'a> {
+struct FragmentDetail<'a> {
     #[serde(flatten)]
-    capability: &'a Capability,
+    fragment: &'a Fragment,
     origin: String,
     kind: &'static str,
     active_via_profile: Option<String>,
 }
 
-fn cap_detail(c: &Capability, via: Option<String>) -> CapDetail<'_> {
-    CapDetail {
-        capability: c,
+fn fragment_detail(c: &Fragment, via: Option<String>) -> FragmentDetail<'_> {
+    FragmentDetail {
+        fragment: c,
         origin: origin_label(c.origin).to_string(),
         kind: kind_of(c),
         active_via_profile: via,
@@ -119,9 +122,9 @@ fn origin_label(layer: Layer) -> &'static str {
     }
 }
 
-fn print_capabilities_list(caps: &[Capability], active: &[&str]) {
+fn print_fragments_list(caps: &[Fragment], active: &[&str]) {
     println!(
-        "Capabilities ({} in library, {} active for this context)",
+        "Fragments ({} in library, {} active for this context)",
         caps.len(),
         active.len()
     );
@@ -148,18 +151,18 @@ fn print_capabilities_list(caps: &[Capability], active: &[&str]) {
         };
         println!("  {mark} {} — {}{suffix}", c.id, c.title());
     }
-    println!("\nShow one with `rosita capabilities show <id>`.");
+    println!("\nShow one with `rosita fragments show <id>`.");
 }
 
-fn dynamic_target(c: &Capability) -> String {
+fn dynamic_target(c: &Fragment) -> String {
     c.command
         .clone()
         .or_else(|| c.provider.clone())
         .unwrap_or_default()
 }
 
-fn print_capability_show(c: &Capability, via: Option<&str>) {
-    println!("Capability: {}", c.id);
+fn print_fragment_show(c: &Fragment, via: Option<&str>) {
+    println!("Fragment: {}", c.id);
     println!("  description : {}", c.title());
     println!("  kind        : {}", kind_of(c));
     println!("  risk        : {:?}", c.risk);
@@ -266,10 +269,10 @@ pub fn profiles(rt: &Runtime, args: &ProfilesArgs) -> crate::Result<()> {
         } else {
             " "
         };
-        let caps: Vec<&str> = p.capabilities.iter().map(|r| r.id()).collect();
+        let caps: Vec<&str> = p.fragments.iter().map(|r| r.id()).collect();
         println!("  {mark} {:<16} targets [{}]", p.name, p.targets.join(", "));
         if !caps.is_empty() {
-            println!("        capabilities: {}", caps.join(", "));
+            println!("        fragments: {}", caps.join(", "));
         }
     }
     Ok(())
@@ -283,7 +286,7 @@ struct ProfileRow {
     candidate: bool,
     /// Whether this profile is the selected one for the current context.
     selected: bool,
-    capabilities: Vec<String>,
+    fragments: Vec<String>,
 }
 
 fn profile_row(p: &ProfileConfig, candidate: bool, selected: bool) -> ProfileRow {
@@ -292,7 +295,7 @@ fn profile_row(p: &ProfileConfig, candidate: bool, selected: bool) -> ProfileRow
         targets: p.targets.clone(),
         candidate,
         selected,
-        capabilities: p.capabilities.iter().map(|r| r.id().to_string()).collect(),
+        fragments: p.fragments.iter().map(|r| r.id().to_string()).collect(),
     }
 }
 

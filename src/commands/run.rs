@@ -94,7 +94,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
 
     // Pull the latest config first — best-effort, throttled, timeout-bounded;
     // it never blocks the launch. Done before `prepare_with` so the render below
-    // composes freshly-pulled capabilities/profiles. Print the line right away.
+    // composes freshly-pulled fragments/profiles. Print the line right away.
     let sync_status = sync_before_render(rt);
     print_sync_step(&p, &sync_status);
 

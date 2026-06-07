@@ -30,7 +30,7 @@ fn main() -> ExitCode {
         Command::Refresh(args) => commands::refresh::run(&rt, args),
         Command::Clean(args) => commands::clean::run(&rt, args),
         Command::Doctor => commands::doctor::run(&rt),
-        Command::Capabilities(args) => commands::introspect::capabilities(&rt, args),
+        Command::Fragments(args) => commands::introspect::fragments(&rt, args),
         Command::Profiles(args) => commands::introspect::profiles(&rt, args),
         Command::Agents(args) => commands::introspect::agents(&rt, args),
         Command::Studio(args) => rosita::studio::serve(&rt, args),

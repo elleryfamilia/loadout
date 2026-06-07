@@ -18,12 +18,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context as _};
 
-use crate::capability::{palette, Layer};
 use crate::cli::StudioArgs;
 use crate::commands::Runtime;
 use crate::config::{self, Config};
 use crate::context;
 use crate::dynamic::DynamicMode;
+use crate::fragment::{palette, Layer};
 use crate::pack::Pack;
 use crate::profile::ProfileConfig;
 use crate::studio::assets;
@@ -129,16 +129,16 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => handle_shell(state),
         ("GET", "/tab/profiles") => handle_tab(state, "profiles"),
-        ("GET", "/tab/capabilities") => handle_tab(state, "capabilities"),
+        ("GET", "/tab/fragments") => handle_tab(state, "fragments"),
         ("GET", "/staged") => handle_staged(state),
         ("GET", "/close") => Resp::html(String::new()),
         ("GET", "/fs-status") => handle_fs_status(state),
         ("GET", "/diff") => handle_diff(state),
         ("POST", "/apply") => handle_apply(state),
-        ("GET", "/capabilities/new") => {
-            Resp::html(views::cap_dialog(None, Layer::Global, true, None, &[]))
+        ("GET", "/fragments/new") => {
+            Resp::html(views::fragment_dialog(None, Layer::Global, true, None, &[]))
         }
-        ("POST", "/capabilities") => handle_cap_save(state, req),
+        ("POST", "/fragments") => handle_fragment_save(state, req),
         ("GET", "/packs") => handle_packs(state),
         ("POST", "/onboarding/quickstart") => handle_quickstart(state),
         ("GET", "/profiles/new") => handle_profile_new(state),
@@ -149,7 +149,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
             Some((body, ct)) => Resp::asset(body, ct),
             None => Resp::not_found(),
         },
-        (_, p) if p.starts_with("/capabilities/") => handle_cap_param(state, req),
+        (_, p) if p.starts_with("/fragments/") => handle_fragment_param(state, req),
         (_, p) if p.starts_with("/profiles/") => handle_profile_param(state, req),
         (_, p) if p.starts_with("/packs/") => handle_pack_param(state, req),
         _ => Resp::not_found(),
@@ -165,19 +165,19 @@ fn id_and_action<'a>(path: &'a str, prefix: &str) -> (String, &'a str) {
     }
 }
 
-fn handle_cap_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
-    let (id, action) = id_and_action(&req.path, "/capabilities/");
+fn handle_fragment_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+    let (id, action) = id_and_action(&req.path, "/fragments/");
     match (req.method.as_str(), action) {
         ("GET", "edit") | ("GET", "view") => {
             // A `?profile=` carries the profile to return to when editing a cap
             // from inside its detail (so Save re-renders that profile, not the
-            // Capabilities tab).
+            // Fragments tab).
             let profile = field(&req.query, "profile");
-            handle_cap_edit(state, &id, &profile)
+            handle_fragment_edit(state, &id, &profile)
         }
-        ("DELETE", "") => handle_cap_delete(state, &id),
-        ("POST", "duplicate") => handle_cap_duplicate(state, &id),
-        ("POST", "run") => handle_cap_run(state, &id, &field(&req.query, "profile")),
+        ("DELETE", "") => handle_fragment_delete(state, &id),
+        ("POST", "duplicate") => handle_fragment_duplicate(state, &id),
+        ("POST", "run") => handle_fragment_run(state, &id, &field(&req.query, "profile")),
         _ => Resp::not_found(),
     }
 }
@@ -214,9 +214,9 @@ fn handle_shell(state: &Arc<Mutex<StudioState>>) -> Resp {
     let (snap, staged) = snap_and_staged(state);
     match state::library_view(&snap) {
         Ok(lib) => Resp::html(views::shell(
-            views::capabilities_tab(&lib, None),
+            views::fragments_tab(&lib, None),
             staged,
-            "capabilities",
+            "fragments",
         )),
         Err(e) => Resp::html(views::error_page(&e.to_string())),
     }
@@ -234,7 +234,7 @@ fn handle_tab(state: &Arc<Mutex<StudioState>>, tab: &str) -> Resp {
     }
     let snap = state.lock().unwrap().snapshot();
     match state::library_view(&snap) {
-        Ok(lib) => Resp::html(views::capabilities_tab_fragment(&lib, None)),
+        Ok(lib) => Resp::html(views::fragments_tab_fragment(&lib, None)),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
@@ -343,10 +343,10 @@ fn handle_profile_run(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
 /// Run one dynamic cap now (Live) so its output caches, then re-render the
 /// profile detail (ReadOnly) — only the run cap shows fresh output; the rest keep
 /// their placeholder until they're run too. `profile` scopes the render context.
-fn handle_cap_run(state: &Arc<Mutex<StudioState>>, id: &str, profile: &str) -> Resp {
+fn handle_fragment_run(state: &Arc<Mutex<StudioState>>, id: &str, profile: &str) -> Resp {
     {
         let snap = state.lock().unwrap().snapshot();
-        if let Err(e) = state::run_capability(&snap, profile, id) {
+        if let Err(e) = state::run_fragment(&snap, profile, id) {
             return Resp::html(views::error_fragment(&e.to_string()));
         }
     }
@@ -360,7 +360,7 @@ fn empty_preview(name: &str, note: String) -> PreviewOutcome {
         profile_label: name.to_string(),
         binding: BindingState::None,
         context_summary: String::new(),
-        cap_count: 0,
+        fragment_count: 0,
         overlay: String::new(),
         caps: Vec::new(),
         note: Some(note),
@@ -378,11 +378,11 @@ fn library_now(state: &Arc<Mutex<StudioState>>) -> crate::Result<LibraryView> {
     state::library_view(&snap)
 }
 
-// --- capability handlers -----------------------------------------------------
+// --- fragment handlers -----------------------------------------------------
 
-fn handle_cap_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+fn handle_fragment_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let pairs = state::parse_pairs(&req.body);
-    // `?as=copy` → save as a new capability (don't overwrite the original);
+    // `?as=copy` → save as a new fragment (don't overwrite the original);
     // `return_profile` (hidden) → the user is editing from a profile's detail.
     let as_copy = field(&req.query, "as") == "copy";
     let return_profile = field(&req.body, "return_profile");
@@ -392,24 +392,24 @@ fn handle_cap_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         Ok(c) => c,
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
-    // The existing capability (if editing) so the simple editor's merge preserves
+    // The existing fragment (if editing) so the simple editor's merge preserves
     // fields it doesn't expose (tags/risk/requires/agents/cache/…).
-    let base = state::editor_cap_id(&pairs)
-        .and_then(|id| cfg.capabilities.iter().find(|c| c.id == id).cloned());
-    let mut cap = match state::capability_from_form(base.as_ref(), &pairs) {
+    let base = state::editor_fragment_id(&pairs)
+        .and_then(|id| cfg.fragments.iter().find(|c| c.id == id).cloned());
+    let mut cap = match state::fragment_from_form(base.as_ref(), &pairs) {
         Ok(c) => c,
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
     if as_copy {
         // Duplicate under a new name: a fresh id derived from the title, distinct
-        // from the original and from every existing capability.
+        // from the original and from every existing fragment.
         let new_id = state::slug(&field(&req.body, "name"));
         if new_id.is_empty() {
             return Resp::html(views::error_fragment(
                 "give the copy a name with letters or digits",
             ));
         }
-        if cfg.capabilities.iter().any(|c| c.id == new_id) {
+        if cfg.fragments.iter().any(|c| c.id == new_id) {
             return Resp::html(views::error_fragment(&format!(
                 "“{new_id}” already exists — choose a new name for the copy"
             )));
@@ -418,27 +418,23 @@ fn handle_cap_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     }
     let layer = state::layer_from_form(&pairs);
     let id = cap.id.clone();
-    // EditCapability upserts by id (creates if absent), so save covers new+edit.
-    let res = state
-        .lock()
-        .unwrap()
-        .session
-        .stage(StagedOp::EditCapability {
-            layer,
-            id: id.clone(),
-            cap: Box::new(cap),
-        });
+    // EditFragment upserts by id (creates if absent), so save covers new+edit.
+    let res = state.lock().unwrap().session.stage(StagedOp::EditFragment {
+        layer,
+        id: id.clone(),
+        cap: Box::new(cap),
+    });
     if let Err(e) = res {
         return Resp::html(views::error_fragment(&e.to_string()));
     }
     let flash = if as_copy {
         format!("saved copy “{id}”")
     } else {
-        format!("staged capability “{id}”")
+        format!("staged fragment “{id}”")
     };
     // Edited from a profile → re-render that profile's detail (so an in-place
     // save shows the updated guidance) and close the modal. Otherwise re-render
-    // the Capabilities tab.
+    // the Fragments tab.
     if !return_profile.is_empty() {
         let mut resp = profiles_tab_resp(state, Some(&return_profile), Some(&flash), true);
         if resp.status == 200 {
@@ -448,45 +444,57 @@ fn handle_cap_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         return resp;
     }
     match library_now(state) {
-        Ok(lib) => Resp::html(views::cap_result(&lib, &flash)),
+        Ok(lib) => Resp::html(views::fragment_result(&lib, &flash)),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
-fn handle_cap_edit(state: &Arc<Mutex<StudioState>>, id: &str, return_profile: &str) -> Resp {
+fn handle_fragment_edit(state: &Arc<Mutex<StudioState>>, id: &str, return_profile: &str) -> Resp {
     let rp = (!return_profile.is_empty()).then_some(return_profile);
     let snap = state.lock().unwrap().snapshot();
     let cfg = match state::staged_config(&snap) {
         Ok(c) => c,
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
-    if let Some(c) = cfg.capabilities.iter().find(|c| c.id == id) {
+    if let Some(c) = cfg.fragments.iter().find(|c| c.id == id) {
         let used_by = profiles_using(&cfg, id);
-        Resp::html(views::cap_dialog(Some(c), c.origin, true, rp, &used_by))
+        Resp::html(views::fragment_dialog(
+            Some(c),
+            c.origin,
+            true,
+            rp,
+            &used_by,
+        ))
     } else if let Some(c) = palette().into_iter().find(|c| c.id == id) {
-        Resp::html(views::cap_dialog(Some(&c), Layer::Global, false, rp, &[]))
+        Resp::html(views::fragment_dialog(
+            Some(&c),
+            Layer::Global,
+            false,
+            rp,
+            &[],
+        ))
     } else {
-        Resp::html(views::error_fragment(&format!("unknown capability '{id}'")))
+        Resp::html(views::error_fragment(&format!("unknown fragment '{id}'")))
     }
 }
 
-/// Names of the profiles whose `capabilities` reference `cap_id`.
-fn profiles_using(cfg: &Config, cap_id: &str) -> Vec<String> {
+/// Names of the profiles whose `fragments` reference `fragment_id`.
+fn profiles_using(cfg: &Config, fragment_id: &str) -> Vec<String> {
     cfg.profiles
         .iter()
-        .filter(|p| p.capabilities.iter().any(|r| r.id() == cap_id))
+        .filter(|p| p.fragments.iter().any(|r| r.id() == fragment_id))
         .map(|p| p.name.clone())
         .collect()
 }
 
-fn handle_cap_delete(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
-    // Deleting a composed capability would leave dangling references in the
+fn handle_fragment_delete(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
+    // Deleting a composed fragment would leave dangling references in the
     // profiles that use it (silently dropped at render). Instead, stage the
     // deletion AND remove the id from every profile that composed it, and report
     // the cleanup so it isn't invisible.
     let res = (|| -> crate::Result<(Vec<String>, Vec<String>)> {
         let mut s = state.lock().unwrap();
-        let Some(layer) = s.session.capability_layer(id) else {
+        let Some(layer) = s.session.fragment_layer(id) else {
             return Err(anyhow!(
                 "“{id}” isn't in your library — palette items can't be deleted"
             ));
@@ -499,18 +507,18 @@ fn handle_cap_delete(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
             .filter(|p| affected.contains(&p.name))
             .map(|p| {
                 let mut p = p.clone();
-                p.capabilities.retain(|r| r.id() != id);
+                p.fragments.retain(|r| r.id() != id);
                 p
             })
             .collect();
 
-        s.session.stage(StagedOp::DeleteCapability {
+        s.session.stage(StagedOp::DeleteFragment {
             layer,
             id: id.to_string(),
         })?;
         let mut emptied = Vec::new();
         for p in cleaned {
-            if p.capabilities.is_empty() && p.guidance.is_none() {
+            if p.fragments.is_empty() && p.guidance.is_none() {
                 emptied.push(p.name.clone());
             }
             let player = s.session.profile_layer(&p.name).unwrap_or(Layer::Global);
@@ -548,21 +556,21 @@ fn handle_cap_delete(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
                 .collect::<Vec<_>>()
                 .join(", ");
             let now_has = if emptied.len() == 1 {
-                "now has no capabilities"
+                "now has no fragments"
             } else {
-                "now have no capabilities"
+                "now have no fragments"
             };
             msg.push_str(&format!(" ({e} {now_has})"));
         }
     }
 
     match library_now(state) {
-        Ok(lib) => Resp::html(views::cap_result(&lib, &msg)),
+        Ok(lib) => Resp::html(views::fragment_result(&lib, &msg)),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
-fn handle_cap_duplicate(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
+fn handle_fragment_duplicate(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let res = state
         .lock()
         .unwrap()
@@ -572,7 +580,7 @@ fn handle_cap_duplicate(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
             to_layer: Layer::Global,
         });
     match res.and_then(|()| library_now(state)) {
-        Ok(lib) => Resp::html(views::cap_result(
+        Ok(lib) => Resp::html(views::fragment_result(
             &lib,
             &format!("duplicated “{id}” into your library"),
         )),
@@ -596,7 +604,7 @@ fn handle_profile_new(state: &Arc<Mutex<StudioState>>) -> Resp {
 // --- starter packs -----------------------------------------------------------
 
 /// `GET /packs` — the starter-pack gallery (swapped into `#main`). Reachable from
-/// the welcome screen and the Capabilities tab's "Add from packs" button.
+/// the welcome screen and the Fragments tab's "Add from packs" button.
 fn handle_packs(state: &Arc<Mutex<StudioState>>) -> Resp {
     let snap = state.lock().unwrap().snapshot();
     match state::pack_views(&snap) {
@@ -708,7 +716,7 @@ fn handle_profile_disable(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
 fn handle_profile_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let pairs = state::parse_pairs(&req.body);
     let profile = match state::profile_from_form(&pairs) {
-        // A profile needs a name (and ≥1 capability). On failure, stay in the
+        // A profile needs a name (and ≥1 fragment). On failure, stay in the
         // editor with the draft preserved and the reason shown inline — never
         // replace the whole form with a bare error.
         Ok(p) => p,
@@ -733,7 +741,7 @@ fn handle_profile_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
 }
 
 /// Re-render the profile editor with the in-progress draft preserved and an
-/// inline error (missing name / no capabilities), so a failed save keeps the
+/// inline error (missing name / no fragments), so a failed save keeps the
 /// user in the form rather than dropping them onto a bare error banner.
 fn profile_editor_with_error(
     state: &Arc<Mutex<StudioState>>,
@@ -770,26 +778,21 @@ fn handle_editor_preview(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
 }
 
 /// Inline cap create from the profile editor (POST /profiles/draft): stage the
-/// new capability, then re-render the editor with the draft preserved and the
+/// new fragment, then re-render the editor with the draft preserved and the
 /// new cap added + checked.
 fn handle_profile_draft(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let pairs = state::parse_pairs(&req.body);
-    let Some((cap, layer)) = state::inline_capability_from_form(&pairs) else {
+    let Some((cap, layer)) = state::inline_fragment_from_form(&pairs) else {
         return Resp::html(views::error_fragment(
-            "give the new capability a name before adding it",
+            "give the new fragment a name before adding it",
         ));
     };
     let new_id = cap.id.clone();
-    if let Err(e) = state
-        .lock()
-        .unwrap()
-        .session
-        .stage(StagedOp::EditCapability {
-            layer,
-            id: new_id.clone(),
-            cap: Box::new(cap),
-        })
-    {
+    if let Err(e) = state.lock().unwrap().session.stage(StagedOp::EditFragment {
+        layer,
+        id: new_id.clone(),
+        cap: Box::new(cap),
+    }) {
         return Resp::html(views::error_fragment(&e.to_string()));
     }
     // Re-render the editor preserving the in-progress profile + the new cap.
@@ -799,10 +802,10 @@ fn handle_profile_draft(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
     let mut draft = state::draft_profile_from_form(&pairs);
-    if !draft.capabilities.iter().any(|r| r.id() == new_id) {
+    if !draft.fragments.iter().any(|r| r.id() == new_id) {
         draft
-            .capabilities
-            .push(crate::profile::CapabilityRef::Id(new_id));
+            .fragments
+            .push(crate::profile::FragmentRef::Id(new_id));
     }
     let is_new = state::parse_pairs(&req.body)
         .iter()
@@ -849,7 +852,7 @@ fn profile_preview_or_empty(
             profile_label: profile.name.clone(),
             binding: BindingState::None,
             context_summary: String::new(),
-            cap_count: 0,
+            fragment_count: 0,
             overlay: String::new(),
             caps: Vec::new(),
             note: Some(format!("preview error: {e}")),
@@ -1110,7 +1113,7 @@ mod tests {
     }
 
     fn state_for(repo: &std::path::Path, cfg_toml: Option<&str>) -> Arc<Mutex<StudioState>> {
-        // Capabilities and profiles are global-only, so the fixture's config is
+        // Fragments and profiles are global-only, so the fixture's config is
         // authored into a global dir (a subdir of the repo tempdir, cleaned up
         // with it) and the session is opened with that global layer.
         let gdir = repo.join("global");
@@ -1210,7 +1213,7 @@ mod tests {
         assert!(body.contains("rosita studio"));
         // The shell renders the Profiles tab (dashboard) by default.
         assert!(body.contains("Profiles"));
-        assert!(body.contains("Capabilities"));
+        assert!(body.contains("Fragments"));
     }
 
     #[test]
@@ -1249,7 +1252,7 @@ mod tests {
             ),
         );
         assert_eq!(r.status, 200);
-        // Applied the recommended Rust pack: its 9 capabilities are duplicated and
+        // Applied the recommended Rust pack: its 9 fragments are duplicated and
         // its profile is created (9 + 1 staged ops).
         assert_eq!(st.lock().unwrap().session.ops().len(), 10);
         let body = String::from_utf8(r.body).unwrap();
@@ -1332,8 +1335,8 @@ mod tests {
 
     #[test]
     fn welcome_hidden_once_a_profile_exists() {
-        let cfg = "[[capabilities]]\nid = \"rc\"\nguidance = \"Use clippy.\"\n\n\
-                   [[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\"]\n";
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"Use clippy.\"\n\n\
+                   [[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let r = route(&st, &req("GET", "/tab/profiles", "", &[HOST, COOKIE], ""));
@@ -1358,13 +1361,13 @@ mod tests {
     }
 
     #[test]
-    fn profile_detail_shows_per_capability_cards() {
-        let cfg = "[[capabilities]]\n\
+    fn profile_detail_shows_per_fragment_cards() {
+        let cfg = "[[fragments]]\n\
              id = \"rc\"\n\
              description = \"Rust conv\"\n\
              guidance = \"Use clippy here.\"\n\
              \n\
-             [[capabilities]]\n\
+             [[fragments]]\n\
              id = \"tc\"\n\
              description = \"Terse\"\n\
              guidance = \"Be terse.\"\n\
@@ -1372,18 +1375,18 @@ mod tests {
              [[profiles]]\n\
              name = \"rust\"\n\
              targets = [\"rust\"]\n\
-             capabilities = [\"rc\", \"tc\"]\n";
+             fragments = [\"rc\", \"tc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
         // Selecting a profile renders the detail: one expandable card per
-        // composed capability, each carrying its rendered guidance.
+        // composed fragment, each carrying its rendered guidance.
         let body = body_of(route(
             &st,
             &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
         ));
         assert!(body.contains("<h1>rust</h1>")); // the detail names the profile
-        assert!(body.contains("cap-detail")); // expandable cards
+        assert!(body.contains("fragment-detail")); // expandable cards
         assert!(body.contains("Rust conv") && body.contains("Use clippy here."));
         assert!(body.contains("Terse") && body.contains("Be terse."));
         // The rendered/raw toggle is gone in the new design.
@@ -1419,22 +1422,22 @@ mod tests {
     }
 
     #[test]
-    fn create_capability_then_diff_then_apply_writes_disk() {
+    fn create_fragment_then_diff_then_apply_writes_disk() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
 
-        // Stage a new capability via the editor POST.
+        // Stage a new fragment via the editor POST.
         let saved = body_of(route(
             &st,
             &req(
                 "POST",
-                "/capabilities",
+                "/fragments",
                 "",
                 &[HOST, COOKIE, ORIGIN],
                 "name=rc&kind=markdown&guidance=Use+clippy&scope=repo&visibility=public",
             ),
         ));
-        assert!(saved.contains("staged capability"));
+        assert!(saved.contains("staged fragment"));
 
         // Review shows the staged addition against the (empty) on-disk bytes.
         let diff = body_of(route(&st, &req("GET", "/diff", "", &[HOST, COOKIE], "")));
@@ -1458,20 +1461,14 @@ mod tests {
     }
 
     #[test]
-    fn delete_capability_stages_and_applies_removal() {
-        let cfg = "[[capabilities]]\nid = \"rc\"\nguidance = \"keep clippy\"\n";
+    fn delete_fragment_stages_and_applies_removal() {
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"keep clippy\"\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
         let r = body_of(route(
             &st,
-            &req(
-                "DELETE",
-                "/capabilities/rc",
-                "",
-                &[HOST, COOKIE, ORIGIN],
-                "",
-            ),
+            &req("DELETE", "/fragments/rc", "", &[HOST, COOKIE, ORIGIN], ""),
         ));
         assert!(r.contains("staged deletion"));
 
@@ -1484,30 +1481,24 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_composed_capability_warns_and_cleans_up_the_profile() {
-        let cfg = "[[capabilities]]\nid = \"rc\"\nguidance = \"x\"\n\
-                   \n[[capabilities]]\nid = \"keep\"\nguidance = \"y\"\n\
-                   \n[[profiles]]\nname = \"p\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\", \"keep\"]\n";
+    fn deleting_a_composed_fragment_warns_and_cleans_up_the_profile() {
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\
+                   \n[[fragments]]\nid = \"keep\"\nguidance = \"y\"\n\
+                   \n[[profiles]]\nname = \"p\"\ntargets = [\"rust\"]\nfragments = [\"rc\", \"keep\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
         // The edit dialog warns up front that the cap is composed by a profile.
         let dialog = body_of(route(
             &st,
-            &req("GET", "/capabilities/rc/edit", "", &[HOST, COOKIE], ""),
+            &req("GET", "/fragments/rc/edit", "", &[HOST, COOKIE], ""),
         ));
         assert!(dialog.contains("composed by") && dialog.contains("“p”"));
 
         // Deleting it stages the removal AND cleans the reference, and says so.
         let r = body_of(route(
             &st,
-            &req(
-                "DELETE",
-                "/capabilities/rc",
-                "",
-                &[HOST, COOKIE, ORIGIN],
-                "",
-            ),
+            &req("DELETE", "/fragments/rc", "", &[HOST, COOKIE, ORIGIN], ""),
         ));
         assert!(r.contains("staged deletion"));
         assert!(r.contains("removed it from") && r.contains("“p”"));
@@ -1523,7 +1514,7 @@ mod tests {
             "no dangling ref; got:\n{on_disk}"
         );
         assert!(on_disk.contains("id = \"keep\""));
-        assert!(on_disk.contains("capabilities = [\"keep\"]"));
+        assert!(on_disk.contains("fragments = [\"keep\"]"));
     }
 
     #[test]
@@ -1534,7 +1525,7 @@ mod tests {
             &st,
             &req(
                 "POST",
-                "/capabilities/rust-conventions/duplicate",
+                "/fragments/rust-conventions/duplicate",
                 "",
                 &[HOST, COOKIE, ORIGIN],
                 "",
@@ -1546,12 +1537,12 @@ mod tests {
     }
 
     #[test]
-    fn profile_save_enforces_at_least_one_capability() {
-        let cfg = "[[capabilities]]\nid = \"rc\"\nguidance = \"x\"\n";
+    fn profile_save_enforces_at_least_one_fragment() {
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
-        // No capability selected → rejected with the ≥1 rule, nothing staged.
+        // No fragment selected → rejected with the ≥1 rule, nothing staged.
         let err = body_of(route(
             &st,
             &req(
@@ -1562,9 +1553,9 @@ mod tests {
                 "name=p&targets=rust",
             ),
         ));
-        assert!(err.contains("at least one capability"));
+        assert!(err.contains("at least one fragment"));
 
-        // With a capability → staged.
+        // With a fragment → staged.
         let ok = body_of(route(
             &st,
             &req(
@@ -1572,7 +1563,7 @@ mod tests {
                 "/profiles",
                 "",
                 &[HOST, COOKIE, ORIGIN],
-                "name=p&targets=rust&capabilities=rc&scope=repo",
+                "name=p&targets=rust&fragments=rc&scope=repo",
             ),
         ));
         assert!(ok.contains("staged profile"));
@@ -1580,11 +1571,11 @@ mod tests {
 
     #[test]
     fn profile_save_requires_a_name() {
-        let cfg = "[[capabilities]]\nid = \"rc\"\nguidance = \"x\"\n";
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
-        // A capability but no name → rejected; the editor comes back with the
+        // A fragment but no name → rejected; the editor comes back with the
         // reason inline (not a bare error banner), and nothing is staged.
         let err = body_of(route(
             &st,
@@ -1593,7 +1584,7 @@ mod tests {
                 "/profiles",
                 "",
                 &[HOST, COOKIE, ORIGIN],
-                "new=1&targets=rust&capabilities=rc&scope=repo",
+                "new=1&targets=rust&fragments=rc&scope=repo",
             ),
         ));
         assert!(err.contains("name is required")); // inline error
@@ -1609,8 +1600,8 @@ mod tests {
     #[test]
     fn profiles_tab_does_not_auto_select() {
         // A rust profile that *would* be the bound candidate in this repo.
-        let cfg = "[[capabilities]]\nid = \"rc\"\nguidance = \"x\"\n\
-             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\"]\n";
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\
+             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
@@ -1621,21 +1612,21 @@ mod tests {
         // The rail lists the profile, but the main pane shows the pick prompt —
         // no profile is auto-selected, so no detail/cards render.
         assert!(body.contains("Select a profile to see what it composes."));
-        assert!(!body.contains("cap-detail"));
+        assert!(!body.contains("fragment-detail"));
         assert!(!body.contains("<h1>rust</h1>"));
         // Explicitly selecting one still renders its detail.
         let detail = body_of(route(
             &st,
             &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
         ));
-        assert!(detail.contains("<h1>rust</h1>") && detail.contains("cap-detail"));
+        assert!(detail.contains("<h1>rust</h1>") && detail.contains("fragment-detail"));
     }
 
     #[test]
     fn diff_surfaces_leak_warning_for_public_config() {
-        // A capability whose guidance carries a machine-specific literal in the
+        // A fragment whose guidance carries a machine-specific literal in the
         // public (global) config.toml is leak-linted before apply.
-        let cfg = "[[capabilities]]\n\
+        let cfg = "[[fragments]]\n\
              id = \"deploy\"\n\
              command = \"echo hi\"\n\
              guidance = \"ssh to build-box.corp.example.com\"\n";
@@ -1649,30 +1640,30 @@ mod tests {
     }
 
     #[test]
-    fn capability_editor_form_loads_for_palette_and_owned() {
-        let cfg = "[[capabilities]]\nid = \"mine\"\nguidance = \"owned\"\n";
+    fn fragment_editor_form_loads_for_palette_and_owned() {
+        let cfg = "[[fragments]]\nid = \"mine\"\nguidance = \"owned\"\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
         // Owned cap → editable form.
         let owned = body_of(route(
             &st,
-            &req("GET", "/capabilities/mine/edit", "", &[HOST, COOKIE], ""),
+            &req("GET", "/fragments/mine/edit", "", &[HOST, COOKIE], ""),
         ));
-        assert!(owned.contains("Edit capability"));
+        assert!(owned.contains("Edit fragment"));
         // Editing offers Save (in place) + Save as a copy + Delete.
         assert!(owned.contains("Save"));
         assert!(owned.contains("Save as a copy"));
         assert!(owned.contains("Delete"));
-        assert!(owned.contains("/capabilities/mine"));
+        assert!(owned.contains("/fragments/mine"));
 
         // Opened from a profile's detail, the form carries a return_profile so
-        // Save re-renders that profile rather than the Capabilities tab.
+        // Save re-renders that profile rather than the Fragments tab.
         let from_profile = body_of(route(
             &st,
             &req(
                 "GET",
-                "/capabilities/mine/edit",
+                "/fragments/mine/edit",
                 "profile=rust",
                 &[HOST, COOKIE],
                 "",
@@ -1686,60 +1677,60 @@ mod tests {
             &st,
             &req(
                 "GET",
-                "/capabilities/rust-conventions/view",
+                "/fragments/rust-conventions/view",
                 "",
                 &[HOST, COOKIE],
                 "",
             ),
         ));
-        assert!(palette.contains("Palette capability"));
+        assert!(palette.contains("Palette fragment"));
         assert!(palette.contains("Duplicate"));
     }
 
     #[test]
-    fn script_capability_is_editable_not_advanced() {
+    fn script_fragment_is_editable_not_advanced() {
         // A command cap with no guidance template opens in the editor (script
         // field + highlight overlay), not the read-only "advanced — edit in TOML"
         // dialog. (Pairing a command with a guidance template is what makes a cap
         // advanced; a plain script is fully editable.)
-        let cfg = "[[capabilities]]\nid = \"host\"\ndescription = \"Host\"\n\
+        let cfg = "[[fragments]]\nid = \"host\"\ndescription = \"Host\"\n\
              script_lang = \"bash\"\ncommand = \"uname -a\"\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let body = body_of(route(
             &st,
-            &req("GET", "/capabilities/host/edit", "", &[HOST, COOKIE], ""),
+            &req("GET", "/fragments/host/edit", "", &[HOST, COOKIE], ""),
         ));
-        assert!(body.contains("Edit capability"));
-        assert!(!body.contains("Advanced capability"));
+        assert!(body.contains("Edit fragment"));
+        assert!(!body.contains("Advanced fragment"));
         // The highlight-overlay script field is present, prefilled with the command.
         assert!(body.contains("code-edit") && body.contains("name=\"command\""));
         assert!(body.contains("uname -a"));
     }
 
     #[test]
-    fn dynamic_cap_without_cache_shows_run_prompt() {
+    fn dynamic_fragment_without_cache_shows_run_prompt() {
         // A provider cap doesn't run in the read-only preview; with nothing cached
         // the overlay drops its section, but the profile detail keeps the card and
         // offers a centered "Run" prompt (so it's still listed, openable, runnable).
-        let cfg = "[[capabilities]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
-             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"host\"]\n";
+        let cfg = "[[fragments]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
+             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"host\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let body = body_of(route(
             &st,
             &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
         ));
-        assert!(body.contains("cap-detail")); // the card is present
-        assert!(body.contains("cap-run-prompt") && body.contains("Run script")); // centered prompt
-        assert!(body.contains("/capabilities/host/run?profile=rust")); // wired to run
+        assert!(body.contains("fragment-detail")); // the card is present
+        assert!(body.contains("fragment-run-prompt") && body.contains("Run script")); // centered prompt
+        assert!(body.contains("/fragments/host/run?profile=rust")); // wired to run
     }
 
     #[test]
     fn run_all_executes_dynamic_caps_live() {
         // The `host` provider is a safe built-in probe, so a Live run produces output.
-        let cfg = "[[capabilities]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
-             \n[[profiles]]\nname = \"m\"\ntargets = [\"rust\"]\ncapabilities = [\"host\"]\n";
+        let cfg = "[[fragments]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
+             \n[[profiles]]\nname = \"m\"\ntargets = [\"rust\"]\nfragments = [\"host\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
@@ -1748,7 +1739,7 @@ mod tests {
             &st,
             &req("GET", "/profiles/m/select", "", &[HOST, COOKIE], ""),
         ));
-        assert!(before.contains("cap-run-prompt") && !before.contains("cap-output"));
+        assert!(before.contains("fragment-run-prompt") && !before.contains("fragment-output"));
 
         // Run all → live render executes the provider and shows verbatim output.
         let after = body_of(route(
@@ -1756,7 +1747,7 @@ mod tests {
             &req("POST", "/profiles/m/run", "", &[HOST, COOKIE, ORIGIN], ""),
         ));
         assert!(!after.contains("runs at render"));
-        assert!(after.contains("cap-output")); // rendered as preformatted output
+        assert!(after.contains("fragment-output")); // rendered as preformatted output
 
         // Run is state-changing → CSRF-guarded (no Origin → rejected).
         assert_eq!(
@@ -1770,9 +1761,9 @@ mod tests {
     }
 
     #[test]
-    fn per_card_run_executes_one_capability() {
-        let cfg = "[[capabilities]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
-             \n[[profiles]]\nname = \"m\"\ntargets = [\"rust\"]\ncapabilities = [\"host\"]\n";
+    fn per_card_run_executes_one_fragment() {
+        let cfg = "[[fragments]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
+             \n[[profiles]]\nname = \"m\"\ntargets = [\"rust\"]\nfragments = [\"host\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
@@ -1781,20 +1772,19 @@ mod tests {
             &st,
             &req(
                 "POST",
-                "/capabilities/host/run",
+                "/fragments/host/run",
                 "profile=m",
                 &[HOST, COOKIE, ORIGIN],
                 "",
             ),
         ));
         assert!(!after.contains("runs at render"));
-        assert!(after.contains("cap-output"));
+        assert!(after.contains("fragment-output"));
     }
 
     #[test]
-    fn save_as_copy_creates_a_new_capability_under_a_new_name() {
-        let cfg =
-            "[[capabilities]]\nid = \"rc\"\ndescription = \"Rust conv\"\nguidance = \"Old.\"\n";
+    fn save_as_copy_creates_a_new_fragment_under_a_new_name() {
+        let cfg = "[[fragments]]\nid = \"rc\"\ndescription = \"Rust conv\"\nguidance = \"Old.\"\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
@@ -1803,7 +1793,7 @@ mod tests {
             &st,
             &req(
                 "POST",
-                "/capabilities",
+                "/fragments",
                 "as=copy",
                 &[HOST, COOKIE, ORIGIN],
                 "id=rc&name=Rust+strict&kind=markdown&guidance=New+body&scope=repo&visibility=public",
@@ -1812,7 +1802,7 @@ mod tests {
         assert!(body.contains("saved copy"));
 
         // Apply and confirm the copy landed under a new id with the original
-        // capability left intact.
+        // fragment left intact.
         body_of(route(
             &st,
             &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
@@ -1827,7 +1817,7 @@ mod tests {
             &st,
             &req(
                 "POST",
-                "/capabilities",
+                "/fragments",
                 "as=copy",
                 &[HOST, COOKIE, ORIGIN],
                 "id=rc&name=rc&kind=markdown&guidance=x&scope=repo",
@@ -1837,27 +1827,27 @@ mod tests {
     }
 
     #[test]
-    fn editing_a_cap_from_a_profile_returns_the_profile_detail() {
-        let cfg = "[[capabilities]]\n\
+    fn editing_a_fragment_from_a_profile_returns_the_profile_detail() {
+        let cfg = "[[fragments]]\n\
              id = \"rc\"\nguidance = \"Old guidance.\"\n\
-             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\"]\n";
+             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
         // Saving with return_profile set re-renders the profile's detail (the
-        // updated guidance shows in a cap card) rather than the Capabilities tab.
+        // updated guidance shows in a cap card) rather than the Fragments tab.
         let body = body_of(route(
             &st,
             &req(
                 "POST",
-                "/capabilities",
+                "/fragments",
                 "",
                 &[HOST, COOKIE, ORIGIN],
                 "id=rc&return_profile=rust&name=rc&kind=markdown&guidance=Fresh+guidance&scope=repo",
             ),
         ));
         assert!(body.contains("<h1>rust</h1>")); // the profile detail, not the caps tab
-        assert!(body.contains("cap-detail"));
+        assert!(body.contains("fragment-detail"));
         assert!(body.contains("Fresh guidance"));
         assert!(body.contains("/close")); // modal-close loader appended
     }

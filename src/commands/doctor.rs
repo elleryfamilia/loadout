@@ -82,17 +82,17 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     if prep.config.sources.is_empty() {
         c.line(
             Status::Warn,
-            "no config files found; author capabilities and profiles in ~/.config/rosita/config.toml (or run `rosita studio`)",
+            "no config files found; author fragments and profiles in ~/.config/rosita/config.toml (or run `rosita studio`)",
         );
     } else {
         for s in &prep.config.sources {
             c.line(Status::Ok, format!("loaded config: {}", s.display()));
         }
     }
-    // Capabilities/profiles authored in a repo layer (global-only mistake).
+    // Fragments/profiles authored in a repo layer (global-only mistake).
     check_repo_global_only(&mut c, &prep.repo_base);
-    // Profiles referencing capabilities that don't exist (e.g. a hand-deleted cap).
-    check_dangling_capability_refs(&mut c, &prep.config);
+    // Profiles referencing fragments that don't exist (e.g. a hand-deleted cap).
+    check_dangling_fragment_refs(&mut c, &prep.config);
     // Allowlist/denylist consistency.
     check_env_policy(&mut c, &prep.config);
     // Private-data leak lint over public config layers.
@@ -243,20 +243,20 @@ fn check_public_leaks(c: &mut Checks, prep: &super::Prepared) {
     }
 }
 
-/// A profile that references a capability id not in the library renders nothing
+/// A profile that references a fragment id not in the library renders nothing
 /// for that entry (compose silently skips it). Surface the dangling reference —
-/// it usually means a capability was hand-deleted without cleaning up the
+/// it usually means a fragment was hand-deleted without cleaning up the
 /// profile (studio's delete does this cleanup automatically).
-fn check_dangling_capability_refs(c: &mut Checks, cfg: &config::Config) {
+fn check_dangling_fragment_refs(c: &mut Checks, cfg: &config::Config) {
     let known: std::collections::HashSet<&str> =
-        cfg.capabilities.iter().map(|x| x.id.as_str()).collect();
+        cfg.fragments.iter().map(|x| x.id.as_str()).collect();
     for p in &cfg.profiles {
-        for r in &p.capabilities {
+        for r in &p.fragments {
             if !known.contains(r.id()) {
                 c.line(
                     Status::Warn,
                     format!(
-                        "profile '{}' references unknown capability '{}' (it renders nothing — remove it or define the capability)",
+                        "profile '{}' references unknown fragment '{}' (it renders nothing — remove it or define the fragment)",
                         p.name,
                         r.id()
                     ),
@@ -266,7 +266,7 @@ fn check_dangling_capability_refs(c: &mut Checks, cfg: &config::Config) {
     }
 }
 
-/// Capabilities and profiles are global-only. A repo `config.toml`/`local.toml`
+/// Fragments and profiles are global-only. A repo `config.toml`/`local.toml`
 /// that declares them is silently ignored by the loader (so the mistake is
 /// invisible at render time) — surface it here. Scans the raw file because the
 /// stripped tables never reach the merged config.
@@ -296,9 +296,11 @@ fn repo_declares_caps_or_profiles(path: &Path) -> Option<&'static str> {
             .and_then(|v| v.as_array())
             .is_some_and(|a| !a.is_empty())
     };
-    match (has("capabilities"), has("profiles")) {
-        (true, true) => Some("capabilities and profiles"),
-        (true, false) => Some("capabilities"),
+    // Accept the pre-rename `[[capabilities]]` key alongside `[[fragments]]`.
+    let has_fragments = has("fragments") || has("capabilities");
+    match (has_fragments, has("profiles")) {
+        (true, true) => Some("fragments and profiles"),
+        (true, false) => Some("fragments"),
         (false, true) => Some("profiles"),
         (false, false) => None,
     }

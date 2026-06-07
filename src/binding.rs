@@ -125,7 +125,7 @@ pub fn write(ctx: &Context, b: &Binding) -> Result<()> {
 // --- repo scope: the `[binding]` table in `.rosita/local.toml` ---------------
 
 /// Lenient view over `local.toml` that extracts only `[binding]` (every other
-/// table — `host_classes`, `capability_params`, … — is ignored).
+/// table — `host_classes`, `fragment_params`, … — is ignored).
 #[derive(Debug, Default, Deserialize)]
 struct LocalBindingFile {
     #[serde(default)]
@@ -232,7 +232,7 @@ mod tests {
         // Hand-authored private layer with a comment and an unrelated table.
         std::fs::write(
             config::repo_local_path(repo.path()),
-            "# private notes\n[capability_params.ssh]\nuser = \"deploy\"\n",
+            "# private notes\n[fragment_params.ssh]\nuser = \"deploy\"\n",
         )
         .unwrap();
 

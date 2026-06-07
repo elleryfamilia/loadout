@@ -9,12 +9,12 @@
 use std::path::PathBuf;
 
 use crate::adapters;
-use crate::capability::{palette, Capability, Layer, Risk};
 use crate::config::Config;
 use crate::context::{Context, GitContext, Scope};
 use crate::dynamic::DynamicMode;
+use crate::fragment::{palette, Fragment, Layer, Risk};
 use crate::pack::{self, Pack};
-use crate::profile::{self, CapabilityRef, ProfileConfig, Selection};
+use crate::profile::{self, FragmentRef, ProfileConfig, Selection};
 use crate::render::{self, RenderRequest};
 use crate::studio::edit::{Session, StagedOp};
 
@@ -111,25 +111,25 @@ pub struct PreviewOutcome {
     pub binding: BindingState,
     /// Short human summary of the simulated context, e.g. `rust · repo`.
     pub context_summary: String,
-    /// How many capabilities actually render for `agent` (after agent gating) —
+    /// How many fragments actually render for `agent` (after agent gating) —
     /// the provenance breadcrumb's count, truthful to what's in the overlay.
-    pub cap_count: usize,
+    pub fragment_count: usize,
     /// The rendered overlay markdown (header + body). Drives the profile
     /// editor's live preview.
     pub overlay: String,
-    /// Per-capability rendered guidance — the Profiles-tab detail's expandable
-    /// cards. One entry per capability that contributes a section to the overlay.
+    /// Per-fragment rendered guidance — the Profiles-tab detail's expandable
+    /// cards. One entry per fragment that contributes a section to the overlay.
     pub caps: Vec<PreviewCap>,
     /// A human note when there's no single profile (empty / ambiguous).
     pub note: Option<String>,
 }
 
-/// One capability's rendered guidance for the Profiles-tab detail cards.
+/// One fragment's rendered guidance for the Profiles-tab detail cards.
 pub struct PreviewCap {
     pub id: String,
     pub title: String,
     pub risk: Risk,
-    /// The capability's curated icon, if any (else the card uses a default).
+    /// The fragment's curated icon, if any (else the card uses a default).
     pub icon: Option<String>,
     /// Rendered guidance markdown (or the skip note).
     pub markdown: String,
@@ -137,23 +137,23 @@ pub struct PreviewCap {
     pub dynamic: bool,
     /// A dynamic command was skipped (e.g. `allow_exec = false`; markdown is the note).
     pub skipped: bool,
-    /// True when this id is an editable library capability (not a synthetic
-    /// inline section) — gates the card's "Edit capability" affordance.
+    /// True when this id is an editable library fragment (not a synthetic
+    /// inline section) — gates the card's "Edit fragment" affordance.
     pub editable: bool,
     /// A dynamic cap that hasn't produced output in this (read-only) preview —
     /// the body is a "runs at render" placeholder, and a "Run" affordance shows.
     pub pending: bool,
 }
 
-/// One capability row for the library view.
-pub struct CapView {
+/// One fragment row for the library view.
+pub struct FragmentView {
     pub id: String,
     pub title: String,
-    /// A one-line plain-text summary of what the capability says (the first
+    /// A one-line plain-text summary of what the fragment says (the first
     /// meaningful line of its guidance, or a kind-based phrase for dynamic caps).
     pub summary: Option<String>,
     pub kind: &'static str,
-    /// Primary category for grouping the library (the capability's first tag).
+    /// Primary category for grouping the library (the fragment's first tag).
     pub category: Option<String>,
     /// Optional curated icon name.
     pub icon: Option<String>,
@@ -161,13 +161,13 @@ pub struct CapView {
     pub script_lang: Option<String>,
     /// True when authored in a `*local.toml` layer (private / gitignored).
     pub private: bool,
-    /// The capability's risk (drives the row's risk spine).
+    /// The fragment's risk (drives the row's risk spine).
     pub risk: Risk,
     /// Composed into the current preview overlay.
     pub active: bool,
 }
 
-/// Whether a profile's referenced capability id resolves to something that
+/// Whether a profile's referenced fragment id resolves to something that
 /// actually contributes to the overlay. Composition only pulls *owned* caps;
 /// a palette ref renders nothing until duplicated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,7 +180,7 @@ pub enum AtomState {
     Unknown,
 }
 
-/// One "atom dot" on a profile card: a referenced capability and how it resolves.
+/// One "atom dot" on a profile card: a referenced fragment and how it resolves.
 pub struct AtomDot {
     pub id: String,
     pub risk: Risk,
@@ -195,15 +195,15 @@ pub struct ProfileView {
     pub candidate: bool,
     /// When true the profile is an off-switch off (never selected/composed).
     pub disabled: bool,
-    pub capabilities: Vec<String>,
+    pub fragments: Vec<String>,
     /// Resolved composition atoms, in declared order (drives the card's dots).
     pub atoms: Vec<AtomDot>,
 }
 
 /// The whole left-pane library snapshot for a context.
 pub struct LibraryView {
-    pub yours: Vec<CapView>,
-    pub palette: Vec<CapView>,
+    pub yours: Vec<FragmentView>,
+    pub palette: Vec<FragmentView>,
     pub profiles: Vec<ProfileView>,
 }
 
@@ -263,7 +263,7 @@ pub fn render_profile(
 }
 
 /// Render an arbitrary (possibly unsaved/draft) profile composed for `agent`.
-/// The context is synthesized from the profile's own targets so its capabilities
+/// The context is synthesized from the profile's own targets so its fragments
 /// gate as intended. Used by the Profiles-tab preview and the editor's live draft.
 /// `mode` gates dynamic execution (ReadOnly = placeholder cards; Live = run now).
 pub fn render_profile_config(
@@ -274,8 +274,7 @@ pub fn render_profile_config(
 ) -> crate::Result<PreviewOutcome> {
     let cfg = staged_config(snap)?;
     let ctx = context_for_profile(&snap.base_context, profile);
-    let composition =
-        profile::compose_profile(&ctx, profile, &cfg.capabilities, &cfg.capability_params);
+    let composition = profile::compose_profile(&ctx, profile, &cfg.fragments, &cfg.fragment_params);
 
     let agent_id = if agent.is_empty() {
         cfg.default_agent.clone()
@@ -294,30 +293,27 @@ pub fn render_profile_config(
         generated_at: now_rfc3339(),
         dynamic: mode,
     })?;
-    let cap_count = composition
-        .capabilities
+    let fragment_count = composition
+        .fragments
         .iter()
-        .filter(|rc| rc.capability.applies_to_agent(&agent_id))
+        .filter(|rc| rc.fragment.applies_to_agent(&agent_id))
         .count();
-    // Per-capability cards. Built from the *composition* (every cap the profile
+    // Per-fragment cards. Built from the *composition* (every cap the profile
     // pulls in, agent-filtered) rather than only the rendered sections: a dynamic
     // cap that resolves to nothing in ReadOnly (its provider/command doesn't run
     // and there's no cache) is dropped from the overlay, which would hide its
     // card. Such caps get a "runs at render" placeholder so the preview still
     // lists — and can open/edit — them. Each cap's icon/editability is looked up
     // from the staged library (inline/synthetic caps fall back to a default).
-    let rendered: std::collections::HashMap<&str, _> = out
-        .capabilities
-        .iter()
-        .map(|c| (c.id.as_str(), c))
-        .collect();
+    let rendered: std::collections::HashMap<&str, _> =
+        out.fragments.iter().map(|c| (c.id.as_str(), c)).collect();
     let caps: Vec<PreviewCap> = composition
-        .capabilities
+        .fragments
         .iter()
-        .filter(|rc| rc.capability.applies_to_agent(&agent_id))
+        .filter(|rc| rc.fragment.applies_to_agent(&agent_id))
         .filter_map(|rc| {
-            let cap = &rc.capability;
-            let owned = cfg.capabilities.iter().find(|x| x.id == cap.id);
+            let cap = &rc.fragment;
+            let owned = cfg.fragments.iter().find(|x| x.id == cap.id);
             let icon = owned.and_then(|x| x.icon.clone());
             let editable = owned.is_some();
             if let Some(c) = rendered.get(cap.id.as_str()) {
@@ -358,7 +354,7 @@ pub fn render_profile_config(
             BindingState::Bound(profile.name.clone())
         },
         context_summary: context_summary(&ctx),
-        cap_count,
+        fragment_count,
         overlay: out.content,
         caps,
         note: profile
@@ -367,19 +363,19 @@ pub fn render_profile_config(
     })
 }
 
-/// Execute one dynamic capability **now** (Live), in `profile_name`'s context, so
+/// Execute one dynamic fragment **now** (Live), in `profile_name`'s context, so
 /// its (redacted) output lands in the on-disk cache. A subsequent ReadOnly
 /// preview then surfaces that cached output. This is the per-card "Run" action;
 /// execution is gated by `allow_exec` (a disabled command leaves the cache empty
 /// and the re-render shows the skip note). Resolving a non-dynamic id is a
 /// harmless no-op.
-pub fn run_capability(snap: &Snapshot, profile_name: &str, cap_id: &str) -> crate::Result<()> {
+pub fn run_fragment(snap: &Snapshot, profile_name: &str, fragment_id: &str) -> crate::Result<()> {
     let cfg = staged_config(snap)?;
     let cap = cfg
-        .capabilities
+        .fragments
         .iter()
-        .find(|c| c.id == cap_id)
-        .ok_or_else(|| anyhow::anyhow!("unknown capability '{cap_id}'"))?;
+        .find(|c| c.id == fragment_id)
+        .ok_or_else(|| anyhow::anyhow!("unknown fragment '{fragment_id}'"))?;
     let ctx = match cfg.profiles.iter().find(|p| p.name == profile_name) {
         Some(p) => context_for_profile(&snap.base_context, p),
         None => snap.base_context.clone(),
@@ -396,7 +392,7 @@ pub fn run_capability(snap: &Snapshot, profile_name: &str, cap_id: &str) -> crat
     Ok(())
 }
 
-/// Synthesize a context from a profile's targets so its capabilities gate as
+/// Synthesize a context from a profile's targets so its fragments gate as
 /// intended when previewed (a `machine`-only profile previews as machine scope).
 fn context_for_profile(base: &Context, profile: &ProfileConfig) -> Context {
     let mut ctx = base.clone();
@@ -438,10 +434,10 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
     };
     let active_ids: Vec<String> = match &selection {
         Selection::Use(p) => {
-            profile::compose_profile(&ctx, p, &cfg.capabilities, &cfg.capability_params)
-                .capabilities
+            profile::compose_profile(&ctx, p, &cfg.fragments, &cfg.fragment_params)
+                .fragments
                 .iter()
-                .map(|rc| rc.capability.id.clone())
+                .map(|rc| rc.fragment.id.clone())
                 .collect()
         }
         _ => vec![],
@@ -449,14 +445,14 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
 
     let tags = ctx.selection_targets();
     let yours = cfg
-        .capabilities
+        .fragments
         .iter()
-        .map(|c| CapView {
+        .map(|c| FragmentView {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
-            category: c.tags.first().cloned(),
+            category: c.category.clone().or_else(|| c.tags.first().cloned()),
             active: active_ids.contains(&c.id),
             title: c.title().to_string(),
-            summary: cap_summary(c),
+            summary: fragment_summary(c),
             icon: c.icon.clone(),
             script_lang: c.script_lang.clone(),
             private: matches!(c.origin, Layer::RepoLocal | Layer::GlobalLocal),
@@ -466,11 +462,11 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
         .collect();
     // The palette (called once; the local `palette` below would shadow the fn).
     let palette_items = palette();
-    // Resolve each profile's capability refs to risk + provenance for the atom
+    // Resolve each profile's fragment refs to risk + provenance for the atom
     // dots: owned (contributes) vs palette-only (named but not duplicated, so it
     // renders nothing) vs unknown. No extra requests — all from the snapshot.
     let owned_risk: std::collections::HashMap<&str, Risk> = cfg
-        .capabilities
+        .fragments
         .iter()
         .map(|c| (c.id.as_str(), c.risk))
         .collect();
@@ -490,16 +486,16 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
     };
     // Palette items not already owned (by id) in your library.
     let owned: std::collections::HashSet<&str> =
-        cfg.capabilities.iter().map(|c| c.id.as_str()).collect();
-    let palette: Vec<CapView> = palette_items
+        cfg.fragments.iter().map(|c| c.id.as_str()).collect();
+    let palette: Vec<FragmentView> = palette_items
         .iter()
         .filter(|c| !owned.contains(c.id.as_str()))
-        .map(|c| CapView {
+        .map(|c| FragmentView {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
-            category: c.tags.first().cloned(),
+            category: c.category.clone().or_else(|| c.tags.first().cloned()),
             active: false,
             title: c.title().to_string(),
-            summary: cap_summary(c),
+            summary: fragment_summary(c),
             icon: c.icon.clone(),
             script_lang: c.script_lang.clone(),
             private: false,
@@ -516,9 +512,9 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
             selected: selected_name.as_deref() == Some(p.name.as_str()),
             candidate: profile::profile_matches_targets(p, &tags),
             disabled: p.disabled,
-            capabilities: p.capabilities.iter().map(|r| r.id().to_string()).collect(),
+            fragments: p.fragments.iter().map(|r| r.id().to_string()).collect(),
             atoms: p
-                .capabilities
+                .fragments
                 .iter()
                 .map(|r| resolve_atom(r.id().to_string()))
                 .collect(),
@@ -533,9 +529,9 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
 }
 
 /// First-launch onboarding readout for a fresh config (no profiles **and** no
-/// own capabilities yet): what rosita detected here, plus a "quick start"
+/// own fragments yet): what rosita detected here, plus a "quick start"
 /// suggestion — a starter profile pre-filled from the detected target and a few
-/// palette capabilities. The palette items are only *suggested*; quick-start
+/// palette fragments. The palette items are only *suggested*; quick-start
 /// duplicates them into your library (staged) so you own and can edit them.
 pub struct Onboarding {
     /// The detected primary stack (`rust`, `node`, …), or `None` when none was
@@ -549,7 +545,7 @@ pub struct Onboarding {
     pub name: String,
     /// Suggested `targets` (the detected target, or empty when none was found).
     pub targets: Vec<String>,
-    /// Palette capability ids the quick-start composes (each duplicated into the
+    /// Palette fragment ids the quick-start composes (each duplicated into the
     /// library on use). Already filtered to real palette ids and de-duplicated.
     pub caps: Vec<String>,
 }
@@ -609,7 +605,7 @@ pub struct PackView {
     /// True when a profile with this pack's name already exists in the staged
     /// config (the card shows an "applied" state instead of an "Apply" button).
     pub applied: bool,
-    /// One atom dot per composed capability (owned vs palette-only vs unknown).
+    /// One atom dot per composed fragment (owned vs palette-only vs unknown).
     pub atoms: Vec<AtomDot>,
 }
 
@@ -624,7 +620,7 @@ pub fn recommended_pack(snap: &Snapshot) -> Option<Pack> {
 }
 
 /// Build the starter-pack gallery for the snapshot's (simulated) context:
-/// recommended packs first, each with its capabilities' atom dots and an
+/// recommended packs first, each with its fragments' atom dots and an
 /// already-applied flag. No probes — purely from the staged snapshot.
 pub fn pack_views(snap: &Snapshot) -> crate::Result<Vec<PackView>> {
     let cfg = staged_config(snap)?;
@@ -632,7 +628,7 @@ pub fn pack_views(snap: &Snapshot) -> crate::Result<Vec<PackView>> {
     let targets = ctx.selection_targets();
 
     let owned_risk: std::collections::HashMap<&str, Risk> = cfg
-        .capabilities
+        .fragments
         .iter()
         .map(|c| (c.id.as_str(), c.risk))
         .collect();
@@ -663,7 +659,7 @@ pub fn pack_views(snap: &Snapshot) -> crate::Result<Vec<PackView>> {
         .map(|p| PackView {
             recommended: targets.iter().any(|t| p.is_recommended_for(t)),
             applied: existing.contains(p.profile_name),
-            atoms: p.caps.iter().map(|c| resolve_atom(c)).collect(),
+            atoms: p.fragments.iter().map(|c| resolve_atom(c)).collect(),
             id: p.id.to_string(),
             name: p.name.to_string(),
             description: p.description.to_string(),
@@ -676,15 +672,15 @@ pub fn pack_views(snap: &Snapshot) -> crate::Result<Vec<PackView>> {
 }
 
 /// Apply a starter pack into the staged session: duplicate each of its palette
-/// capabilities that isn't already owned, then create (or replace) its profile.
+/// fragments that isn't already owned, then create (or replace) its profile.
 /// Everything is staged — the user reviews the diff and Applies like any edit.
 /// Used by both the gallery's per-pack Apply and the recommended-pack quick start.
 pub fn apply_pack(session: &mut Session, pack: &Pack) -> crate::Result<()> {
     let owned: std::collections::HashSet<String> = session
         .staged_config()
-        .map(|cfg| cfg.capabilities.iter().map(|c| c.id.clone()).collect())
+        .map(|cfg| cfg.fragments.iter().map(|c| c.id.clone()).collect())
         .unwrap_or_default();
-    for id in pack.caps {
+    for id in pack.fragments {
         if owned.contains(*id) {
             continue;
         }
@@ -723,11 +719,11 @@ fn kind_of(has_command: bool, has_provider: bool) -> &'static str {
     }
 }
 
-/// A one-line, plain-text summary for a capability card — the "what it says" the
+/// A one-line, plain-text summary for a fragment card — the "what it says" the
 /// title alone can't carry. For a dynamic cap (whose guidance is often a
 /// `{{ provider.output }}` template) we describe the source instead of dumping
 /// the template; otherwise it's the first meaningful line of the guidance.
-fn cap_summary(c: &Capability) -> Option<String> {
+fn fragment_summary(c: &Fragment) -> Option<String> {
     if c.command.is_some() {
         return Some("Runs a script; its output is embedded.".to_string());
     }
@@ -840,7 +836,7 @@ fn opt(s: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Which writable layer a form's `visibility` control selects. Capabilities and
+/// Which writable layer a form's `visibility` control selects. Fragments and
 /// profiles are global-only, so studio always authors into a global layer:
 /// `config.toml` (shared) or, when marked private, `local.toml` (real hostnames
 /// and other machine-specific values). A repo layer is never a write target.
@@ -852,17 +848,17 @@ pub fn layer_from_form(pairs: &[(String, String)]) -> Layer {
     }
 }
 
-/// The capability id an editor submission targets: the readonly `id` field when
-/// editing, otherwise the slug of the `name` field (a new capability).
-pub fn editor_cap_id(pairs: &[(String, String)]) -> Option<String> {
+/// The fragment id an editor submission targets: the readonly `id` field when
+/// editing, otherwise the slug of the `name` field (a new fragment).
+pub fn editor_fragment_id(pairs: &[(String, String)]) -> Option<String> {
     if let Some(id) = opt(value_of(pairs, "id")) {
         return Some(id);
     }
     opt(value_of(pairs, "name")).map(|n| slug(&n))
 }
 
-/// Slugify a display name into a stable capability id (lowercase, alphanumeric
-/// runs joined by single hyphens). Used to derive a new capability's id.
+/// Slugify a display name into a stable fragment id (lowercase, alphanumeric
+/// runs joined by single hyphens). Used to derive a new fragment's id.
 pub fn slug(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut pending_dash = false;
@@ -880,23 +876,23 @@ pub fn slug(s: &str) -> String {
     out
 }
 
-/// Whether a capability is too rich for studio's content-first editor and must
+/// Whether a fragment is too rich for studio's content-first editor and must
 /// be hand-edited as TOML: a built-in `provider`, or a `command` *and* a custom
 /// guidance template (the simple "markdown OR script" form can't represent it
 /// without clobbering one side).
-pub fn is_advanced_capability(c: &Capability) -> bool {
+pub fn is_advanced_fragment(c: &Fragment) -> bool {
     c.provider.is_some() || (c.command.is_some() && !c.guidance.trim().is_empty())
 }
 
-/// Build a [`Capability`] from the content-first editor form. `base` is the
-/// existing capability when editing — fields the simple form doesn't expose
+/// Build a [`Fragment`] from the content-first editor form. `base` is the
+/// existing fragment when editing — fields the simple form doesn't expose
 /// (tags, risk, requires, agents, cache, provider, when, params) are preserved
 /// from it, so editing never silently drops them. `origin` is left default; it
 /// is re-tagged by layer when the staged config is assembled.
-pub fn capability_from_form(
-    base: Option<&Capability>,
+pub fn fragment_from_form(
+    base: Option<&Fragment>,
     pairs: &[(String, String)],
-) -> crate::Result<Capability> {
+) -> crate::Result<Fragment> {
     let name = opt(value_of(pairs, "name"));
     // id: fixed when editing; derived from the name when new.
     let id = match base {
@@ -938,12 +934,42 @@ pub fn capability_from_form(
             true,
         )
     };
-    Ok(Capability {
+    // `category`/`tags`/`risk` are editable in the form. When a field is present
+    // in the post we honor it (even cleared); when absent we preserve the base
+    // fragment's value, so the simple editor never drops advanced metadata.
+    let present = |key: &str| pairs.iter().any(|(k, _)| k == key);
+    let category = if present("category") {
+        opt(value_of(pairs, "category"))
+    } else {
+        base.and_then(|c| c.category.clone())
+    };
+    let tags = if present("tags") {
+        value_of(pairs, "tags")
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect()
+    } else {
+        base.map(|c| c.tags.clone()).unwrap_or_default()
+    };
+    let risk = if present("risk") {
+        match value_of(pairs, "risk") {
+            Some("caution") => Risk::Caution,
+            Some("dangerous") => Risk::Dangerous,
+            _ => Risk::Info,
+        }
+    } else {
+        base.map(|c| c.risk).unwrap_or_default()
+    };
+    Ok(Fragment {
         id,
         description: name.or_else(|| base.and_then(|c| c.description.clone())),
         icon: opt(value_of(pairs, "icon")),
-        tags: base.map(|c| c.tags.clone()).unwrap_or_default(),
-        risk: base.map(|c| c.risk).unwrap_or_default(),
+        tags,
+        category,
+        risk,
         when: base.map(|c| c.when.clone()).unwrap_or_default(),
         requires: base.map(|c| c.requires.clone()).unwrap_or_default(),
         params: base
@@ -961,53 +987,56 @@ pub fn capability_from_form(
 }
 
 /// Build a [`ProfileConfig`] from a posted composer form. Enforces the ≥1
-/// capability rule (§3) — a profile with no capabilities can't be saved.
+/// fragment rule (§3) — a profile with no fragments can't be saved.
 pub fn profile_from_form(pairs: &[(String, String)]) -> crate::Result<ProfileConfig> {
     let name =
         opt(value_of(pairs, "name")).ok_or_else(|| anyhow::anyhow!("profile name is required"))?;
-    let capabilities: Vec<CapabilityRef> = values_for(pairs, "capabilities")
+    let fragments: Vec<FragmentRef> = values_for(pairs, "fragments")
         .into_iter()
-        .map(CapabilityRef::Id)
+        .map(FragmentRef::Id)
         .collect();
-    if capabilities.is_empty() {
-        anyhow::bail!("a profile needs at least one capability");
+    if fragments.is_empty() {
+        anyhow::bail!("a profile needs at least one fragment");
     }
     Ok(ProfileConfig {
         name,
         targets: values_for(pairs, "targets"),
-        capabilities,
+        fragments,
         template: opt(value_of(pairs, "template")),
         guidance: opt(value_of(pairs, "guidance")),
         disabled: value_of(pairs, "disabled").is_some(),
     })
 }
 
-/// Build a capability + its target layer from the profile editor's inline
-/// quick-create fields (`cap_name`/`cap_kind`/`cap_content`/`cap_private`).
+/// Build a fragment + its target layer from the profile editor's inline
+/// quick-create fields (`fragment_name`/`fragment_kind`/`fragment_content`/`fragment_private`).
 /// Returns `None` when no name was typed (nothing to add).
-pub fn inline_capability_from_form(pairs: &[(String, String)]) -> Option<(Capability, Layer)> {
-    let name = opt(value_of(pairs, "cap_name"))?;
+pub fn inline_fragment_from_form(pairs: &[(String, String)]) -> Option<(Fragment, Layer)> {
+    let name = opt(value_of(pairs, "fragment_name"))?;
     let id = slug(&name);
     if id.is_empty() {
         return None;
     }
-    let content = value_of(pairs, "cap_content").unwrap_or("").to_string();
+    let content = value_of(pairs, "fragment_content")
+        .unwrap_or("")
+        .to_string();
     let (guidance, command, script_lang) =
-        if value_of(pairs, "cap_kind") == Some("script") && !content.trim().is_empty() {
+        if value_of(pairs, "fragment_kind") == Some("script") && !content.trim().is_empty() {
             (String::new(), Some(content), Some("bash".to_string()))
         } else {
             (content, None, None)
         };
-    let layer = if value_of(pairs, "cap_private").is_some() {
+    let layer = if value_of(pairs, "fragment_private").is_some() {
         Layer::GlobalLocal
     } else {
         Layer::Global
     };
-    let cap = Capability {
+    let cap = Fragment {
         id,
         description: Some(name),
         icon: None,
         tags: Vec::new(),
+        category: None,
         risk: Risk::Info,
         when: Vec::new(),
         requires: Vec::new(),
@@ -1024,15 +1053,15 @@ pub fn inline_capability_from_form(pairs: &[(String, String)]) -> Option<(Capabi
     Some((cap, layer))
 }
 
-/// A lenient profile built from an in-progress editor form — no ≥1-capability
+/// A lenient profile built from an in-progress editor form — no ≥1-fragment
 /// rule — used only to render the editor's live preview (never staged).
 pub fn draft_profile_from_form(pairs: &[(String, String)]) -> ProfileConfig {
     ProfileConfig {
         name: opt(value_of(pairs, "name")).unwrap_or_else(|| "(unnamed)".to_string()),
         targets: values_for(pairs, "targets"),
-        capabilities: values_for(pairs, "capabilities")
+        fragments: values_for(pairs, "fragments")
             .into_iter()
-            .map(CapabilityRef::Id)
+            .map(FragmentRef::Id)
             .collect(),
         template: None,
         guidance: opt(value_of(pairs, "guidance")),
@@ -1053,29 +1082,32 @@ mod tests {
 
     #[test]
     fn summary_takes_first_meaningful_guidance_line() {
-        let mut c = crate::capability::palette()
+        let mut c = crate::fragment::palette()
             .into_iter()
             .find(|c| c.id == "terse-comms")
             .unwrap();
-        let s = cap_summary(&c).expect("static cap has a summary");
+        let s = fragment_summary(&c).expect("static cap has a summary");
         assert!(s.starts_with("Be terse"), "got: {s}");
         assert!(!s.contains('\n'), "summary is a single line");
         // A leading HTML comment + heading marker are stripped, whitespace collapsed.
         c.guidance = "<!-- gen -->\n# Heading\n\nbody".into();
-        assert_eq!(cap_summary(&c).as_deref(), Some("Heading"));
+        assert_eq!(fragment_summary(&c).as_deref(), Some("Heading"));
     }
 
     #[test]
     fn summary_describes_dynamic_caps_by_source() {
-        let mut c = crate::capability::palette().into_iter().next().unwrap();
+        let mut c = crate::fragment::palette().into_iter().next().unwrap();
         // A provider cap's guidance is often a template — describe the source.
         c.guidance = "Running on {{ provider.output }}".into();
         c.provider = Some("host".into());
-        assert_eq!(cap_summary(&c).as_deref(), Some("Embeds live host output."));
+        assert_eq!(
+            fragment_summary(&c).as_deref(),
+            Some("Embeds live host output.")
+        );
         c.provider = None;
         c.command = Some("uname -sm".into());
         assert_eq!(
-            cap_summary(&c).as_deref(),
+            fragment_summary(&c).as_deref(),
             Some("Runs a script; its output is embedded.")
         );
     }
@@ -1106,8 +1138,8 @@ mod tests {
     }
 
     #[test]
-    fn capability_from_form_markdown_new() {
-        let cap = capability_from_form(
+    fn fragment_from_form_markdown_new() {
+        let cap = fragment_from_form(
             None,
             &parse_pairs("name=Rust+conventions&kind=markdown&guidance=Use+clippy"),
         )
@@ -1117,14 +1149,14 @@ mod tests {
         assert_eq!(cap.guidance, "Use clippy");
         assert!(cap.command.is_none());
         assert!(cap.allow_exec); // moot for static, defaults on
-                                 // A new capability needs a name.
-        assert!(capability_from_form(None, &parse_pairs("kind=markdown&guidance=x")).is_err());
+                                 // A new fragment needs a name.
+        assert!(fragment_from_form(None, &parse_pairs("kind=markdown&guidance=x")).is_err());
     }
 
     #[test]
-    fn capability_from_form_script_exec_toggle() {
+    fn fragment_from_form_script_exec_toggle() {
         // Checkbox present → execution allowed.
-        let on = capability_from_form(
+        let on = fragment_from_form(
             None,
             &parse_pairs("name=Deploy&kind=script&command=echo+hi&allow_exec=on"),
         )
@@ -1133,23 +1165,23 @@ mod tests {
         assert!(on.guidance.is_empty());
         assert!(on.allow_exec);
         // Checkbox absent → execution disabled (the off-switch).
-        let off = capability_from_form(
+        let off = fragment_from_form(
             None,
             &parse_pairs("name=Deploy&kind=script&command=echo+hi"),
         )
         .unwrap();
         assert!(!off.allow_exec);
         assert_eq!(on.script_lang.as_deref(), Some("bash"));
-        // An empty script falls back to a (markdown) capability, not an error.
-        let empty = capability_from_form(None, &parse_pairs("name=X&kind=script")).unwrap();
+        // An empty script falls back to a (markdown) fragment, not an error.
+        let empty = fragment_from_form(None, &parse_pairs("name=X&kind=script")).unwrap();
         assert!(empty.command.is_none());
         assert!(empty.script_lang.is_none());
     }
 
     #[test]
-    fn capability_from_form_edit_preserves_hidden_fields() {
-        // A base capability carrying fields the simple editor never shows.
-        let mut base = crate::capability::palette()
+    fn fragment_from_form_edit_preserves_hidden_fields() {
+        // A base fragment carrying fields the simple editor never shows.
+        let mut base = crate::fragment::palette()
             .into_iter()
             .find(|c| c.id == "rust-conventions")
             .unwrap();
@@ -1158,7 +1190,7 @@ mod tests {
         base.requires = vec!["baseline".into()];
         base.agents = vec!["claude".into()];
         // Editing just the content must not drop tags/risk/requires/agents.
-        let edited = capability_from_form(
+        let edited = fragment_from_form(
             Some(&base),
             &parse_pairs("name=Rust+conventions&kind=markdown&guidance=Updated+body"),
         )
@@ -1172,15 +1204,15 @@ mod tests {
     }
 
     #[test]
-    fn profile_from_form_requires_a_capability() {
+    fn profile_from_form_requires_a_fragment() {
         let p = profile_from_form(&parse_pairs(
-            "name=rust&targets=rust&capabilities=rc&capabilities=terse",
+            "name=rust&targets=rust&fragments=rc&fragments=terse",
         ))
         .unwrap();
         assert_eq!(p.name, "rust");
         assert_eq!(p.targets, vec!["rust".to_string()]);
-        assert_eq!(p.capabilities.len(), 2);
-        // Zero capabilities is rejected (§3).
+        assert_eq!(p.fragments.len(), 2);
+        // Zero fragments is rejected (§3).
         assert!(profile_from_form(&parse_pairs("name=rust&targets=rust")).is_err());
     }
 

@@ -1,5 +1,5 @@
 //! `rosita studio` — a local, ephemeral web UI for viewing and editing
-//! capabilities and profiles as a lens over your plain TOML config.
+//! fragments and profiles as a lens over your plain TOML config.
 //!
 //! - [`edit`] — the headless comment/format-preserving `toml_edit` write engine
 //!   (Slice 0): `Session`/`StagedOp`/diff/apply.
@@ -11,8 +11,8 @@
 //! - [`assets`] — CSS + the htmx-shim JS, embedded via `rust-embed`.
 //!
 //! The full read+write UI is shipped: the library and ReadOnly live preview,
-//! the capability editor (static + script caps, run-on-demand), the profile
-//! composer (targets + capability picker), stage → diff → apply, the leak
+//! the fragment editor (static + script caps, run-on-demand), the profile
+//! composer (targets + fragment picker), stage → diff → apply, the leak
 //! banner, the starter-pack gallery (`GET /packs`, `POST /packs/<id>/apply`),
 //! and the fresh-config onboarding (`GET /onboarding/quickstart`).
 //! See `docs/studio-design.md`.

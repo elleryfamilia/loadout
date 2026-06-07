@@ -4,7 +4,7 @@
 //! `toml_edit` document per file plus an ordered, replayable list of
 //! [`StagedOp`]s, and can:
 //!
-//! - **stage** typed create/edit/delete of capabilities & profiles (and
+//! - **stage** typed create/edit/delete of fragments & profiles (and
 //!   duplicate a palette item into a layer) — built by mutating the parsed tree
 //!   in place, so comments and key order on untouched regions survive by
 //!   construction (never string concatenation);
@@ -16,32 +16,32 @@
 //!
 //! The staged config can also be assembled in memory via
 //! [`Config::from_layer_strs`](crate::config::Config::from_layer_strs), which
-//! **re-tags capability origins by layer** so the global-only enforcement
-//! (`Layer::contributes_capabilities`) sees the right authorship.
+//! **re-tags fragment origins by layer** so the global-only enforcement
+//! (`Layer::contributes_fragments`) sees the right authorship.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use toml_edit::{value, Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
-use crate::capability::{palette, Capability, Layer, Risk};
 use crate::config::{self, Config};
+use crate::fragment::{palette, Fragment, Layer, Risk};
 use crate::profile::ProfileConfig;
 use crate::writer::{atomic_write, AtomicWriter, Writer, WrittenFile};
 
 /// A typed, replayable staged edit. Each carries the [`Layer`] it targets.
 #[derive(Debug, Clone)]
 pub enum StagedOp {
-    /// Add a new capability to a layer.
-    CreateCapability { layer: Layer, cap: Box<Capability> },
-    /// Replace the capability with this id in a layer (created if absent).
-    EditCapability {
+    /// Add a new fragment to a layer.
+    CreateFragment { layer: Layer, cap: Box<Fragment> },
+    /// Replace the fragment with this id in a layer (created if absent).
+    EditFragment {
         layer: Layer,
         id: String,
-        cap: Box<Capability>,
+        cap: Box<Fragment>,
     },
-    /// Remove the capability with this id from a layer.
-    DeleteCapability { layer: Layer, id: String },
+    /// Remove the fragment with this id from a layer.
+    DeleteFragment { layer: Layer, id: String },
     /// Add a new profile to a layer.
     CreateProfile {
         layer: Layer,
@@ -55,7 +55,7 @@ pub enum StagedOp {
     },
     /// Remove the profile with this name from a layer.
     DeleteProfile { layer: Layer, name: String },
-    /// Copy a shipped palette capability into a layer to own it (the only way to
+    /// Copy a shipped palette fragment into a layer to own it (the only way to
     /// "edit" a palette item). Re-resolved from the palette on replay.
     DuplicatePaletteItem { id: String, to_layer: Layer },
 }
@@ -64,9 +64,9 @@ impl StagedOp {
     /// The layer this op writes to.
     pub fn layer(&self) -> Layer {
         match self {
-            StagedOp::CreateCapability { layer, .. }
-            | StagedOp::EditCapability { layer, .. }
-            | StagedOp::DeleteCapability { layer, .. }
+            StagedOp::CreateFragment { layer, .. }
+            | StagedOp::EditFragment { layer, .. }
+            | StagedOp::DeleteFragment { layer, .. }
             | StagedOp::CreateProfile { layer, .. }
             | StagedOp::EditProfile { layer, .. }
             | StagedOp::DeleteProfile { layer, .. } => *layer,
@@ -182,13 +182,16 @@ impl Session {
             .collect()
     }
 
-    /// Which open layer currently holds the capability with this id (in the
+    /// Which open layer currently holds the fragment with this id (in the
     /// staged docs), if any. Used to target a delete (`ProfileConfig` has no
     /// origin field, so studio looks the layer up rather than guessing).
-    pub fn capability_layer(&self, id: &str) -> Option<Layer> {
+    pub fn fragment_layer(&self, id: &str) -> Option<Layer> {
         self.layers
             .iter()
-            .find(|lf| has_entry(&lf.staged, "capabilities", "id", id))
+            .find(|lf| {
+                has_entry(&lf.staged, "fragments", "id", id)
+                    || has_entry(&lf.staged, "capabilities", "id", id)
+            })
             .map(|lf| lf.layer)
     }
 
@@ -355,14 +358,17 @@ impl LayerFile {
 
 fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
     match op {
-        StagedOp::CreateCapability { cap, .. } => {
-            aot_mut(doc, "capabilities").push(cap_table(cap)?);
+        StagedOp::CreateFragment { cap, .. } => {
+            let key = fragment_aot_key(doc);
+            aot_mut(doc, key).push(fragment_table(cap)?);
         }
-        StagedOp::EditCapability { id, cap, .. } => {
-            upsert(aot_mut(doc, "capabilities"), "id", id, cap_table(cap)?);
+        StagedOp::EditFragment { id, cap, .. } => {
+            let key = fragment_aot_key(doc);
+            upsert(aot_mut(doc, key), "id", id, fragment_table(cap)?);
         }
-        StagedOp::DeleteCapability { id, .. } => {
-            remove(aot_mut(doc, "capabilities"), "id", id);
+        StagedOp::DeleteFragment { id, .. } => {
+            let key = fragment_aot_key(doc);
+            remove(aot_mut(doc, key), "id", id);
         }
         StagedOp::CreateProfile { profile, .. } => {
             aot_mut(doc, "profiles").push(profile_table(profile)?);
@@ -382,12 +388,26 @@ fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
             let cap = palette()
                 .into_iter()
                 .find(|c| &c.id == id)
-                .ok_or_else(|| anyhow!("unknown palette capability '{id}'"))?;
+                .ok_or_else(|| anyhow!("unknown palette fragment '{id}'"))?;
             // Duplicating an existing id replaces it (you own the copy now).
-            upsert(aot_mut(doc, "capabilities"), "id", id, cap_table(&cap)?);
+            let key = fragment_aot_key(doc);
+            upsert(aot_mut(doc, key), "id", id, fragment_table(&cap)?);
         }
     }
     Ok(())
+}
+
+/// The top-level array-of-tables key to write fragments under. Reuses the
+/// pre-rename `capabilities` table if the doc already has one (and no
+/// `fragments` table) so a file never ends up with BOTH keys — which would fail
+/// to deserialize. New files get the canonical `fragments`.
+fn fragment_aot_key(doc: &DocumentMut) -> &'static str {
+    let is_aot = |k: &str| doc.get(k).and_then(Item::as_array_of_tables).is_some();
+    if is_aot("capabilities") && !is_aot("fragments") {
+        "capabilities"
+    } else {
+        "fragments"
+    }
 }
 
 /// Get (or create) an array-of-tables at `key`.
@@ -442,9 +462,9 @@ fn risk_str(r: Risk) -> &'static str {
     }
 }
 
-/// Build a clean array-of-tables entry for a capability — only meaningful
+/// Build a clean array-of-tables entry for a fragment — only meaningful
 /// (non-default) fields, so studio writes TOML you could have authored.
-fn cap_table(c: &Capability) -> Result<Table> {
+fn fragment_table(c: &Fragment) -> Result<Table> {
     let mut t = Table::new();
     t["id"] = value(c.id.as_str());
     if let Some(d) = &c.description {
@@ -456,11 +476,14 @@ fn cap_table(c: &Capability) -> Result<Table> {
     if !c.tags.is_empty() {
         t["tags"] = str_array(&c.tags);
     }
+    if let Some(cat) = &c.category {
+        t["category"] = value(cat.as_str());
+    }
     if c.risk != Risk::Info {
         t["risk"] = value(risk_str(c.risk));
     }
     if !c.when.is_empty() {
-        let when = toml::Value::try_from(&c.when).context("serializing capability `when`")?;
+        let when = toml::Value::try_from(&c.when).context("serializing fragment `when`")?;
         t["when"] = to_edit_item(&when);
     }
     if !c.requires.is_empty() {
@@ -502,10 +525,9 @@ fn profile_table(p: &ProfileConfig) -> Result<Table> {
     if !p.targets.is_empty() {
         t["targets"] = str_array(&p.targets);
     }
-    if !p.capabilities.is_empty() {
-        let caps =
-            toml::Value::try_from(&p.capabilities).context("serializing profile capabilities")?;
-        t["capabilities"] = to_edit_item(&caps);
+    if !p.fragments.is_empty() {
+        let caps = toml::Value::try_from(&p.fragments).context("serializing profile fragments")?;
+        t["fragments"] = to_edit_item(&caps);
     }
     if let Some(tmpl) = &p.template {
         t["template"] = value(tmpl.as_str());
@@ -573,11 +595,12 @@ fn unified_diff(before: &str, after: &str, path: &Path) -> String {
 mod tests {
     use super::*;
 
-    fn cap(id: &str, guidance: &str) -> Capability {
-        Capability {
+    fn cap(id: &str, guidance: &str) -> Fragment {
+        Fragment {
             id: id.into(),
             description: Some(format!("{id} desc")),
             tags: vec![],
+            category: None,
             risk: Risk::Info,
             when: vec![],
             requires: vec![],
@@ -607,7 +630,7 @@ mod tests {
     }
 
     /// A repo plus a global config dir (a subdir of the same tempdir) whose
-    /// `config.toml` starts with `body`. Capabilities and profiles are
+    /// `config.toml` starts with `body`. Fragments and profiles are
     /// global-only, so tests that assert on the *merged* staged config author
     /// them here and stage to `Layer::Global`.
     fn repo_with_global(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -624,7 +647,7 @@ mod tests {
 
     #[test]
     fn untouched_session_round_trips_comments_exactly() {
-        let body = "# top comment\n\n[[capabilities]]\nid = \"a\"  # inline\nguidance = \"hi\"\n";
+        let body = "# top comment\n\n[[fragments]]\nid = \"a\"  # inline\nguidance = \"hi\"\n";
         let d = repo_with_config(body);
         let s = session(d.path());
         // No ops staged → no diffs at all (byte-exact round-trip).
@@ -635,11 +658,11 @@ mod tests {
     }
 
     #[test]
-    fn create_capability_preserves_existing_comments() {
-        let body = "# keep me\n\n[[capabilities]]\nid = \"a\"\nguidance = \"A\"\n";
+    fn create_fragment_preserves_existing_comments() {
+        let body = "# keep me\n\n[[fragments]]\nid = \"a\"\nguidance = \"A\"\n";
         let d = repo_with_config(body);
         let mut s = session(d.path());
-        s.stage(StagedOp::CreateCapability {
+        s.stage(StagedOp::CreateFragment {
             layer: Layer::Repo,
             cap: Box::new(cap("b", "B body")),
         })
@@ -658,20 +681,20 @@ mod tests {
     }
 
     #[test]
-    fn edit_then_delete_capability() {
-        let body = "[[capabilities]]\nid = \"a\"\nguidance = \"old\"\n\n[[capabilities]]\nid = \"b\"\nguidance = \"B\"\n";
+    fn edit_then_delete_fragment() {
+        let body = "[[fragments]]\nid = \"a\"\nguidance = \"old\"\n\n[[fragments]]\nid = \"b\"\nguidance = \"B\"\n";
         let (d, gdir) = repo_with_global(body);
         let mut s = session_global(d.path(), &gdir);
 
         let mut edited = cap("a", "new guidance");
         edited.risk = Risk::Caution;
-        s.stage(StagedOp::EditCapability {
+        s.stage(StagedOp::EditFragment {
             layer: Layer::Global,
             id: "a".into(),
             cap: Box::new(edited),
         })
         .unwrap();
-        s.stage(StagedOp::DeleteCapability {
+        s.stage(StagedOp::DeleteFragment {
             layer: Layer::Global,
             id: "b".into(),
         })
@@ -684,8 +707,8 @@ mod tests {
         // Still valid TOML/config.
         s.validate().unwrap();
         let cfg = s.staged_config().unwrap();
-        assert_eq!(cfg.capabilities.len(), 1);
-        assert_eq!(cfg.capabilities[0].guidance, "new guidance");
+        assert_eq!(cfg.fragments.len(), 1);
+        assert_eq!(cfg.fragments[0].guidance, "new guidance");
     }
 
     #[test]
@@ -695,7 +718,7 @@ mod tests {
         let profile = ProfileConfig {
             name: "rust".into(),
             targets: vec!["rust".into()],
-            capabilities: vec![crate::profile::CapabilityRef::Id("a".into())],
+            fragments: vec![crate::profile::FragmentRef::Id("a".into())],
             template: None,
             guidance: None,
             disabled: false,
@@ -708,16 +731,16 @@ mod tests {
         let after = s.diff()[0].staged_after.clone();
         assert!(after.contains("name = \"rust\""));
         assert!(after.contains("targets = [\"rust\"]"));
-        assert!(after.contains("capabilities = [\"a\"]"));
+        assert!(after.contains("fragments = [\"a\"]"));
         s.validate().unwrap();
     }
 
     #[test]
     fn apply_writes_and_is_idempotent_on_reload() {
-        let body = "# header\n[[capabilities]]\nid = \"a\"\nguidance = \"A\"\n";
+        let body = "# header\n[[fragments]]\nid = \"a\"\nguidance = \"A\"\n";
         let d = repo_with_config(body);
         let mut s = session(d.path());
-        s.stage(StagedOp::CreateCapability {
+        s.stage(StagedOp::CreateFragment {
             layer: Layer::Repo,
             cap: Box::new(cap("b", "B")),
         })
@@ -726,7 +749,7 @@ mod tests {
         let written = s.apply().unwrap();
         assert_eq!(written.len(), 1);
 
-        // On disk: both capabilities, comment preserved.
+        // On disk: both fragments, comment preserved.
         let on_disk = std::fs::read_to_string(config::repo_config_path(d.path())).unwrap();
         assert!(on_disk.contains("# header"));
         assert!(on_disk.contains("id = \"a\""));
@@ -744,9 +767,9 @@ mod tests {
 
     #[test]
     fn external_edit_gate_blocks_apply() {
-        let d = repo_with_config("[[capabilities]]\nid = \"a\"\nguidance = \"A\"\n");
+        let d = repo_with_config("[[fragments]]\nid = \"a\"\nguidance = \"A\"\n");
         let mut s = session(d.path());
-        s.stage(StagedOp::CreateCapability {
+        s.stage(StagedOp::CreateFragment {
             layer: Layer::Repo,
             cap: Box::new(cap("b", "B")),
         })
@@ -755,7 +778,7 @@ mod tests {
         // Someone edits the file out from under the session.
         std::fs::write(
             config::repo_config_path(d.path()),
-            "[[capabilities]]\nid = \"z\"\nguidance = \"Z\"\n",
+            "[[fragments]]\nid = \"z\"\nguidance = \"Z\"\n",
         )
         .unwrap();
 
@@ -771,24 +794,24 @@ mod tests {
     }
 
     #[test]
-    fn created_command_capability_is_owned_globally() {
-        // Capabilities are global-only, so an authored `command` capability lands
+    fn created_command_fragment_is_owned_globally() {
+        // Fragments are global-only, so an authored `command` fragment lands
         // in the global layer. Origin tagging is verified via the in-memory
         // assembly seam (it gates global-only enforcement, not trust).
         let (d, gdir) = repo_with_global("");
         let mut s = session_global(d.path(), &gdir);
         let mut command_cap = cap("danger", "runs a command");
         command_cap.command = Some("echo hi".into());
-        s.stage(StagedOp::CreateCapability {
+        s.stage(StagedOp::CreateFragment {
             layer: Layer::Global,
             cap: Box::new(command_cap),
         })
         .unwrap();
 
         let cfg = s.staged_config().unwrap();
-        let landed = cfg.capabilities.iter().find(|c| c.id == "danger").unwrap();
+        let landed = cfg.fragments.iter().find(|c| c.id == "danger").unwrap();
         assert_eq!(landed.origin, Layer::Global);
-        assert!(landed.origin.contributes_capabilities());
+        assert!(landed.origin.contributes_fragments());
     }
 
     #[test]
@@ -803,7 +826,7 @@ mod tests {
         .unwrap();
         let cfg = s.staged_config().unwrap();
         let dup = cfg
-            .capabilities
+            .fragments
             .iter()
             .find(|c| c.id == palette_id)
             .expect("duplicated palette item should now be in the global library");

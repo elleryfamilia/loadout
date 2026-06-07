@@ -7,7 +7,7 @@
 //! - Repo: `<repo_base>/.rosita/config.toml`, where `repo_base` is the git
 //!   root (or the cwd when not in a repo).
 //! - `local.toml` (in either dir) is the **private**, gitignored layer for
-//!   sensitive specifics (real hostnames, `host_classes`, capability `params`);
+//!   sensitive specifics (real hostnames, `host_classes`, fragment `params`);
 //!   `config.toml` is the **public**, shareable layer. `rosita doctor` lints the
 //!   public layers for machine-specific literals that belong in `local.toml`.
 //!
@@ -22,7 +22,7 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::AgentDescriptor;
-use crate::capability::Capability;
+use crate::fragment::Fragment;
 use crate::profile::ProfileConfig;
 
 /// Fully-resolved configuration used by the rest of the program.
@@ -36,14 +36,14 @@ pub struct Config {
     pub codex: CodexConfig,
     /// Your profiles (entirely user-authored; one is selected per context).
     pub profiles: Vec<ProfileConfig>,
-    /// Your capability library (the `[[capabilities]]` you authored, merged by
-    /// id across layers). The shipped [`palette`](crate::capability::palette) is
+    /// Your fragment library (the `[[fragments]]` you authored, merged by
+    /// id across layers). The shipped [`palette`](crate::fragment::palette) is
     /// a separate read-only catalog and is **not** included here.
-    pub capabilities: Vec<Capability>,
-    /// Per-capability `params` overrides keyed by capability id, deep-merged
+    pub fragments: Vec<Fragment>,
+    /// Per-fragment `params` overrides keyed by fragment id, deep-merged
     /// across layers. The private (`local.toml`) place for sensitive values
-    /// a public capability's guidance references.
-    pub capability_params: BTreeMap<String, toml::Value>,
+    /// a public fragment's guidance references.
+    pub fragment_params: BTreeMap<String, toml::Value>,
     /// Agent descriptors (built-ins merged with `[[agents]]` overrides by id).
     pub agents: Vec<AgentDescriptor>,
     /// hostname-glob → host class (e.g. `work`).
@@ -115,14 +115,14 @@ impl Config {
     /// Merge order (later wins): built-in ← global `config.toml` ← global
     /// `local.toml` ← repo `config.toml` ← repo `local.toml`. The `*.toml`
     /// files named `local.toml` are the private, gitignored layer (real
-    /// hostnames, `host_classes`, capability `params`); the `config.toml` files
+    /// hostnames, `host_classes`, fragment `params`); the `config.toml` files
     /// are the public, shareable layer.
     pub fn load_from(global: Option<&Path>, repo_base: &Path) -> Result<Self> {
-        use crate::capability::Layer;
+        use crate::fragment::Layer;
 
         // Layers in precedence order (later wins). `None` entries (e.g. no
         // global dir) are skipped; missing files contribute nothing. Each layer
-        // tags its capabilities with their origin so global-only enforcement can
+        // tags its fragments with their origin so global-only enforcement can
         // tell repo-declared caps from your own global ones.
         let mut layers: Vec<(Layer, PathBuf)> = Vec::new();
         if let Some(global) = global {
@@ -139,7 +139,7 @@ impl Config {
         for (layer, path) in layers {
             if let Some(mut parsed) = RawConfig::from_path(&path)? {
                 strip_global_only(layer, &mut parsed);
-                for cap in &mut parsed.capabilities {
+                for cap in &mut parsed.fragments {
                     cap.origin = layer;
                 }
                 raw.merge(parsed);
@@ -157,24 +157,22 @@ impl Config {
 
     /// Assemble a [`Config`] from **in-memory** layer texts (studio's staged
     /// docs), parsing and merging them exactly as [`Config::load_from`] does from
-    /// disk — including **re-tagging each capability's `origin` by its layer**.
+    /// disk — including **re-tagging each fragment's `origin` by its layer**.
     ///
     /// Layers are given in precedence order (later wins). This is
-    /// security-critical: `Capability::origin` is `#[serde(skip)]` and defaults
-    /// to [`Layer::BuiltIn`](crate::capability::Layer::BuiltIn), and global-only
-    /// enforcement keys off origin — a repo-declared capability assembled
+    /// security-critical: `Fragment::origin` is `#[serde(skip)]` and defaults
+    /// to [`Layer::BuiltIn`](crate::fragment::Layer::BuiltIn), and global-only
+    /// enforcement keys off origin — a repo-declared fragment assembled
     /// *without* re-tagging would look built-in and slip past the global-only
     /// check. Mirrors the disk-load tagging in [`Config::load_from`].
-    pub fn from_layer_strs(
-        layers: Vec<(crate::capability::Layer, PathBuf, String)>,
-    ) -> Result<Self> {
+    pub fn from_layer_strs(layers: Vec<(crate::fragment::Layer, PathBuf, String)>) -> Result<Self> {
         let mut sources = Vec::new();
         let mut raw = RawConfig::default();
         for (layer, path, text) in layers {
             let mut parsed: RawConfig = toml::from_str(&text)
                 .with_context(|| format!("parsing staged config for {}", path.display()))?;
             strip_global_only(layer, &mut parsed);
-            for cap in &mut parsed.capabilities {
+            for cap in &mut parsed.fragments {
                 cap.origin = layer;
             }
             raw.merge(parsed);
@@ -184,15 +182,15 @@ impl Config {
     }
 }
 
-/// Enforce the global-only model: capabilities and profiles are honored only
+/// Enforce the global-only model: fragments and profiles are honored only
 /// from the layers allowed to contribute them (caps: built-in/global/global-local;
 /// profiles: built-in/global). A repo layer that declares either is silently
 /// dropped here so it can never select or render — `rosita doctor` flags the
-/// raw file so the mistake is visible. Other repo-layer content (`capability_params`,
+/// raw file so the mistake is visible. Other repo-layer content (`fragment_params`,
 /// `host_classes`, `[binding]`, `defaults`, `env`, `agents`) is untouched.
-fn strip_global_only(layer: crate::capability::Layer, parsed: &mut RawConfig) {
-    if !layer.contributes_capabilities() {
-        parsed.capabilities.clear();
+fn strip_global_only(layer: crate::fragment::Layer, parsed: &mut RawConfig) {
+    if !layer.contributes_fragments() {
+        parsed.fragments.clear();
     }
     if !layer.contributes_profiles() {
         parsed.profiles.clear();
@@ -210,10 +208,12 @@ struct RawConfig {
     sync: Option<RawSync>,
     #[serde(default)]
     profiles: Vec<ProfileConfig>,
-    #[serde(default)]
-    capabilities: Vec<Capability>,
-    #[serde(default)]
-    capability_params: BTreeMap<String, toml::Value>,
+    // `[[capabilities]]` is the pre-rename key, still accepted so existing
+    // configs load unchanged; studio re-writes them as `[[fragments]]`.
+    #[serde(default, alias = "capabilities")]
+    fragments: Vec<Fragment>,
+    #[serde(default, alias = "capability_params")]
+    fragment_params: BTreeMap<String, toml::Value>,
     #[serde(default)]
     agents: Vec<AgentDescriptor>,
     #[serde(default)]
@@ -319,18 +319,18 @@ impl RawConfig {
                 None => self.profiles.push(p),
             }
         }
-        // Later-layer capabilities replace earlier ones of the same id.
-        for cap in other.capabilities {
-            match self.capabilities.iter_mut().find(|e| e.id == cap.id) {
+        // Later-layer fragments replace earlier ones of the same id.
+        for cap in other.fragments {
+            match self.fragments.iter_mut().find(|e| e.id == cap.id) {
                 Some(existing) => *existing = cap,
-                None => self.capabilities.push(cap),
+                None => self.fragments.push(cap),
             }
         }
-        // Capability params deep-merge across layers (later wins per key), so a
+        // Fragment params deep-merge across layers (later wins per key), so a
         // private layer can supply just the sensitive values.
-        for (id, params) in other.capability_params {
+        for (id, params) in other.fragment_params {
             let slot = self
-                .capability_params
+                .fragment_params
                 .entry(id)
                 .or_insert(toml::Value::Table(toml::map::Map::new()));
             *slot = merge_toml(slot.clone(), params);
@@ -353,12 +353,12 @@ impl RawConfig {
         let codex = self.codex.unwrap_or_default();
         let sync = self.sync.unwrap_or_default();
 
-        // No shipped profiles and no auto-injected capabilities: both are
+        // No shipped profiles and no auto-injected fragments: both are
         // entirely user-authored (already merged by name/id across layers in
-        // `merge`). The shipped `capability::palette()` is a separate read-only
+        // `merge`). The shipped `fragment::palette()` is a separate read-only
         // catalog you pick from; it is never composed and never lands here.
         let profiles = self.profiles;
-        let capabilities = self.capabilities;
+        let fragments = self.fragments;
 
         // Built-in agents form the base; user `[[agents]]` override by id.
         let mut agents = crate::adapters::builtin_agents();
@@ -383,8 +383,8 @@ impl RawConfig {
                 max_output_kib: codex.max_output_kib.unwrap_or(32),
             },
             profiles,
-            capabilities,
-            capability_params: self.capability_params,
+            fragments,
+            fragment_params: self.fragment_params,
             agents,
             host_classes: self.host_classes,
             sync: SyncConfig {
@@ -512,7 +512,7 @@ pub fn global_local_path() -> Option<PathBuf> {
 }
 
 /// Repo private `local.toml` path (gitignored): real hostnames, `host_classes`,
-/// capability `params` — the sensitive layer kept out of the shareable config.
+/// fragment `params` — the sensitive layer kept out of the shareable config.
 pub fn repo_local_path(repo_base: &Path) -> PathBuf {
     repo_dir(repo_base).join("local.toml")
 }
@@ -563,18 +563,18 @@ mod tests {
         assert_eq!(c.codex.max_output_kib, 32);
         assert!(c.codex.write_override);
         assert!(c.env.allowlist.contains(&"LANG".to_string()));
-        // No shipped profiles and no auto-injected capabilities: a fresh install
+        // No shipped profiles and no auto-injected fragments: a fresh install
         // owns an empty library (the palette is a separate catalog).
         assert!(c.profiles.is_empty());
-        assert!(c.capabilities.is_empty());
+        assert!(c.fragments.is_empty());
     }
 
     #[test]
-    fn user_capabilities_merge_across_layers() {
-        // A later layer replaces an earlier capability by id and adds new ones.
+    fn user_fragments_merge_across_layers() {
+        // A later layer replaces an earlier fragment by id and adds new ones.
         let mut base: RawConfig = toml::from_str(
             r#"
-            [[capabilities]]
+            [[fragments]]
             id = "rust-conventions"
             guidance = "base rust rules"
             "#,
@@ -582,12 +582,12 @@ mod tests {
         .unwrap();
         let overlay: RawConfig = toml::from_str(
             r#"
-            [[capabilities]]
+            [[fragments]]
             id = "rust-conventions"
             description = "Rust (custom)"
             guidance = "my rust rules"
 
-            [[capabilities]]
+            [[fragments]]
             id = "ssh-tailnet"
             risk = "caution"
             guidance = "you may ssh within my tailnet"
@@ -597,17 +597,17 @@ mod tests {
         base.merge(overlay);
         let c = base.finalize(vec![]);
 
-        // Override replaced the earlier capability by id.
+        // Override replaced the earlier fragment by id.
         let rustc = c
-            .capabilities
+            .fragments
             .iter()
             .find(|x| x.id == "rust-conventions")
             .unwrap();
         assert_eq!(rustc.guidance, "my rust rules");
-        // New capability was added.
-        assert!(c.capabilities.iter().any(|x| x.id == "ssh-tailnet"));
-        // Only the two authored capabilities exist — nothing is auto-injected.
-        assert_eq!(c.capabilities.len(), 2);
+        // New fragment was added.
+        assert!(c.fragments.iter().any(|x| x.id == "ssh-tailnet"));
+        // Only the two authored fragments exist — nothing is auto-injected.
+        assert_eq!(c.fragments.len(), 2);
     }
 
     #[test]
@@ -661,7 +661,7 @@ mod tests {
         let c = Config::load_from(None, repo.path()).expect("local.toml [binding] must parse");
         // It contributes nothing to the merged config.
         assert!(c.profiles.is_empty());
-        assert!(c.capabilities.is_empty());
+        assert!(c.fragments.is_empty());
     }
 
     #[test]
@@ -695,17 +695,16 @@ mod tests {
     }
 
     #[test]
-    fn capability_params_deep_merge_across_layers() {
+    fn fragment_params_deep_merge_across_layers() {
         // Public layer sets a non-sensitive default; private layer fills in the
         // sensitive value without clobbering the rest.
         let mut base: RawConfig =
-            toml::from_str("[capability_params.ssh]\nuser = \"deploy\"\nport = 22\n").unwrap();
+            toml::from_str("[fragment_params.ssh]\nuser = \"deploy\"\nport = 22\n").unwrap();
         let local: RawConfig =
-            toml::from_str("[capability_params.ssh]\nhost = \"box.private\"\nport = 2222\n")
-                .unwrap();
+            toml::from_str("[fragment_params.ssh]\nhost = \"box.private\"\nport = 2222\n").unwrap();
         base.merge(local);
         let c = base.finalize(vec![]);
-        let ssh = c.capability_params.get("ssh").unwrap();
+        let ssh = c.fragment_params.get("ssh").unwrap();
         assert_eq!(ssh.get("user").unwrap().as_str(), Some("deploy")); // kept
         assert_eq!(ssh.get("host").unwrap().as_str(), Some("box.private")); // added
         assert_eq!(ssh.get("port").unwrap().as_integer(), Some(2222)); // overridden
@@ -718,17 +717,17 @@ mod tests {
         std::fs::create_dir_all(repo_dir(repo.path())).unwrap();
         std::fs::write(
             repo_config_path(repo.path()),
-            "[defaults]\nagent = \"codex\"\n[capability_params.x]\nv = 1\n",
+            "[defaults]\nagent = \"codex\"\n[fragment_params.x]\nv = 1\n",
         )
         .unwrap();
         std::fs::write(
             repo_local_path(repo.path()),
-            "[capability_params.x]\nv = 2\nsecret = \"shh\"\n",
+            "[fragment_params.x]\nv = 2\nsecret = \"shh\"\n",
         )
         .unwrap();
 
         let c = Config::load_from(None, repo.path()).unwrap();
-        let x = c.capability_params.get("x").unwrap();
+        let x = c.fragment_params.get("x").unwrap();
         assert_eq!(x.get("v").unwrap().as_integer(), Some(2)); // local wins
         assert_eq!(x.get("secret").unwrap().as_str(), Some("shh"));
         // Both files are recorded as sources, in load order.
@@ -738,15 +737,15 @@ mod tests {
 
     // --- global-only enforcement (strip_global_only) -------------------------
 
-    const CAP_AND_PROFILE: &str = r#"
-        [[capabilities]]
+    const FRAGMENT_AND_PROFILE: &str = r#"
+        [[fragments]]
         id = "x"
         guidance = "hello"
 
         [[profiles]]
         name = "p"
         targets = ["rust"]
-        capabilities = ["x"]
+        fragments = ["x"]
     "#;
 
     #[test]
@@ -755,10 +754,10 @@ mod tests {
         // accepts the tables), but the loader honors neither — they are global.
         let repo = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(repo_dir(repo.path())).unwrap();
-        std::fs::write(repo_config_path(repo.path()), CAP_AND_PROFILE).unwrap();
+        std::fs::write(repo_config_path(repo.path()), FRAGMENT_AND_PROFILE).unwrap();
 
         let c = Config::load_from(None, repo.path()).unwrap();
-        assert!(c.capabilities.is_empty(), "repo caps must be dropped");
+        assert!(c.fragments.is_empty(), "repo caps must be dropped");
         assert!(c.profiles.is_empty(), "repo profiles must be dropped");
     }
 
@@ -766,27 +765,27 @@ mod tests {
     fn global_config_contributes_caps_and_profiles() {
         let global = tempfile::tempdir().unwrap();
         let gcfg = global.path().join("config.toml");
-        std::fs::write(&gcfg, CAP_AND_PROFILE).unwrap();
+        std::fs::write(&gcfg, FRAGMENT_AND_PROFILE).unwrap();
         let repo = tempfile::tempdir().unwrap();
 
         let c = Config::load_from(Some(&gcfg), repo.path()).unwrap();
-        assert!(c.capabilities.iter().any(|x| x.id == "x"));
+        assert!(c.fragments.iter().any(|x| x.id == "x"));
         assert!(c.profiles.iter().any(|p| p.name == "p"));
     }
 
     #[test]
     fn global_local_contributes_caps_but_not_profiles() {
-        // The private global layer may hold capabilities (real hostnames etc.)
+        // The private global layer may hold fragments (real hostnames etc.)
         // but never profiles — profiles are public-global only.
         let global = tempfile::tempdir().unwrap();
         let gcfg = global.path().join("config.toml");
         std::fs::write(&gcfg, "").unwrap();
-        std::fs::write(global.path().join("local.toml"), CAP_AND_PROFILE).unwrap();
+        std::fs::write(global.path().join("local.toml"), FRAGMENT_AND_PROFILE).unwrap();
         let repo = tempfile::tempdir().unwrap();
 
         let c = Config::load_from(Some(&gcfg), repo.path()).unwrap();
         assert!(
-            c.capabilities.iter().any(|x| x.id == "x"),
+            c.fragments.iter().any(|x| x.id == "x"),
             "global local.toml caps must be kept"
         );
         assert!(
@@ -797,26 +796,26 @@ mod tests {
 
     #[test]
     fn from_layer_strs_enforces_global_only() {
-        use crate::capability::Layer;
+        use crate::fragment::Layer;
         let c = Config::from_layer_strs(vec![
             (
                 Layer::Global,
                 PathBuf::from("/g/config.toml"),
-                CAP_AND_PROFILE.to_string(),
+                FRAGMENT_AND_PROFILE.to_string(),
             ),
             (
                 Layer::Repo,
                 PathBuf::from("/r/.rosita/config.toml"),
-                "[[capabilities]]\nid = \"repo-cap\"\nguidance = \"nope\"\n\
+                "[[fragments]]\nid = \"repo-cap\"\nguidance = \"nope\"\n\
                  \n[[profiles]]\nname = \"repo-prof\"\ntargets = [\"rust\"]\n"
                     .to_string(),
             ),
         ])
         .unwrap();
         // Global contributes; the repo layer is stripped (studio path).
-        assert!(c.capabilities.iter().any(|x| x.id == "x"));
+        assert!(c.fragments.iter().any(|x| x.id == "x"));
         assert!(c.profiles.iter().any(|p| p.name == "p"));
-        assert!(!c.capabilities.iter().any(|x| x.id == "repo-cap"));
+        assert!(!c.fragments.iter().any(|x| x.id == "repo-cap"));
         assert!(!c.profiles.iter().any(|p| p.name == "repo-prof"));
     }
 }

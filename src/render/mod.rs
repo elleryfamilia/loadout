@@ -1,8 +1,8 @@
-//! Template rendering: context + composed capabilities + template → an overlay.
+//! Template rendering: context + composed fragments + template → an overlay.
 //!
 //! The low-level [`TemplateRenderer`] trait abstracts the engine (here
 //! minijinja). [`render`] is the high-level entry the adapters call: it resolves
-//! the base template, renders each composed capability into the body, prepends
+//! the base template, renders each composed fragment into the body, prepends
 //! the generated header, and returns the content plus the context hash and
 //! provenance.
 
@@ -14,10 +14,10 @@ use chrono::{DateTime, Utc};
 use minijinja::{Environment, UndefinedBehavior, Value};
 use serde::Serialize;
 
-use crate::capability::{Capability, Risk};
 use crate::config::{self, Config};
 use crate::context::Context;
 use crate::dynamic::{self, DynamicMode};
+use crate::fragment::{Fragment, Risk};
 use crate::profile::Composition;
 use crate::providers::ProviderOutput;
 use crate::templates;
@@ -58,13 +58,13 @@ pub struct RenderRequest<'a> {
     pub template_name: &'a str,
     /// Detected context.
     pub context: &'a Context,
-    /// Composed capabilities + matching profiles.
+    /// Composed fragments + matching profiles.
     pub composition: &'a Composition,
     /// Loaded config (template overrides, source provenance).
     pub config: &'a Config,
     /// Injected generation timestamp (RFC3339) — passed in for testability.
     pub generated_at: String,
-    /// Whether dynamic capabilities may execute (Live) or are cache-only
+    /// Whether dynamic fragments may execute (Live) or are cache-only
     /// (ReadOnly, for explain/dry-run).
     pub dynamic: DynamicMode,
 }
@@ -77,34 +77,34 @@ pub struct RenderOutput {
     pub context_hash: String,
     /// Where the base template came from.
     pub template_source: String,
-    /// Concatenated capability guidance (the `profile_guidance` body; may be
-    /// empty, e.g. when every capability is restricted to other agents).
+    /// Concatenated fragment guidance (the `profile_guidance` body; may be
+    /// empty, e.g. when every fragment is restricted to other agents).
     pub profile_guidance: String,
-    /// Whether any rendered capability was dynamic. Dynamic overlays bypass the
+    /// Whether any rendered fragment was dynamic. Dynamic overlays bypass the
     /// hash-skip so live output always lands (their volatile output is excluded
     /// from the context hash, so the cache TTL — not the hash — governs churn).
     pub has_dynamic: bool,
-    /// The composed capabilities, each rendered to its own markdown section.
+    /// The composed fragments, each rendered to its own markdown section.
     /// `profile_guidance` is exactly these joined; exposed structured so callers
-    /// (studio) can show per-capability preview cards without re-rendering.
-    pub capabilities: Vec<RenderedCapability>,
+    /// (studio) can show per-fragment preview cards without re-rendering.
+    pub fragments: Vec<RenderedFragment>,
 }
 
-/// One composed capability rendered to markdown — the structured form of a
-/// `### <title>` overlay section. Only the capabilities that actually produce a
+/// One composed fragment rendered to markdown — the structured form of a
+/// `### <title>` overlay section. Only the fragments that actually produce a
 /// section appear here (agent-gated and empty ones are omitted, exactly as in
 /// the overlay body).
 #[derive(Debug, Clone)]
-pub struct RenderedCapability {
-    /// Capability id (`<profile>:inline` for a synthetic inline capability).
+pub struct RenderedFragment {
+    /// Fragment id (`<profile>:inline` for a synthetic inline fragment).
     pub id: String,
-    /// Section title (the inline profile name, else the capability's title).
+    /// Section title (the inline profile name, else the fragment's title).
     pub title: String,
     /// Risk, for the section's annotation / the card's spine.
     pub risk: Risk,
     /// Rendered guidance markdown, or the skip note.
     pub body: String,
-    /// True when this capability resolved a dynamic provider/command.
+    /// True when this fragment resolved a dynamic provider/command.
     pub dynamic: bool,
     /// True when a dynamic command was skipped (`allow_exec = false`); `body` is
     /// the `> [rosita] …` skip note rather than rendered guidance.
@@ -120,22 +120,24 @@ struct RenderModel<'a> {
     context: &'a Context,
 }
 
-/// The serializable model exposed to each capability's guidance template.
+/// The serializable model exposed to each fragment's guidance template.
 #[derive(Serialize)]
-struct CapabilityModel<'a> {
+struct FragmentModel<'a> {
     agent: &'a str,
-    /// The profile that pulled this capability in.
+    /// The profile that pulled this fragment in.
     profile: &'a str,
     context: &'a Context,
-    capability: &'a Capability,
-    /// Convenience alias for `capability.params`.
+    fragment: &'a Fragment,
+    /// Back-compat alias for `fragment` (pre-rename templates used `{{ capability }}`).
+    capability: &'a Fragment,
+    /// Convenience alias for `fragment.params`.
     params: &'a toml::Value,
-    /// Live provider/command output for a dynamic capability (`{{ provider.output }}`,
-    /// `{{ provider.data }}`); absent for static capabilities.
+    /// Live provider/command output for a dynamic fragment (`{{ provider.output }}`,
+    /// `{{ provider.data }}`); absent for static fragments.
     provider: Option<ProviderRef<'a>>,
 }
 
-/// The dynamic-output view exposed to a capability's template as `provider`.
+/// The dynamic-output view exposed to a fragment's template as `provider`.
 #[derive(Serialize)]
 struct ProviderRef<'a> {
     output: &'a str,
@@ -145,7 +147,7 @@ struct ProviderRef<'a> {
 /// The freshness fingerprint stamped into a generated overlay (and compared on
 /// the next render / by `doctor`): the detected context **and** the composition
 /// that produced the overlay. A change to either — including a global-config
-/// edit that alters the resolved capabilities/profile for an unchanged context —
+/// edit that alters the resolved fragments/profile for an unchanged context —
 /// moves the fingerprint, so a cached overlay is never silently stale.
 pub fn overlay_fingerprint(context: &Context, composition: &Composition) -> String {
     crate::hash::context_hash(&(context.compute_hash(), composition.fingerprint()))
@@ -166,12 +168,12 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
     let template_name = template_override.unwrap_or(req.template_name);
     let base = templates::resolve(&req.context.repo_base, template_name)?;
 
-    // 2. Render the composed capabilities into the guidance body. Dynamic
-    //    capabilities resolve against `now` (parsed from the render timestamp).
+    // 2. Render the composed fragments into the guidance body. Dynamic
+    //    fragments resolve against `now` (parsed from the render timestamp).
     let now = DateTime::parse_from_rfc3339(&req.generated_at)
         .map(|t| t.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now());
-    let rendered_caps = render_capability_list(
+    let rendered_caps = render_fragment_list(
         &renderer,
         req.context,
         req.composition,
@@ -180,11 +182,11 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
         now,
     )?;
     let has_dynamic = rendered_caps.iter().any(|c| c.dynamic);
-    let profile_guidance = join_capability_sections(&rendered_caps);
+    let profile_guidance = join_fragment_sections(&rendered_caps);
 
     // 3. Freshness fingerprint: the detected context AND the composition that
     //    produced this overlay. Folding in the composition is what makes a
-    //    *global-config* change (a new/edited/removed capability or profile)
+    //    *global-config* change (a new/edited/removed fragment or profile)
     //    re-render a repo whose detected context is unchanged.
     let context_hash = overlay_fingerprint(req.context, req.composition);
 
@@ -221,43 +223,44 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
         template_source: base.source,
         profile_guidance,
         has_dynamic,
-        capabilities: rendered_caps,
+        fragments: rendered_caps,
     })
 }
 
-/// Render each composed capability (in order) into a structured
-/// [`RenderedCapability`]. The overlay body is [`join_capability_sections`] of
-/// this list; studio also consumes it for per-capability preview cards.
+/// Render each composed fragment (in order) into a structured
+/// [`RenderedFragment`]. The overlay body is [`join_fragment_sections`] of
+/// this list; studio also consumes it for per-fragment preview cards.
 ///
-/// Capabilities restricted to other agents are skipped (the active agent varies
+/// Fragments restricted to other agents are skipped (the active agent varies
 /// per render), as are ones that render empty. A synthetic `<profile>:inline`
-/// capability can still be overridden by a `profiles/<name>.md.j2` template file
-/// (repo, then global). A **dynamic** capability resolves its provider/command
+/// fragment can still be overridden by a `profiles/<name>.md.j2` template file
+/// (repo, then global). A **dynamic** fragment resolves its provider/command
 /// output (cache-backed) with `provider.output`/`provider.data` in scope; a
 /// command with `allow_exec = false` renders a skip note instead.
-fn render_capability_list(
+fn render_fragment_list(
     renderer: &MinijinjaRenderer,
     ctx: &Context,
     composition: &Composition,
     agent: &str,
     mode: DynamicMode,
     now: DateTime<Utc>,
-) -> crate::Result<Vec<RenderedCapability>> {
-    let mut out: Vec<RenderedCapability> = Vec::new();
+) -> crate::Result<Vec<RenderedFragment>> {
+    let mut out: Vec<RenderedFragment> = Vec::new();
 
-    for rc in &composition.capabilities {
-        let cap = &rc.capability;
+    for rc in &composition.fragments {
+        let cap = &rc.fragment;
         if !cap.applies_to_agent(agent) {
             continue;
         }
 
-        // Render a template with the per-capability model, optionally exposing
+        // Render a template with the per-fragment model, optionally exposing
         // dynamic `provider` output.
         let render_tmpl = |src: &str, provider: Option<&ProviderOutput>| -> crate::Result<String> {
-            let model = CapabilityModel {
+            let model = FragmentModel {
                 agent,
                 profile: &rc.via_profile,
                 context: ctx,
+                fragment: cap,
                 capability: cap,
                 params: &cap.params,
                 provider: provider.map(|o| ProviderRef {
@@ -298,7 +301,7 @@ fn render_capability_list(
                     rendered
                 }
             }
-            // Static capability.
+            // Static fragment.
             None => {
                 let template_src = if rc.inline {
                     read_profile_template(&ctx.repo_base, &rc.via_profile)
@@ -317,14 +320,14 @@ fn render_capability_list(
             }
         };
 
-        // Inline capabilities are titled by their profile (their description is
-        // synthetic); named capabilities use their title.
+        // Inline fragments are titled by their profile (their description is
+        // synthetic); named fragments use their title.
         let title = if rc.inline {
             rc.via_profile.clone()
         } else {
             cap.title().to_string()
         };
-        out.push(RenderedCapability {
+        out.push(RenderedFragment {
             id: cap.id.clone(),
             title,
             risk: cap.risk,
@@ -337,10 +340,10 @@ fn render_capability_list(
     Ok(out)
 }
 
-/// Join rendered capabilities into the overlay's guidance body: each becomes a
+/// Join rendered fragments into the overlay's guidance body: each becomes a
 /// `### <title>` section (risk-annotated when not `Info`), separated by a blank
 /// line. This is exactly the `profile_guidance` the base template embeds.
-fn join_capability_sections(caps: &[RenderedCapability]) -> String {
+fn join_fragment_sections(caps: &[RenderedFragment]) -> String {
     caps.iter()
         .map(|c| {
             let heading = match c.risk.annotation() {
@@ -370,15 +373,16 @@ fn read_profile_template(repo_base: &Path, profile: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::{Capability, Risk};
     use crate::context::test_support::sample_context;
-    use crate::profile::ResolvedCapability;
+    use crate::fragment::{Fragment, Risk};
+    use crate::profile::ResolvedFragment;
 
-    fn named_cap(id: &str, guidance: &str) -> Capability {
-        Capability {
+    fn named_cap(id: &str, guidance: &str) -> Fragment {
+        Fragment {
             id: id.into(),
             description: Some(id.into()),
             tags: vec![],
+            category: None,
             risk: Risk::Info,
             when: vec![],
             requires: vec![],
@@ -391,23 +395,23 @@ mod tests {
             icon: None,
             allow_exec: true,
             cache: None,
-            origin: crate::capability::Layer::default(),
+            origin: crate::fragment::Layer::default(),
         }
     }
 
-    fn resolved(cap: Capability, via: &str, inline: bool) -> ResolvedCapability {
-        ResolvedCapability {
-            capability: cap,
+    fn resolved(cap: Fragment, via: &str, inline: bool) -> ResolvedFragment {
+        ResolvedFragment {
+            fragment: cap,
             via_profile: via.into(),
             reason: "test".into(),
             inline,
         }
     }
 
-    fn composition(profile: &str, caps: Vec<ResolvedCapability>) -> Composition {
+    fn composition(profile: &str, caps: Vec<ResolvedFragment>) -> Composition {
         Composition {
             profile: Some(profile.into()),
-            capabilities: caps,
+            fragments: caps,
             reasons: vec![],
         }
     }
@@ -447,7 +451,7 @@ mod tests {
         assert!(out.content.contains("profile   : rust"));
         assert!(out.content.contains("Stack:** rust"));
         assert!(out.content.contains("`cargo test`"));
-        // The capability appears under its own heading...
+        // The fragment appears under its own heading...
         assert!(out.content.contains("### rust-conventions"));
         // ...with its guidance template rendered against the context.
         assert!(out.content.contains("Use cargo for **rust**."));
@@ -455,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    fn exposes_structured_per_capability_output() {
+    fn exposes_structured_per_fragment_output() {
         let ctx = sample_context();
         let cfg = Config::defaults();
         let mut risky = named_cap("infra-caution", "Be careful.");
@@ -478,24 +482,21 @@ mod tests {
         })
         .unwrap();
 
-        // One structured entry per rendered capability, in composition order.
-        let ids: Vec<&str> = out.capabilities.iter().map(|c| c.id.as_str()).collect();
+        // One structured entry per rendered fragment, in composition order.
+        let ids: Vec<&str> = out.fragments.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, vec!["infra-caution", "baseline"]);
-        assert_eq!(out.capabilities[0].risk, Risk::Caution);
-        assert_eq!(out.capabilities[0].body, "Be careful.");
-        assert!(!out.capabilities[0].dynamic && !out.capabilities[0].skipped);
+        assert_eq!(out.fragments[0].risk, Risk::Caution);
+        assert_eq!(out.fragments[0].body, "Be careful.");
+        assert!(!out.fragments[0].dynamic && !out.fragments[0].skipped);
         // The structured list joins back to the overlay's guidance body exactly.
-        assert_eq!(
-            out.profile_guidance,
-            join_capability_sections(&out.capabilities)
-        );
+        assert_eq!(out.profile_guidance, join_fragment_sections(&out.fragments));
         assert!(out
             .profile_guidance
             .contains("### infra-caution — ⚠️ caution"));
     }
 
     #[test]
-    fn concatenates_capabilities_in_order_with_risk_annotation() {
+    fn concatenates_fragments_in_order_with_risk_annotation() {
         let ctx = sample_context();
         let cfg = Config::defaults();
         let mut risky = named_cap("infra-caution", "Be careful.");
@@ -518,7 +519,7 @@ mod tests {
         })
         .unwrap();
 
-        // Risk is annotated on the caution capability only.
+        // Risk is annotated on the caution fragment only.
         assert!(out.content.contains("### infra-caution — ⚠️ caution"));
         assert!(out.content.contains("### baseline"));
         // Order is preserved: infra before baseline.
@@ -526,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_restricted_capability_is_skipped() {
+    fn agent_restricted_fragment_is_skipped() {
         let ctx = sample_context();
         let cfg = Config::defaults();
         let mut only_codex = named_cap("codex-only", "Codex specifics.");
@@ -559,9 +560,9 @@ mod tests {
         ctx.repo_base = d.path().to_path_buf();
         ctx.cwd = d.path().to_path_buf();
         let cfg = Config::defaults();
-        // An inline capability whose guidance must be overridden by the file.
+        // An inline fragment whose guidance must be overridden by the file.
         let inline = resolved(
-            Capability::inline("rust", "INLINE GUIDANCE".into()),
+            Fragment::inline("rust", "INLINE GUIDANCE".into()),
             "rust",
             true,
         );

@@ -1,7 +1,7 @@
 //! Cross-machine sync of the global config dir via the `git` CLI (no libgit2).
 //!
 //! The global config dir (where `config.toml` lives) is a git repo. `config.toml`
-//! — your shareable capabilities & profiles, secret-free by design — is tracked
+//! — your shareable fragments & profiles, secret-free by design — is tracked
 //! and syncs; `local.toml` (per-machine hostnames / secret-adjacent params) is
 //! gitignored and never leaves the machine. Every network op is **timeout-bounded
 //! and non-fatal**: a slow/offline remote degrades to "use the local config",
@@ -337,7 +337,7 @@ pub fn clone(url: &str, dir: &Path, timeout: Duration) -> Result<()> {
         std::fs::write(
             &local,
             "# Private, per-machine config (gitignored). Real hostnames,\n\
-             # [host_classes], and [capability_params] live here.\n",
+             # [host_classes], and [fragment_params] live here.\n",
         )
         .ok();
     }

@@ -58,15 +58,16 @@ pub enum Command {
     Clean(CleanArgs),
     /// Diagnose the environment and configuration.
     Doctor,
-    /// List capabilities, or show one (`rosita capabilities [list|show <id>]`).
-    Capabilities(CapabilitiesArgs),
+    /// List fragments, or show one (`rosita fragments [list|show <id>]`).
+    #[command(alias = "capabilities")]
+    Fragments(FragmentsArgs),
     /// List configured profiles and which match the current context.
     Profiles(ProfilesArgs),
     /// List configured agents and how each delivers the overlay.
     Agents(AgentsArgs),
     /// Launch the local studio web UI (ephemeral; serves until Ctrl-C).
     Studio(StudioArgs),
-    /// Sync your global config (capabilities & profiles) across machines via git.
+    /// Sync your global config (fragments & profiles) across machines via git.
     Sync(SyncArgs),
 }
 
@@ -114,25 +115,25 @@ pub struct StudioArgs {
     pub no_open: bool,
 }
 
-/// `capabilities` options.
+/// `fragments` options.
 #[derive(Debug, Args)]
-pub struct CapabilitiesArgs {
+pub struct FragmentsArgs {
     /// `list` (default) or `show <id>`.
     #[command(subcommand)]
-    pub action: Option<CapabilitiesAction>,
+    pub action: Option<FragmentsAction>,
     /// Emit JSON instead of a human summary.
     #[arg(long, global = true)]
     pub json: bool,
 }
 
-/// `capabilities` subcommands.
+/// `fragments` subcommands.
 #[derive(Debug, Subcommand)]
-pub enum CapabilitiesAction {
-    /// List every capability in the library (the default).
+pub enum FragmentsAction {
+    /// List every fragment in the library (the default).
     List,
-    /// Show one capability's full details.
+    /// Show one fragment's full details.
     Show {
-        /// Capability id.
+        /// Fragment id.
         id: String,
     },
 }

@@ -2,7 +2,7 @@
 //!
 //! A [`EnvProvider`] probes the live environment (host, tailnet, docker,
 //! installed toolchains and agent CLIs) and returns a [`ProviderOutput`] a
-//! dynamic capability can embed. Probing is **best-effort**: a missing tool
+//! dynamic fragment can embed. Probing is **best-effort**: a missing tool
 //! degrades to `None`, never an error.
 //!
 //! Provider output is machine-specific and volatile, so it is:
@@ -11,7 +11,7 @@
 //!   hash (it lives in a separate [`Probes`] value used only for display/render),
 //! - **cached** under `.rosita/cache/<id>.json` with a TTL.
 //!
-//! New providers are rows in [`builtin_providers`]. Dynamic capabilities embed
+//! New providers are rows in [`builtin_providers`]. Dynamic fragments embed
 //! provider output (or a shell `command`) via [`crate::dynamic`].
 
 mod ai_tools;

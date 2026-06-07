@@ -1,11 +1,11 @@
-//! `maud` server-rendered HTML for rosita studio: a tabbed shell (Capabilities /
-//! Profiles), the profile rail + per-capability detail, the capability list +
+//! `maud` server-rendered HTML for rosita studio: a tabbed shell (Fragments /
+//! Profiles), the profile rail + per-fragment detail, the fragment list +
 //! modal dialog, the full-width profile editor, and the diff/review.
 //!
 //! Targets the tiny embedded htmx-shim. Swap targets:
 //! - `#main` — the active tab's content (caps list, profile rail, editor, diff).
 //! - `#profile-main` — the selected profile's detail (a rail click swaps it in).
-//! - `#modal` — the capability dialog (CSS shows it when non-empty; `/close`
+//! - `#modal` — the fragment dialog (CSS shows it when non-empty; `/close`
 //!   swaps it empty).
 //! - `#staged` — the top-bar staged-changes indicator (mutations re-pull it).
 
@@ -14,12 +14,12 @@ use std::path::Path;
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use pulldown_cmark::{html as md_html, Event, Options, Parser};
 
-use crate::capability::{Capability, Layer, Risk};
 use crate::context::Scope;
+use crate::fragment::{Fragment, Layer, Risk};
 use crate::profile::ProfileConfig;
 use crate::studio::edit::FileDiff;
 use crate::studio::state::{
-    AtomDot, AtomState, BindingState, CapView, LibraryView, Onboarding, PackView, PreviewCap,
+    AtomDot, AtomState, BindingState, FragmentView, LibraryView, Onboarding, PackView, PreviewCap,
     PreviewOutcome, ProfileView,
 };
 
@@ -28,11 +28,11 @@ const TARGETS: &[&str] = &[
     "rust", "node", "nextjs", "go", "python", "android", "java", "machine",
 ];
 
-/// Script interpreters offered in the capability dialog.
+/// Script interpreters offered in the fragment dialog.
 const SCRIPT_LANGS: &[(&str, &str)] = &[("bash", "Bash"), ("python", "Python"), ("sh", "POSIX sh")];
 
-/// The curated icon set a capability can pick from.
-const CAP_ICONS: &[&str] = &[
+/// The curated icon set a fragment can pick from.
+const FRAGMENT_ICONS: &[&str] = &[
     "box",
     "bolt",
     "terminal",
@@ -167,8 +167,8 @@ fn brand_mark() -> Markup {
     )
 }
 
-/// The icon to show for a capability (its chosen icon, else a kind default).
-fn cap_icon_name(c: &CapView) -> &str {
+/// The icon to show for a fragment (its chosen icon, else a kind default).
+fn fragment_icon_name(c: &FragmentView) -> &str {
     match &c.icon {
         Some(name) => name,
         None if c.kind == "command" => "terminal",
@@ -245,7 +245,7 @@ fn tab_bar(active: &str) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
         nav class="tabs" {
-            button class=(cls("capabilities")) data-tab="capabilities" hx-get="/tab/capabilities" hx-target="#main" { (icon("box")) "Capabilities" }
+            button class=(cls("fragments")) data-tab="fragments" hx-get="/tab/fragments" hx-target="#main" { (icon("box")) "Fragments" }
             button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Profiles" }
         }
     }
@@ -275,18 +275,18 @@ fn staged_refresh() -> Markup {
 }
 
 /// The staged-indicator refresh loader as a standalone string (for handlers that
-/// append it to a non-fragment response, e.g. the inline cap-add editor reload).
+/// append it to a non-fragment response, e.g. the inline fragment-add editor reload).
 pub fn staged_indicator_loader() -> String {
     staged_refresh().into_string()
 }
 
-/// A one-shot loader that closes the modal after a capability mutation.
+/// A one-shot loader that closes the modal after a fragment mutation.
 fn modal_close() -> Markup {
     html! { div hx-get="/close" hx-trigger="load" hx-target="#modal" {} }
 }
 
 /// The modal-close loader as a standalone string (appended to a profile-detail
-/// re-render when a capability was edited from inside a profile).
+/// re-render when a fragment was edited from inside a profile).
 pub fn modal_close_loader() -> String {
     modal_close().into_string()
 }
@@ -345,7 +345,7 @@ pub fn profiles_tab(
 }
 
 /// First-launch welcome shown on the Profiles tab when the config is fresh (no
-/// profiles and no own capabilities): confirm what was detected, explain what a
+/// profiles and no own fragments): confirm what was detected, explain what a
 /// profile is for (and why the overlay is empty), then offer the starter-pack
 /// gallery (recommended pack first) or a from-scratch composer.
 fn studio_welcome(o: &Onboarding, packs: &[PackView]) -> Markup {
@@ -371,7 +371,7 @@ fn studio_welcome(o: &Onboarding, packs: &[PackView]) -> Markup {
                 }
             }
             p class="welcome-lead" { "A " strong { "profile" } " decides what guidance your agent gets here — you have none yet. Apply a " strong { "starter pack" } " to get one in a click." }
-            p class="muted" { "Each pack copies a curated set of capabilities into your library and creates a ready-made profile — all staged; nothing is saved until you Apply." }
+            p class="muted" { "Each pack copies a curated set of fragments into your library and creates a ready-made profile — all staged; nothing is saved until you Apply." }
             (legend())
             div class="pack-grid" { @for p in packs { (pack_card(p)) } }
             div class="welcome-actions" {
@@ -381,7 +381,7 @@ fn studio_welcome(o: &Onboarding, packs: &[PackView]) -> Markup {
     }
 }
 
-/// One row in the profile rail: name + status + targets + capability dots.
+/// One row in the profile rail: name + status + targets + fragment dots.
 /// Selecting it swaps the detail into `#profile-main`.
 fn profile_rail_item(p: &ProfileView, active: bool) -> Markup {
     let name = p.name.as_str();
@@ -411,7 +411,7 @@ fn profile_rail_item(p: &ProfileView, active: bool) -> Markup {
             }
             span class="rail-foot" {
                 @if p.atoms.is_empty() {
-                    span class="muted small" { "no capabilities" }
+                    span class="muted small" { "no fragments" }
                 } @else {
                     span class="atoms" { @for a in &p.atoms { (atom_dot(a)) } }
                     span class="muted small" { (p.atoms.len()) }
@@ -423,7 +423,7 @@ fn profile_rail_item(p: &ProfileView, active: bool) -> Markup {
 
 /// The selected profile's detail (fills `#profile-main`): a header with the
 /// profile name + actions, a provenance breadcrumb, then one expandable card
-/// per composed capability.
+/// per composed fragment.
 pub fn profile_detail(d: &ProfileDetail) -> Markup {
     let p = d.outcome;
     let name = d.name;
@@ -452,7 +452,7 @@ pub fn profile_detail(d: &ProfileDetail) -> Markup {
             div class="provenance" {
                 span class="prov-node" { (p.context_summary.as_str()) }
                 span class="prov-arrow" { (icon("arrow-right")) }
-                span class="prov-node" { (n) " " (if n == 1 { "capability" } else { "capabilities" }) }
+                span class="prov-node" { (n) " " (if n == 1 { "fragment" } else { "fragments" }) }
                 @if p.caps.iter().any(|c| c.dynamic) {
                     span class="prov-spacer" {}
                     button type="button" class="btn btn-ghost btn-sm run-all"
@@ -469,7 +469,7 @@ pub fn profile_detail(d: &ProfileDetail) -> Markup {
                     p class="muted" { "This profile composes no guidance for " (p.agent.as_str()) " in this context." }
                 }
             } @else {
-                div class="detail-doc" { @for c in &p.caps { (preview_cap_card(c, name)) } }
+                div class="detail-doc" { @for c in &p.caps { (preview_fragment_card(c, name)) } }
             }
         }
     }
@@ -479,10 +479,10 @@ pub fn profile_detail_fragment(d: &ProfileDetail) -> String {
     profile_detail(d).into_string()
 }
 
-/// One collapsible capability section inside the profile "document": a compact
-/// summary row that, when opened, reveals the capability's rendered-markdown
-/// guidance (the prominent content) plus an "Edit capability" action.
-fn preview_cap_card(c: &PreviewCap, profile: &str) -> Markup {
+/// One collapsible fragment section inside the profile "document": a compact
+/// summary row that, when opened, reveals the fragment's rendered-markdown
+/// guidance (the prominent content) plus an "Edit fragment" action.
+fn preview_fragment_card(c: &PreviewCap, profile: &str) -> Markup {
     let glyph = c
         .icon
         .as_deref()
@@ -492,16 +492,16 @@ fn preview_cap_card(c: &PreviewCap, profile: &str) -> Markup {
     // show the centered "Run" prompt instead of a bare placeholder line.
     let has_output = c.dynamic && !c.pending && !c.skipped;
     let prompt = c.dynamic && c.pending;
-    let run_url = format!("/capabilities/{}/run?profile={}", enc(&c.id), enc(profile));
+    let run_url = format!("/fragments/{}/run?profile={}", enc(&c.id), enc(profile));
     html! {
-        details class=(format!("cap-detail {}", risk_class(c.risk))) open[has_output || prompt] {
-            summary class="cap-detail-head" {
-                span class="cap-glyph" { (icon(glyph)) }
-                span class="cap-detail-title" { (c.title) }
-                span class="cap-detail-id" { (c.id) }
-                span class="cap-detail-spacer" {}
+        details class=(format!("fragment-detail {}", risk_class(c.risk))) open[has_output || prompt] {
+            summary class="fragment-detail-head" {
+                span class="fragment-glyph" { (icon(glyph)) }
+                span class="fragment-detail-title" { (c.title) }
+                span class="fragment-detail-id" { (c.id) }
+                span class="fragment-detail-spacer" {}
                 @if c.dynamic {
-                    button type="button" class="btn btn-ghost btn-xs cap-run"
+                    button type="button" class="btn btn-ghost btn-xs fragment-run"
                         title="Run this script now and show its output"
                         hx-post=(run_url.clone())
                         hx-target="#profile-main" {
@@ -510,16 +510,16 @@ fn preview_cap_card(c: &PreviewCap, profile: &str) -> Markup {
                 }
                 @if c.skipped { span class="tag off-tag" { (icon("shield")) "exec off" } }
                 @else if c.dynamic { span class="tag script-tag" { (icon("bolt")) "dynamic" } }
-                span class="cap-chev" { (icon("chevron-down")) }
+                span class="fragment-chev" { (icon("chevron-down")) }
             }
-            div class="cap-detail-body" {
+            div class="fragment-detail-body" {
                 @if has_output {
-                    pre class="cap-output" { (c.markdown) }
+                    pre class="fragment-output" { (c.markdown) }
                 } @else if prompt {
                     // Centered run prompt — clicking it (or the corner button)
                     // re-renders this pane with the script's live output in place.
-                    div class="cap-run-prompt" {
-                        button type="button" class="btn btn-primary cap-run-center"
+                    div class="fragment-run-prompt" {
+                        button type="button" class="btn btn-primary fragment-run-center"
                             hx-post=(run_url) hx-target="#profile-main" {
                             (icon("play")) "Run script"
                         }
@@ -529,10 +529,10 @@ fn preview_cap_card(c: &PreviewCap, profile: &str) -> Markup {
                     div class="markdown-body" { (render_markdown(&c.markdown)) }
                 }
                 @if c.editable {
-                    div class="cap-detail-foot" {
+                    div class="fragment-detail-foot" {
                         button class="btn btn-ghost btn-sm"
-                            hx-get=(format!("/capabilities/{}/edit?profile={}", enc(&c.id), enc(profile)))
-                            hx-target="#modal" { (icon("pencil")) "Edit capability" }
+                            hx-get=(format!("/fragments/{}/edit?profile={}", enc(&c.id), enc(profile)))
+                            hx-target="#modal" { (icon("pencil")) "Edit fragment" }
                     }
                 }
             }
@@ -545,7 +545,7 @@ fn profiles_empty_main() -> Markup {
         div class="detail-blank" {
             (icon("layers"))
             p { "No profiles yet." }
-            p class="muted" { "A profile bundles capabilities and binds them to a kind of repo." }
+            p class="muted" { "A profile bundles fragments and binds them to a kind of repo." }
             button class="btn btn-primary" hx-get="/profiles/new" hx-target="#main" { (icon("plus")) "Create your first profile" }
         }
     }
@@ -560,41 +560,41 @@ fn profile_pick_prompt() -> Markup {
     }
 }
 
-// --- Capabilities tab --------------------------------------------------------
+// --- Fragments tab --------------------------------------------------------
 
-/// The Capabilities tab: a grid of *your* capability cards (open a dialog on
+/// The Fragments tab: a grid of *your* fragment cards (open a dialog on
 /// click). Only owned caps appear here — the shipped palette is a read-only
 /// catalog you duplicate from when composing a profile, not an active layer.
-pub fn capabilities_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
+pub fn fragments_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
     html! {
-        div class="tab-capabilities" {
+        div class="tab-fragments" {
             div class="dash-head" {
-                h1 { "Capabilities" }
+                h1 { "Fragments" }
                 div class="head-actions" {
                     (legend())
                     button class="btn btn-ghost" hx-get="/packs" hx-target="#main" { (icon("grid")) "Add from packs" }
-                    button class="btn btn-primary" hx-get="/capabilities/new" hx-target="#modal" { (icon("plus")) "New capability" }
+                    button class="btn btn-primary" hx-get="/fragments/new" hx-target="#modal" { (icon("plus")) "New fragment" }
                 }
             }
             @if let Some(msg) = flash { p class="flash" { (icon("check")) (msg) } }
             @if lib.yours.is_empty() {
                 div class="empty-card" {
-                    p { "No capabilities yet." }
-                    p class="muted" { "A capability is a reusable chunk of guidance (or a script) that profiles compose. The quickest start is a pack." }
+                    p { "No fragments yet." }
+                    p class="muted" { "A fragment is a reusable chunk of guidance (or a script) that profiles compose. The quickest start is a pack." }
                     div class="empty-actions" {
                         button class="btn btn-primary" hx-get="/packs" hx-target="#main" { (icon("grid")) "Browse starter packs" }
-                        button class="btn btn-ghost" hx-get="/capabilities/new" hx-target="#modal" { (icon("plus")) "Write your first capability" }
+                        button class="btn btn-ghost" hx-get="/fragments/new" hx-target="#modal" { (icon("plus")) "Write your first fragment" }
                     }
                 }
             } @else {
-                @let groups = group_capabilities(&lib.yours);
+                @let groups = group_fragments(&lib.yours);
                 @if groups.len() <= 1 {
-                    div class="cap-grid" { @for c in &lib.yours { (cap_card(c)) } }
+                    div class="fragment-grid" { @for c in &lib.yours { (fragment_card(c)) } }
                 } @else {
                     @for (label, caps) in &groups {
-                        section class="cap-group" {
-                            h2 class="cap-group-head" { (label) span class="cap-group-count" { (caps.len()) } }
-                            div class="cap-grid" { @for c in caps { (cap_card(c)) } }
+                        section class="fragment-group" {
+                            h2 class="fragment-group-head" { (label) span class="fragment-group-count" { (caps.len()) } }
+                            div class="fragment-grid" { @for c in caps { (fragment_card(c)) } }
                         }
                     }
                 }
@@ -603,8 +603,8 @@ pub fn capabilities_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
     }
 }
 
-pub fn capabilities_tab_fragment(lib: &LibraryView, flash: Option<&str>) -> String {
-    capabilities_tab(lib, flash).into_string()
+pub fn fragments_tab_fragment(lib: &LibraryView, flash: Option<&str>) -> String {
+    fragments_tab(lib, flash).into_string()
 }
 
 /// Order known categories sensibly; unknown tags fall after them (alphabetical),
@@ -620,7 +620,7 @@ const CATEGORY_ORDER: &[&str] = &[
     "security",
 ];
 
-/// A friendly heading for a capability category (its primary tag).
+/// A friendly heading for a fragment category (its primary tag).
 fn category_label(cat: Option<&str>) -> String {
     match cat {
         Some("stack") => "Stack conventions".to_string(),
@@ -646,10 +646,10 @@ fn title_case(s: &str) -> String {
     }
 }
 
-/// Group capabilities by their primary category, in a stable, friendly order.
+/// Group fragments by their primary category, in a stable, friendly order.
 /// Within a group, the caps keep their library order.
-fn group_capabilities(caps: &[CapView]) -> Vec<(String, Vec<&CapView>)> {
-    let key_of = |c: &CapView| c.category.clone().unwrap_or_default();
+fn group_fragments(caps: &[FragmentView]) -> Vec<(String, Vec<&FragmentView>)> {
+    let key_of = |c: &FragmentView| c.category.clone().unwrap_or_default();
     // Distinct keys in first-seen order, then sorted by rank.
     let mut keys: Vec<String> = Vec::new();
     for c in caps {
@@ -662,7 +662,7 @@ fn group_capabilities(caps: &[CapView]) -> Vec<(String, Vec<&CapView>)> {
     keys.into_iter()
         .map(|k| {
             let label = category_label(if k.is_empty() { None } else { Some(&k) });
-            let members: Vec<&CapView> = caps.iter().filter(|c| key_of(c) == k).collect();
+            let members: Vec<&FragmentView> = caps.iter().filter(|c| key_of(c) == k).collect();
             (label, members)
         })
         .collect()
@@ -680,19 +680,19 @@ fn category_rank(key: &str) -> (u8, String) {
     }
 }
 
-fn cap_card(c: &CapView) -> Markup {
+fn fragment_card(c: &FragmentView) -> Markup {
     let id = c.id.as_str();
     let e = enc(id);
-    let cls = format!("cap-card {}", risk_class(c.risk));
+    let cls = format!("fragment-card {}", risk_class(c.risk));
     html! {
-        div class=(cls) hx-get=(format!("/capabilities/{e}/edit")) hx-target="#modal" role="button" tabindex="0" {
-            span class="cap-glyph" { (icon(cap_icon_name(c))) }
-            div class="cap-main" {
-                span class="cap-title" { (c.title) }
-                @if let Some(s) = &c.summary { span class="cap-summary" { (s) } }
-                span class="cap-id" { (id) }
+        div class=(cls) hx-get=(format!("/fragments/{e}/edit")) hx-target="#modal" role="button" tabindex="0" {
+            span class="fragment-glyph" { (icon(fragment_icon_name(c))) }
+            div class="fragment-main" {
+                span class="fragment-title" { (c.title) }
+                @if let Some(s) = &c.summary { span class="fragment-summary" { (s) } }
+                span class="fragment-id" { (id) }
             }
-            div class="cap-tags" {
+            div class="fragment-tags" {
                 @if let Some(lang) = &c.script_lang { span class="tag script-tag" { (icon("terminal")) (lang) } }
                 @else if c.kind == "command" { span class="tag script-tag" { (icon("terminal")) "script" } }
                 @else if c.kind == "provider" { span class="tag script-tag" { (icon("bolt")) "dynamic" } }
@@ -706,7 +706,7 @@ fn cap_card(c: &CapView) -> Markup {
 // --- starter packs + legend --------------------------------------------------
 
 /// A compact, collapsible key to studio's visual language: the risk spine,
-/// capability kind badges, and the profile/pack atom-dot states.
+/// fragment kind badges, and the profile/pack atom-dot states.
 fn legend() -> Markup {
     html! {
         details class="legend" {
@@ -726,7 +726,7 @@ fn legend() -> Markup {
                     span class="legend-row" { span class="tag script-tag" { (icon("bolt")) "dynamic" } "live provider" }
                 }
                 div class="legend-group" {
-                    span class="legend-head" { "Capability dots" }
+                    span class="legend-head" { "Fragment dots" }
                     span class="legend-row" { span class="atom owned" {} "owned — composes" }
                     span class="legend-row" { span class="atom palette" {} "palette only" }
                     span class="legend-row" { span class="atom unknown" {} "unknown id" }
@@ -743,12 +743,12 @@ pub fn packs_gallery(packs: &[PackView]) -> Markup {
         div class="tab-packs" {
             div class="dash-head" {
                 div class="editor-head" {
-                    button type="button" class="icon-btn" title="Back" hx-get="/tab/capabilities" hx-target="#main" { (icon("arrow-right")) }
+                    button type="button" class="icon-btn" title="Back" hx-get="/tab/fragments" hx-target="#main" { (icon("arrow-right")) }
                     h1 { "Starter packs" }
                 }
                 (legend())
             }
-            p class="muted gallery-lead" { "A pack copies a curated set of capabilities into your library and creates a ready-made profile — all staged for you to review and Apply." }
+            p class="muted gallery-lead" { "A pack copies a curated set of fragments into your library and creates a ready-made profile — all staged for you to review and Apply." }
             div class="pack-grid" { @for p in packs { (pack_card(p)) } }
         }
     }
@@ -759,7 +759,7 @@ pub fn packs_gallery_fragment(packs: &[PackView]) -> String {
 }
 
 /// One starter-pack card: icon + name (+ recommended/applied badge), a short
-/// description, the composed capabilities as risk-colored atom dots, and an
+/// description, the composed fragments as risk-colored atom dots, and an
 /// Apply action (disabled once the pack's profile already exists).
 fn pack_card(p: &PackView) -> Markup {
     let e = enc(&p.id);
@@ -792,13 +792,13 @@ fn pack_card(p: &PackView) -> Markup {
     }
 }
 
-// --- capability dialog (modal) ----------------------------------------------
+// --- fragment dialog (modal) ----------------------------------------------
 
-/// The capability dialog content (swapped into `#modal`). A palette item is
+/// The fragment dialog content (swapped into `#modal`). A palette item is
 /// read-only with a duplicate action; an advanced cap is read-only with an
 /// "edit in TOML" note; otherwise the content-first editor.
-pub fn cap_dialog(
-    cap: Option<&Capability>,
+pub fn fragment_dialog(
+    cap: Option<&Fragment>,
     layer: Layer,
     owned: bool,
     return_profile: Option<&str>,
@@ -808,12 +808,12 @@ pub fn cap_dialog(
     let id = cap.map(|c| c.id.as_str()).unwrap_or("");
     let read_only_palette = !is_new && !owned;
     let advanced = cap
-        .map(crate::studio::state::is_advanced_capability)
+        .map(crate::studio::state::is_advanced_fragment)
         .unwrap_or(false);
-    // Deleting a composed capability also cleans it out of the profiles using it;
+    // Deleting a composed fragment also cleans it out of the profiles using it;
     // warn up front and name them so it isn't a surprise.
     let delete_confirm = if used_by.is_empty() {
-        format!("Delete capability “{id}”? This stages its removal.")
+        format!("Delete fragment “{id}”? This stages its removal.")
     } else {
         let names = used_by
             .iter()
@@ -826,23 +826,23 @@ pub fn cap_dialog(
             "those profiles"
         };
         format!(
-            "Delete capability “{id}”? It's composed by {names} — deleting it will also remove it from {those}. This stages all the changes."
+            "Delete fragment “{id}”? It's composed by {names} — deleting it will also remove it from {those}. This stages all the changes."
         )
     };
     html! {
         div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
         div class="modal" {
             @if read_only_palette {
-                div class="modal-head" { h2 { "Palette capability" } (close_btn()) }
+                div class="modal-head" { h2 { "Palette fragment" } (close_btn()) }
                 div class="modal-body" {
                     p class="hint" { "Starter template. Duplicate “" (id) "” into your library to own and edit it." }
                 }
                 div class="modal-foot" {
                     button class="btn btn-ghost" hx-get="/close" hx-target="#modal" { "Close" }
-                    button class="btn btn-primary" hx-post=(format!("/capabilities/{}/duplicate", enc(id))) hx-target="#main" { (icon("copy")) "Duplicate into my library" }
+                    button class="btn btn-primary" hx-post=(format!("/fragments/{}/duplicate", enc(id))) hx-target="#main" { (icon("copy")) "Duplicate into my library" }
                 }
             } @else if advanced {
-                div class="modal-head" { h2 { "Advanced capability" } (close_btn()) }
+                div class="modal-head" { h2 { "Advanced fragment" } (close_btn()) }
                 div class="modal-body" {
                     p class="hint" { "“" (id) "” uses features the quick editor can't show without dropping one side (a built-in provider, or a script with a custom template). Edit it directly in your config TOML." }
                 }
@@ -851,9 +851,9 @@ pub fn cap_dialog(
                 @let is_script = cap.map(|c| c.command.is_some()).unwrap_or(false);
                 @let allow_exec = cap.map(|c| c.allow_exec).unwrap_or(true);
                 @let lang = cap.and_then(|c| c.script_lang.as_deref()).unwrap_or("bash");
-                form class="cap-form" hx-post="/capabilities" hx-target="#main" {
+                form class="fragment-form" hx-post="/fragments" hx-target="#main" {
                     div class="modal-head" {
-                        h2 { (if is_new { "New capability" } else { "Edit capability" }) }
+                        h2 { (if is_new { "New fragment" } else { "Edit fragment" }) }
                         (close_btn())
                     }
                     div class="modal-body" {
@@ -896,20 +896,20 @@ pub fn cap_dialog(
                         }
                         (lives_in(layer))
                         @if !is_new {
-                            p class="hint small" { "Save updates this capability in every profile that uses it. Use " strong { "Save as a copy" } " to make a separate version under a new name." }
+                            p class="hint small" { "Save updates this fragment in every profile that uses it. Use " strong { "Save as a copy" } " to make a separate version under a new name." }
                         }
                     }
                     div class="modal-foot" {
                         @if !is_new {
                             button type="button" class="btn btn-danger delete-left"
-                                hx-delete=(format!("/capabilities/{}", enc(id))) hx-target="#main"
+                                hx-delete=(format!("/fragments/{}", enc(id))) hx-target="#main"
                                 hx-confirm=(delete_confirm) {
                                 (icon("trash")) "Delete"
                             }
                         }
                         button type="button" class="btn btn-ghost" hx-get="/close" hx-target="#modal" { "Cancel" }
                         @if !is_new {
-                            button type="button" class="btn" hx-post="/capabilities?as=copy" hx-target="#main" { (icon("copy")) "Save as a copy" }
+                            button type="button" class="btn" hx-post="/fragments?as=copy" hx-target="#main" { (icon("copy")) "Save as a copy" }
                         }
                         button type="submit" class="btn btn-primary" { (icon("check")) "Save" }
                     }
@@ -944,7 +944,7 @@ fn icon_picker(selected: Option<&str>) -> Markup {
                             input type="radio" name="icon" value="" checked[selected.is_none()];
                             span class="icon-cell" { (icon("x")) }
                         }
-                        @for name in CAP_ICONS {
+                        @for name in FRAGMENT_ICONS {
                             label class="icon-opt" title=(name) {
                                 input type="radio" name="icon" value=(name) checked[selected == Some(*name)];
                                 span class="icon-cell" { (icon(name)) }
@@ -975,7 +975,7 @@ fn lives_in(layer: Layer) -> Markup {
 
 // --- profile editor (full view) ----------------------------------------------
 
-/// The full-width profile editor: a form (left) with name, targets, a capability
+/// The full-width profile editor: a form (left) with name, targets, a fragment
 /// picker, an inline quick-create, and a live preview (right). `draft` carries
 /// the in-progress values (so an inline add re-renders without losing state).
 pub fn profile_editor(
@@ -986,7 +986,7 @@ pub fn profile_editor(
     error: Option<&str>,
 ) -> String {
     let name = draft.name.as_str();
-    let selected: Vec<&str> = draft.capabilities.iter().map(|r| r.id()).collect();
+    let selected: Vec<&str> = draft.fragments.iter().map(|r| r.id()).collect();
     let chosen = |id: &str| selected.contains(&id);
     html! {
         div class="profile-editor" {
@@ -1014,13 +1014,13 @@ pub fn profile_editor(
                         }
                     }
                 }
-                fieldset class="cap-picker" {
-                    legend { "Capabilities" span class="field-hint" { "tick the ones to compose" } }
+                fieldset class="fragment-picker" {
+                    legend { "Fragments" span class="field-hint" { "tick the ones to compose" } }
                     div class="pick-list" {
                         @for c in &lib.yours {
                             label class="pick" {
-                                input type="checkbox" name="capabilities" value=(c.id.as_str()) checked[chosen(c.id.as_str())];
-                                span class="pick-glyph" { (icon(cap_icon_name(c))) }
+                                input type="checkbox" name="fragments" value=(c.id.as_str()) checked[chosen(c.id.as_str())];
+                                span class="pick-glyph" { (icon(fragment_icon_name(c))) }
                                 span class="pick-main" { span class="pick-title" { (c.title) } span class="pick-id" { (c.id.as_str()) } }
                             }
                         }
@@ -1049,27 +1049,27 @@ pub fn profile_editor(
     .into_string()
 }
 
-/// The collapsible inline "new capability" mini-form inside the profile editor.
-/// Its fields are `cap_*`-namespaced so they don't collide with the profile form;
+/// The collapsible inline "new fragment" mini-form inside the profile editor.
+/// Its fields are `fragment_*`-namespaced so they don't collide with the profile form;
 /// "Add" posts the whole editor form to `/profiles/draft`.
 fn inline_new_cap() -> Markup {
     html! {
         details class="inline-cap" {
-            summary { (icon("plus")) "New capability" }
+            summary { (icon("plus")) "New fragment" }
             div class="inline-grid" {
                 label class="field" { span class="field-label" { "title" }
-                    input type="text" name="cap_name" placeholder="New capability";
+                    input type="text" name="fragment_name" placeholder="New fragment";
                 }
                 div class="seg seg-sm" {
-                    input type="radio" name="cap_kind" id="cap-kind-md" value="markdown" checked;
-                    label class="seg-opt" for="cap-kind-md" { "Markdown" }
-                    input type="radio" name="cap_kind" id="cap-kind-sc" value="script";
-                    label class="seg-opt" for="cap-kind-sc" { "Script" }
+                    input type="radio" name="fragment_kind" id="fragment-kind-md" value="markdown" checked;
+                    label class="seg-opt" for="fragment-kind-md" { "Markdown" }
+                    input type="radio" name="fragment_kind" id="fragment-kind-sc" value="script";
+                    label class="seg-opt" for="fragment-kind-sc" { "Script" }
                 }
                 label class="field" { span class="field-label" { "content" }
-                    textarea name="cap_content" rows="3" placeholder="Guidance markdown, or the script body." {}
+                    textarea name="fragment_content" rows="3" placeholder="Guidance markdown, or the script body." {}
                 }
-                label class="check" { input type="checkbox" name="cap_private"; span { "private (local.toml)" } }
+                label class="check" { input type="checkbox" name="fragment_private"; span { "private (local.toml)" } }
                 button type="button" class="btn btn-primary btn-sm" hx-post="/profiles/draft" hx-target="#main" { (icon("plus")) "Add to library & profile" }
             }
         }
@@ -1081,7 +1081,7 @@ fn editor_preview(p: &PreviewOutcome) -> Markup {
         div class="provenance" {
             span class="prov-node" { (p.context_summary.as_str()) }
             span class="prov-arrow" { (icon("arrow-right")) }
-            span class="prov-node" { (p.cap_count) " " (if p.cap_count == 1 { "capability" } else { "capabilities" }) }
+            span class="prov-node" { (p.fragment_count) " " (if p.fragment_count == 1 { "fragment" } else { "fragments" }) }
         }
         @if let Some(note) = &p.note { p class="note" { (note) } }
         div class="markdown-body" { (render_markdown(&p.overlay)) }
@@ -1154,11 +1154,11 @@ fn file_diff(d: &FileDiff) -> Markup {
 
 // --- mutation results --------------------------------------------------------
 
-/// A capability mutation: re-render the Capabilities tab into `#main`, close the
+/// A fragment mutation: re-render the Fragments tab into `#main`, close the
 /// modal, and refresh the staged indicator. (`flash` keeps the "staged …" note.)
-pub fn cap_result(lib: &LibraryView, flash: &str) -> String {
+pub fn fragment_result(lib: &LibraryView, flash: &str) -> String {
     html! {
-        (capabilities_tab(lib, Some(flash)))
+        (fragments_tab(lib, Some(flash)))
         (modal_close())
         (staged_refresh())
     }
@@ -1213,7 +1213,7 @@ fn atom_dot(a: &AtomDot) -> Markup {
         ),
         AtomState::Unknown => (
             "atom unknown".to_string(),
-            format!("{} — unknown capability", a.id),
+            format!("{} — unknown fragment", a.id),
         ),
     };
     html! { span class=(cls) title=(tip) {} }
@@ -1252,8 +1252,8 @@ fn enc(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn cv(id: &str, category: Option<&str>) -> CapView {
-        CapView {
+    fn cv(id: &str, category: Option<&str>) -> FragmentView {
+        FragmentView {
             id: id.into(),
             title: id.into(),
             summary: None,
@@ -1268,7 +1268,7 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_group_in_friendly_order() {
+    fn fragments_group_in_friendly_order() {
         let caps = vec![
             cv("a", Some("comms")),
             cv("b", None),
@@ -1277,7 +1277,7 @@ mod tests {
             cv("e", Some("stack")),
             cv("f", Some("zebra-custom")),
         ];
-        let groups = group_capabilities(&caps);
+        let groups = group_fragments(&caps);
         let labels: Vec<&str> = groups.iter().map(|(l, _)| l.as_str()).collect();
         // Known categories in CATEGORY_ORDER, then unknown tags (alpha), then
         // the untagged "General" bucket last.

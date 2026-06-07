@@ -80,12 +80,12 @@ impl Fixture {
         self.write("src/main.rs", "fn main() { println!(\"hi\"); }\n");
     }
 
-    /// Author a minimal library: a `rust-conventions` capability plus a `rust`
-    /// profile that targets the rust stack and composes it. Capabilities and
+    /// Author a minimal library: a `rust-conventions` fragment plus a `rust`
+    /// profile that targets the rust stack and composes it. Fragments and
     /// profiles are global-only, so this writes the *global* config.
     fn rust_profile(&self) {
         self.author(
-            "[[capabilities]]\n\
+            "[[fragments]]\n\
              id = \"rust-conventions\"\n\
              description = \"Rust conventions\"\n\
              tags = [\"stack\"]\n\
@@ -94,11 +94,11 @@ impl Fixture {
              [[profiles]]\n\
              name = \"rust\"\n\
              targets = [\"rust\"]\n\
-             capabilities = [\"rust-conventions\"]\n",
+             fragments = [\"rust-conventions\"]\n",
         );
     }
 
-    /// Author global capabilities/profiles — the only layer that honors them.
+    /// Author global fragments/profiles — the only layer that honors them.
     /// (A repo layer declaring caps/profiles is dropped by the loader.)
     fn author(&self, content: &str) {
         self.write_global("config.toml", content);
@@ -224,8 +224,8 @@ fn editing_the_global_library_re_renders_a_repo_with_unchanged_context() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.author(
-        "[[capabilities]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"VERSION-ONE guidance.\"\n\
-         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\"]\n",
+        "[[fragments]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"VERSION-ONE guidance.\"\n\
+         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
     );
     fx.cmd()
         .args(["render", "--agent", "claude"])
@@ -242,11 +242,11 @@ fn editing_the_global_library_re_renders_a_repo_with_unchanged_context() {
         .success()
         .stdout(predicate::str::contains("unchanged"));
 
-    // Edit the capability's guidance in the global config; the repo's detected
+    // Edit the fragment's guidance in the global config; the repo's detected
     // context is unchanged.
     fx.author(
-        "[[capabilities]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"VERSION-TWO guidance.\"\n\
-         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"rc\"]\n",
+        "[[fragments]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"VERSION-TWO guidance.\"\n\
+         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
     );
     fx.cmd()
         .args(["render", "--agent", "claude"])
@@ -429,14 +429,14 @@ fn render_auto_manages_gitignore_and_init_is_gone() {
 }
 
 #[test]
-fn local_toml_supplies_private_params_to_capabilities() {
-    // Public config defines a capability whose guidance references params but
+fn local_toml_supplies_private_params_to_fragments() {
+    // Public config defines a fragment whose guidance references params but
     // names no machine; the private local.toml fills them in. The rendered
     // overlay carries the private values; the public config never does.
     let fx = Fixture::new();
     fx.rust_project();
     fx.author(
-        "[[capabilities]]\n\
+        "[[fragments]]\n\
          id = \"deploy\"\n\
          description = \"Deploy target\"\n\
          guidance = \"Deploy as {{ params.user }}@{{ params.host }}.\"\n\
@@ -444,13 +444,13 @@ fn local_toml_supplies_private_params_to_capabilities() {
          [[profiles]]\n\
          name = \"deploy\"\n\
          targets = [\"rust\"]\n\
-         capabilities = [\"deploy\"]\n",
+         fragments = [\"deploy\"]\n",
     );
     // Private params still come from the repo's local.toml (merged by id onto
-    // the global capability).
+    // the global fragment).
     fx.write(
         ".rosita/local.toml",
-        "[capability_params.deploy]\nhost = \"box.private.example\"\nuser = \"deployer\"\n",
+        "[fragment_params.deploy]\nhost = \"box.private.example\"\nuser = \"deployer\"\n",
     );
 
     fx.cmd()
@@ -499,37 +499,37 @@ fn doctor_leak_lint_flags_public_but_not_local() {
 }
 
 #[test]
-fn doctor_flags_a_profile_referencing_an_unknown_capability() {
-    // A hand-deleted capability leaves a dangling profile reference that renders
+fn doctor_flags_a_profile_referencing_an_unknown_fragment() {
+    // A hand-deleted fragment leaves a dangling profile reference that renders
     // nothing — doctor surfaces it.
     let fx = Fixture::new();
     fx.rust_project();
     fx.author(
-        "[[capabilities]]\nid = \"present\"\nguidance = \"hi\"\n\
-         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\ncapabilities = [\"present\", \"gone\"]\n",
+        "[[fragments]]\nid = \"present\"\nguidance = \"hi\"\n\
+         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"present\", \"gone\"]\n",
     );
 
     fx.cmd()
         .arg("doctor")
         .assert()
         .success()
-        .stdout(predicate::str::contains("unknown capability 'gone'"))
-        .stdout(predicate::str::contains("unknown capability 'present'").not())
+        .stdout(predicate::str::contains("unknown fragment 'gone'"))
+        .stdout(predicate::str::contains("unknown fragment 'present'").not())
         // doctor reports the dangling ref through its own check, so the raw
         // compose `warning:` line is suppressed (no duplicate).
-        .stderr(predicate::str::contains("warning: unknown capability").not());
+        .stderr(predicate::str::contains("warning: unknown fragment").not());
 }
 
 #[test]
 fn doctor_flags_repo_declared_caps_and_profiles() {
-    // Capabilities and profiles are global-only; a repo that declares them is
+    // Fragments and profiles are global-only; a repo that declares them is
     // ignored at render time, so doctor surfaces the otherwise-invisible mistake.
     let fx = Fixture::new();
     fx.rust_project();
     fx.write(
         ".rosita/config.toml",
-        "[[capabilities]]\nid = \"x\"\nguidance = \"hi\"\n\
-         \n[[profiles]]\nname = \"p\"\ntargets = [\"rust\"]\ncapabilities = [\"x\"]\n",
+        "[[fragments]]\nid = \"x\"\nguidance = \"hi\"\n\
+         \n[[profiles]]\nname = \"p\"\ntargets = [\"rust\"]\nfragments = [\"x\"]\n",
     );
 
     fx.cmd()
@@ -537,7 +537,7 @@ fn doctor_flags_repo_declared_caps_and_profiles() {
         .assert()
         .success()
         .stdout(predicate::str::contains("global-only"))
-        .stdout(predicate::str::contains("capabilities and profiles"));
+        .stdout(predicate::str::contains("fragments and profiles"));
 
     // A clean repo (no repo-declared caps/profiles) is not flagged.
     let clean = Fixture::new();
@@ -878,18 +878,18 @@ fn custom_agent_via_config_is_first_class() {
 }
 
 #[test]
-fn profile_composes_its_capability_set_with_no_baseline() {
-    // Pick-one: the selected profile renders exactly its own capabilities, each
+fn profile_composes_its_fragment_set_with_no_baseline() {
+    // Pick-one: the selected profile renders exactly its own fragments, each
     // as its own section. There is no always-on baseline layered underneath.
     let fx = Fixture::new();
     fx.rust_project();
     fx.author(
-        "[[capabilities]]\n\
+        "[[fragments]]\n\
          id = \"rust-conventions\"\n\
          description = \"Rust conventions\"\n\
          guidance = \"Rust project. Lint with clippy.\"\n\
          \n\
-         [[capabilities]]\n\
+         [[fragments]]\n\
          id = \"terse\"\n\
          description = \"Terse communication\"\n\
          guidance = \"Be terse; lead with the result.\"\n\
@@ -897,7 +897,7 @@ fn profile_composes_its_capability_set_with_no_baseline() {
          [[profiles]]\n\
          name = \"rust\"\n\
          targets = [\"rust\"]\n\
-         capabilities = [\"rust-conventions\", \"terse\"]\n",
+         fragments = [\"rust-conventions\", \"terse\"]\n",
     );
 
     fx.cmd()
@@ -907,7 +907,7 @@ fn profile_composes_its_capability_set_with_no_baseline() {
         .stdout(predicate::str::contains("profile rust"));
 
     let overlay = fx.read(".rosita/generated/claude.md");
-    // Both of the profile's capabilities render, each its own section…
+    // Both of the profile's fragments render, each its own section…
     assert!(overlay.contains("### Rust conventions"));
     assert!(overlay.contains("### Terse communication"));
     assert!(overlay.contains("clippy"));
@@ -915,7 +915,7 @@ fn profile_composes_its_capability_set_with_no_baseline() {
     // …and nothing is auto-injected: no baseline section appears.
     assert!(!overlay.contains("### Baseline"));
 
-    // The audit log records exactly the composed capability set.
+    // The audit log records exactly the composed fragment set.
     let audit = fx.read(".rosita/logs/events.jsonl");
     assert!(audit.contains("rust-conventions"));
     assert!(audit.contains("terse"));
@@ -923,18 +923,18 @@ fn profile_composes_its_capability_set_with_no_baseline() {
 }
 
 #[test]
-fn user_capability_via_config_is_composed() {
+fn user_fragment_via_config_is_composed() {
     let fx = Fixture::new();
     fx.rust_project();
-    // Reusable capabilities plus a profile that composes them — no code change.
+    // Reusable fragments plus a profile that composes them — no code change.
     fx.author(
-        "[[capabilities]]\n\
+        "[[fragments]]\n\
          id = \"house-style\"\n\
          description = \"House style\"\n\
          risk = \"caution\"\n\
          guidance = \"Always run the formatter before committing.\"\n\
          \n\
-         [[capabilities]]\n\
+         [[fragments]]\n\
          id = \"rust-conventions\"\n\
          description = \"Rust conventions\"\n\
          guidance = \"Rust project. Lint with clippy.\"\n\
@@ -942,7 +942,7 @@ fn user_capability_via_config_is_composed() {
          [[profiles]]\n\
          name = \"house\"\n\
          targets = [\"rust\"]\n\
-         capabilities = [\"house-style\", \"rust-conventions\"]\n",
+         fragments = [\"house-style\", \"rust-conventions\"]\n",
     );
 
     fx.cmd()
@@ -951,10 +951,10 @@ fn user_capability_via_config_is_composed() {
         .success();
 
     let overlay = fx.read(".rosita/generated/claude.md");
-    // The custom capability renders with its risk annotation and body…
+    // The custom fragment renders with its risk annotation and body…
     assert!(overlay.contains("### House style — ⚠️ caution"));
     assert!(overlay.contains("Always run the formatter before committing."));
-    // …and still composes alongside the stack capability.
+    // …and still composes alongside the stack fragment.
     assert!(overlay.contains("### Rust conventions"));
 
     let audit = fx.read(".rosita/logs/events.jsonl");
@@ -991,13 +991,13 @@ fn detect_probes_is_opt_in_and_shows_host() {
 }
 
 #[test]
-fn dynamic_provider_capability_renders_live_output() {
+fn dynamic_provider_fragment_renders_live_output() {
     let fx = Fixture::new();
     fx.rust_project();
-    // A capability backed by the built-in `host` provider (always available,
+    // A fragment backed by the built-in `host` provider (always available,
     // no exec, no trust needed).
     fx.author(
-        "[[capabilities]]\n\
+        "[[fragments]]\n\
          id = \"machine\"\n\
          description = \"Machine\"\n\
          provider = \"host\"\n\
@@ -1006,7 +1006,7 @@ fn dynamic_provider_capability_renders_live_output() {
          [[profiles]]\n\
          name = \"dyn\"\n\
          targets = [\"rust\"]\n\
-         capabilities = [\"machine\"]\n",
+         fragments = [\"machine\"]\n",
     );
 
     fx.cmd()
@@ -1020,19 +1020,19 @@ fn dynamic_provider_capability_renders_live_output() {
 #[test]
 fn global_layer_command_runs() {
     // A command authored in the GLOBAL config runs and embeds its output —
-    // command capabilities are always global-authored now (no trust gate).
+    // command fragments are always global-authored now (no trust gate).
     let fx = Fixture::new();
     fx.rust_project();
     fx.write_global(
         "config.toml",
-        "[[capabilities]]\n\
+        "[[fragments]]\n\
          id = \"greet\"\n\
          command = \"echo global-ok\"\n\
          \n\
          [[profiles]]\n\
          name = \"g\"\n\
          targets = [\"rust\"]\n\
-         capabilities = [\"greet\"]\n",
+         fragments = [\"greet\"]\n",
     );
 
     fx.cmd()
@@ -1045,22 +1045,22 @@ fn global_layer_command_runs() {
 }
 
 #[test]
-fn repo_command_capability_is_ignored() {
-    // Capabilities are global-only: a `command` capability authored in a repo
+fn repo_command_fragment_is_ignored() {
+    // Fragments are global-only: a `command` fragment authored in a repo
     // layer is dropped by the loader, so it never renders. (A command authored
     // in the GLOBAL config still runs; see `global_layer_command_runs`.)
     let fx = Fixture::new();
     fx.rust_project();
     fx.write(
         ".rosita/config.toml",
-        "[[capabilities]]\n\
+        "[[fragments]]\n\
          id = \"greet\"\n\
          command = \"echo hello-rosita\"\n\
          \n\
          [[profiles]]\n\
          name = \"dyn\"\n\
          targets = [\"rust\"]\n\
-         capabilities = [\"greet\"]\n",
+         fragments = [\"greet\"]\n",
     );
 
     fx.cmd()
@@ -1073,7 +1073,7 @@ fn repo_command_capability_is_ignored() {
 }
 
 #[test]
-fn explain_lists_active_capabilities() {
+fn explain_lists_active_fragments() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.rust_profile();
@@ -1082,23 +1082,23 @@ fn explain_lists_active_capabilities() {
         .arg("explain")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Active capabilities"))
+        .stdout(predicate::str::contains("Active fragments"))
         .stdout(predicate::str::contains("rust-conventions"));
 }
 
 #[test]
-fn capabilities_list_marks_active_and_shows_one() {
+fn fragments_list_marks_active_and_shows_one() {
     let fx = Fixture::new();
     fx.rust_project();
-    // Your library: two capabilities, with only rust-conventions composed by the
+    // Your library: two fragments, with only rust-conventions composed by the
     // selected rust profile (terse-comms is present but inactive here).
     fx.author(
-        "[[capabilities]]\n\
+        "[[fragments]]\n\
          id = \"rust-conventions\"\n\
          description = \"Rust conventions\"\n\
          guidance = \"Rust project. Lint with clippy.\"\n\
          \n\
-         [[capabilities]]\n\
+         [[fragments]]\n\
          id = \"terse-comms\"\n\
          description = \"Terse communication\"\n\
          guidance = \"Be terse.\"\n\
@@ -1106,37 +1106,37 @@ fn capabilities_list_marks_active_and_shows_one() {
          [[profiles]]\n\
          name = \"rust\"\n\
          targets = [\"rust\"]\n\
-         capabilities = [\"rust-conventions\"]\n",
+         fragments = [\"rust-conventions\"]\n",
     );
 
     // `list` (default): your library, with rust-conventions active on a rust
     // repo and the unreferenced terse-comms present but inactive.
     fx.cmd()
-        .arg("capabilities")
+        .arg("fragments")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Capabilities ("))
+        .stdout(predicate::str::contains("Fragments ("))
         .stdout(predicate::str::contains("● rust-conventions"))
         .stdout(predicate::str::contains("· terse-comms"));
 
     // `show <id>`: full details including active-via-profile.
     fx.cmd()
-        .args(["capabilities", "show", "rust-conventions"])
+        .args(["fragments", "show", "rust-conventions"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Capability: rust-conventions"))
+        .stdout(predicate::str::contains("Fragment: rust-conventions"))
         .stdout(predicate::str::contains("via profile 'rust'"));
 
     // Unknown id errors.
     fx.cmd()
-        .args(["capabilities", "show", "nope"])
+        .args(["fragments", "show", "nope"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("unknown capability 'nope'"));
+        .stderr(predicate::str::contains("unknown fragment 'nope'"));
 
     // JSON form.
     fx.cmd()
-        .args(["capabilities", "--json"])
+        .args(["fragments", "--json"])
         .assert()
         .success()
         .stdout(predicate::str::contains("\"active\""))
@@ -1155,7 +1155,7 @@ fn profiles_list_marks_matching() {
         .stdout(predicate::str::contains("Profiles ("))
         // the rust profile is selected (→) on a rust repo.
         .stdout(predicate::str::contains("→ rust"))
-        .stdout(predicate::str::contains("capabilities: rust-conventions"));
+        .stdout(predicate::str::contains("fragments: rust-conventions"));
 }
 
 #[test]
@@ -1173,12 +1173,12 @@ fn agents_list_shows_delivery() {
 }
 
 /// Two profiles that both target the rust stack — an ambiguous selection.
-const TWO_RUST_PROFILES: &str = "[[capabilities]]\n\
+const TWO_RUST_PROFILES: &str = "[[fragments]]\n\
      id = \"ca\"\n\
      description = \"Cap A\"\n\
      guidance = \"AAA guidance\"\n\
      \n\
-     [[capabilities]]\n\
+     [[fragments]]\n\
      id = \"cb\"\n\
      description = \"Cap B\"\n\
      guidance = \"BBB guidance\"\n\
@@ -1186,12 +1186,12 @@ const TWO_RUST_PROFILES: &str = "[[capabilities]]\n\
      [[profiles]]\n\
      name = \"rust-a\"\n\
      targets = [\"rust\"]\n\
-     capabilities = [\"ca\"]\n\
+     fragments = [\"ca\"]\n\
      \n\
      [[profiles]]\n\
      name = \"rust-b\"\n\
      targets = [\"rust\"]\n\
-     capabilities = [\"cb\"]\n";
+     fragments = [\"cb\"]\n";
 
 #[test]
 fn ambiguous_profiles_render_empty_and_warn() {

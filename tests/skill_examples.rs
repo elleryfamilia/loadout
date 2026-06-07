@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use rosita::capability::Layer;
+use rosita::fragment::Layer;
 use rosita::config::Config;
 
 /// Every fenced ```toml block in `md`, trimmed.
@@ -48,11 +48,11 @@ fn skill_reference_toml_examples_are_valid_config() {
     }
 
     // The first (complete) example defines the documented profiles + a dynamic
-    // capability — assert the schema the skill teaches still resolves.
+    // fragment — assert the schema the skill teaches still resolves.
     let cfg = parse_global(&blocks[0]).unwrap();
     assert!(cfg.profiles.iter().any(|p| p.name == "machine"));
     assert!(cfg.profiles.iter().any(|p| p.name == "rust"));
-    assert!(cfg.capabilities.iter().any(|c| c.id == "host"));
+    assert!(cfg.fragments.iter().any(|c| c.id == "host"));
 }
 
 #[test]
@@ -72,6 +72,6 @@ fn shipped_example_config_is_a_valid_global_config() {
 
     assert!(cfg.profiles.iter().any(|p| p.name == "rust"));
     assert!(cfg.profiles.iter().any(|p| p.name == "machine"));
-    assert!(cfg.capabilities.iter().any(|c| c.id == "rust-conventions"));
-    assert!(cfg.capabilities.iter().any(|c| c.id == "work-strict"));
+    assert!(cfg.fragments.iter().any(|c| c.id == "rust-conventions"));
+    assert!(cfg.fragments.iter().any(|c| c.id == "work-strict"));
 }

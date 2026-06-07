@@ -1,12 +1,12 @@
-//! Profiles and **per-profile** capability composition (pick-one model).
+//! Profiles and **per-profile** fragment composition (pick-one model).
 //!
 //! A **profile** is tied to a detected language/platform via its `targets`
 //! (e.g. `targets = ["rust"]`, or `["machine"]` for the no-repo context). A
-//! project uses **one** profile and renders *its* capabilities — there is no
+//! project uses **one** profile and renders *its* fragments — there is no
 //! additive union across profiles and no always-on baseline. Composition now
-//! happens only *within* a profile: its capability list, deduped by id,
-//! `requires`-resolved (dependencies first), per-capability `when`-filtered, with
-//! effective `params` merged (defaults ← profile-ref ← private `capability_params`).
+//! happens only *within* a profile: its fragment list, deduped by id,
+//! `requires`-resolved (dependencies first), per-fragment `when`-filtered, with
+//! effective `params` merged (defaults ← profile-ref ← private `fragment_params`).
 //!
 //! Which profile (if any) applies is decided by [`select`]: match the context's
 //! coarse [`targets`](crate::context::Context::selection_targets) → 0 matches =
@@ -15,17 +15,17 @@
 //! deterministic; no LLM is ever involved.
 //!
 //! Back-compat: a profile's inline `guidance` is treated as an implicit
-//! `<profile>:inline` capability, appended after its explicit capabilities.
+//! `<profile>:inline` fragment, appended after its explicit fragments.
 
 use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::binding::Binding;
-use crate::capability::Capability;
 use crate::context::Context;
+use crate::fragment::Fragment;
 
-/// A configured profile: the language/platform it targets and the capabilities
+/// A configured profile: the language/platform it targets and the fragments
 /// (and/or inline guidance) it contributes when selected.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,18 +38,19 @@ pub struct ProfileConfig {
     /// context. Empty `targets` ⇒ never auto-selected (still bindable by name).
     #[serde(default)]
     pub targets: Vec<String>,
-    /// Capabilities this profile composes (in declaration order). Each entry is
+    /// Fragments this profile composes (in declaration order). Each entry is
     /// either a bare id (`"rust-conventions"`) or an id with inline `params`
     /// overrides (`{ id = "ssh", params = { user = "deploy" } }`). A saved
     /// profile needs ≥1 (enforced by studio validation, not the parser).
-    #[serde(default)]
-    pub capabilities: Vec<CapabilityRef>,
+    /// `capabilities = [...]` is the pre-rename inner key, still accepted.
+    #[serde(default, alias = "capabilities")]
+    pub fragments: Vec<FragmentRef>,
     /// Optional base-template override (per agent the renderer appends the
     /// agent suffix). Rarely needed.
     #[serde(default)]
     pub template: Option<String>,
     /// Inline guidance markdown (back-compat; becomes a `<profile>:inline`
-    /// capability appended after the explicit ones).
+    /// fragment appended after the explicit ones).
     #[serde(default)]
     pub guidance: Option<String>,
     /// When `true`, the profile is never selected or composed (an off-switch that
@@ -58,42 +59,42 @@ pub struct ProfileConfig {
     pub disabled: bool,
 }
 
-/// How a profile references a capability: a bare id, or an id with inline
+/// How a profile references a fragment: a bare id, or an id with inline
 /// `params` overrides. Inline params are public (they live in the profile);
-/// sensitive values belong in `local.toml`'s `[capability_params]`.
+/// sensitive values belong in `local.toml`'s `[fragment_params]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum CapabilityRef {
-    /// `capabilities = ["rust-conventions"]`
+pub enum FragmentRef {
+    /// `fragments = ["rust-conventions"]`
     Id(String),
-    /// `capabilities = [{ id = "ssh", params = { user = "deploy" } }]`
+    /// `fragments = [{ id = "ssh", params = { user = "deploy" } }]`
     Detailed {
-        /// The capability id.
+        /// The fragment id.
         id: String,
-        /// Inline params overrides (merged over the capability's defaults).
+        /// Inline params overrides (merged over the fragment's defaults).
         #[serde(default)]
         params: Option<toml::Value>,
     },
 }
 
-impl CapabilityRef {
-    /// The referenced capability id.
+impl FragmentRef {
+    /// The referenced fragment id.
     pub fn id(&self) -> &str {
         match self {
-            CapabilityRef::Id(s) => s,
-            CapabilityRef::Detailed { id, .. } => id,
+            FragmentRef::Id(s) => s,
+            FragmentRef::Detailed { id, .. } => id,
         }
     }
     /// The inline params overrides, if any.
     pub fn params(&self) -> Option<&toml::Value> {
         match self {
-            CapabilityRef::Detailed { params, .. } => params.as_ref(),
-            CapabilityRef::Id(_) => None,
+            FragmentRef::Detailed { params, .. } => params.as_ref(),
+            FragmentRef::Id(_) => None,
         }
     }
 }
 
-/// A single match condition, used by a **capability**'s `when` self-gate.
+/// A single match condition, used by a **fragment**'s `when` self-gate.
 /// (Profiles no longer carry `when` rules — they select on `targets`.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -106,7 +107,7 @@ pub struct Rule {
     pub value: String,
 }
 
-/// Context fields that capability `when` rules can match against.
+/// Context fields that fragment `when` rules can match against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Field {
@@ -144,30 +145,30 @@ pub enum Op {
     Matches,
 }
 
-/// A capability resolved into the composition, with provenance.
+/// A fragment resolved into the composition, with provenance.
 #[derive(Debug, Clone)]
-pub struct ResolvedCapability {
-    /// The capability itself (cloned from the library).
-    pub capability: Capability,
+pub struct ResolvedFragment {
+    /// The fragment itself (cloned from the library).
+    pub fragment: Fragment,
     /// The profile that pulled it in (directly, or transitively via `requires`).
     pub via_profile: String,
-    /// Human-readable provenance, e.g. "capability 'rust-conventions' via profile 'rust'".
+    /// Human-readable provenance, e.g. "fragment 'rust-conventions' via profile 'rust'".
     pub reason: String,
-    /// True for a synthetic `<profile>:inline` capability — enables the
+    /// True for a synthetic `<profile>:inline` fragment — enables the
     /// `profiles/<name>.md.j2` template-file override at render time.
     pub inline: bool,
 }
 
 /// The outcome of composing the selected profile: its name, the ordered/deduped
-/// capabilities it contributes, and human-readable reasons. Default (`profile:
+/// fragments it contributes, and human-readable reasons. Default (`profile:
 /// None`, empty caps) is the "no profile applies" overlay.
 #[derive(Debug, Clone, Default)]
 pub struct Composition {
     /// The selected profile name, or `None` when no profile applies.
     pub profile: Option<String>,
-    /// Resolved capabilities, in render order.
-    pub capabilities: Vec<ResolvedCapability>,
-    /// Provenance lines (one per contributing capability).
+    /// Resolved fragments, in render order.
+    pub fragments: Vec<ResolvedFragment>,
+    /// Provenance lines (one per contributing fragment).
     pub reasons: Vec<String>,
 }
 
@@ -184,23 +185,23 @@ impl Composition {
     }
 
     /// A stable fingerprint of *what this composition would render*: the selected
-    /// profile plus the ordered capability definitions (their guidance, params,
+    /// profile plus the ordered fragment definitions (their guidance, params,
     /// provider/command, risk, …). Independent of any live dynamic output — it
-    /// hashes the capability *source*, so it's deterministic across renders.
+    /// hashes the fragment *source*, so it's deterministic across renders.
     ///
     /// Combined with the context hash, this is what lets a **global-config**
-    /// change — adding, editing, removing, or reordering a capability or profile
+    /// change — adding, editing, removing, or reordering a fragment or profile
     /// — invalidate a repo's cached overlay even when the detected context is
     /// unchanged.
     pub fn fingerprint(&self) -> String {
         #[derive(serde::Serialize)]
         struct Fingerprint<'a> {
             profile: Option<&'a str>,
-            capabilities: Vec<&'a Capability>,
+            fragments: Vec<&'a Fragment>,
         }
         crate::hash::context_hash(&Fingerprint {
             profile: self.profile.as_deref(),
-            capabilities: self.capabilities.iter().map(|r| &r.capability).collect(),
+            fragments: self.fragments.iter().map(|r| &r.fragment).collect(),
         })
     }
 }
@@ -273,68 +274,68 @@ pub fn select(ctx: &Context, profiles: &[ProfileConfig], binding: Option<&Bindin
 }
 
 /// Compose the chosen `selection` into a [`Composition`]. Only [`Selection::Use`]
-/// produces capabilities; `None`/`Ambiguous` yield the empty overlay (the caller
+/// produces fragments; `None`/`Ambiguous` yield the empty overlay (the caller
 /// resolves an `Ambiguous` to a concrete profile or `None` before this point).
 pub fn compose_selection(
     ctx: &Context,
     selection: &Selection,
-    capabilities: &[Capability],
-    capability_params: &BTreeMap<String, toml::Value>,
+    fragments: &[Fragment],
+    fragment_params: &BTreeMap<String, toml::Value>,
 ) -> Composition {
     match selection {
-        Selection::Use(p) => compose_profile(ctx, p, capabilities, capability_params),
+        Selection::Use(p) => compose_profile(ctx, p, fragments, fragment_params),
         Selection::None | Selection::Ambiguous(_) => Composition::default(),
     }
 }
 
-/// Compose a single profile's capability list into an ordered, deduped set.
+/// Compose a single profile's fragment list into an ordered, deduped set.
 ///
-/// In declaration order, add each referenced capability — expanding `requires`
+/// In declaration order, add each referenced fragment — expanding `requires`
 /// depth-first (dependencies first) with cycle protection, filtering each by its
 /// own `when`, and skipping ids not in *your* library (palette items must be
 /// duplicated in first). Then append the profile's inline guidance as a
-/// synthetic capability.
+/// synthetic fragment.
 ///
-/// Agent restriction (`Capability::agents`) is intentionally **not** applied
+/// Agent restriction (`Fragment::agents`) is intentionally **not** applied
 /// here — the active agent varies per render, so it is applied at render time.
 ///
-/// Effective `params` per resolved capability are merged (later wins): the
-/// capability's own defaults ← the profile reference's inline `params` ← the
-/// `capability_params[id]` (private/local) overrides.
+/// Effective `params` per resolved fragment are merged (later wins): the
+/// fragment's own defaults ← the profile reference's inline `params` ← the
+/// `fragment_params[id]` (private/local) overrides.
 pub fn compose_profile(
     ctx: &Context,
     profile: &ProfileConfig,
-    capabilities: &[Capability],
-    capability_params: &BTreeMap<String, toml::Value>,
+    fragments: &[Fragment],
+    fragment_params: &BTreeMap<String, toml::Value>,
 ) -> Composition {
     let cx = ComposeCtx {
         ctx,
-        lib: capabilities.iter().map(|c| (c.id.as_str(), c)).collect(),
-        capability_params,
+        lib: fragments.iter().map(|c| (c.id.as_str(), c)).collect(),
+        fragment_params,
     };
 
     let mut acc = Accumulator::default();
     let provenance = format!("via profile '{}'", profile.name);
-    for cap_ref in &profile.capabilities {
+    for fragment_ref in &profile.fragments {
         acc.add(
             &cx,
-            cap_ref.id(),
+            fragment_ref.id(),
             &profile.name,
             &provenance,
-            cap_ref.params(),
+            fragment_ref.params(),
             &mut HashSet::new(),
         );
     }
 
-    // Back-compat: inline guidance as a synthetic capability, appended after the
-    // profile's explicit capabilities.
+    // Back-compat: inline guidance as a synthetic fragment, appended after the
+    // profile's explicit fragments.
     if let Some(text) = &profile.guidance {
-        let inline = Capability::inline(&profile.name, text.clone());
+        let inline = Fragment::inline(&profile.name, text.clone());
         if acc.added.insert(inline.id.clone()) {
             let reason = format!("inline guidance via profile '{}'", profile.name);
             acc.reasons.push(reason.clone());
-            acc.resolved.push(ResolvedCapability {
-                capability: inline,
+            acc.resolved.push(ResolvedFragment {
+                fragment: inline,
                 via_profile: profile.name.clone(),
                 reason,
                 inline: true,
@@ -344,7 +345,7 @@ pub fn compose_profile(
 
     Composition {
         profile: Some(profile.name.clone()),
-        capabilities: acc.resolved,
+        fragments: acc.resolved,
         reasons: acc.reasons,
     }
 }
@@ -352,14 +353,14 @@ pub fn compose_profile(
 /// Immutable inputs shared across [`Accumulator::add`] recursion.
 struct ComposeCtx<'a> {
     ctx: &'a Context,
-    lib: BTreeMap<&'a str, &'a Capability>,
-    capability_params: &'a BTreeMap<String, toml::Value>,
+    lib: BTreeMap<&'a str, &'a Fragment>,
+    fragment_params: &'a BTreeMap<String, toml::Value>,
 }
 
-/// Mutable state threaded through capability resolution.
+/// Mutable state threaded through fragment resolution.
 #[derive(Default)]
 struct Accumulator {
-    resolved: Vec<ResolvedCapability>,
+    resolved: Vec<ResolvedFragment>,
     added: HashSet<String>,
     reasons: Vec<String>,
 }
@@ -367,7 +368,7 @@ struct Accumulator {
 impl Accumulator {
     /// Resolve `id` (and its `requires`, dependencies first) into the set,
     /// applying `ref_params` (the profile reference's inline overrides) and the
-    /// private `capability_params` to the capability's effective params.
+    /// private `fragment_params` to the fragment's effective params.
     fn add(
         &mut self,
         cx: &ComposeCtx,
@@ -381,15 +382,15 @@ impl Accumulator {
             return;
         }
         if !in_progress.insert(id.to_string()) {
-            crate::warn_user!("capability dependency cycle at '{id}' — skipping");
+            crate::warn_user!("fragment dependency cycle at '{id}' — skipping");
             return;
         }
         let outcome = match cx.lib.get(id) {
             None => {
-                crate::warn_user!("unknown capability '{id}' ({provenance})");
+                crate::warn_user!("unknown fragment '{id}' ({provenance})");
                 None
             }
-            Some(cap) if !capability_applies(cx.ctx, cap) => None, // `when` not satisfied
+            Some(cap) if !fragment_applies(cx.ctx, cap) => None, // `when` not satisfied
             Some(cap) => Some(*cap),
         };
         if let Some(cap) = outcome {
@@ -400,7 +401,7 @@ impl Accumulator {
                 self.add(cx, dep, via_profile, &dep_provenance, None, in_progress);
             }
             self.added.insert(id.to_string());
-            let reason = format!("capability '{id}' {provenance}");
+            let reason = format!("fragment '{id}' {provenance}");
             self.reasons.push(reason.clone());
 
             // Effective params: defaults ← ref params ← private params.
@@ -408,14 +409,14 @@ impl Accumulator {
             if let Some(rp) = ref_params {
                 params = crate::config::merge_toml(params, rp.clone());
             }
-            if let Some(lp) = cx.capability_params.get(id) {
+            if let Some(lp) = cx.fragment_params.get(id) {
                 params = crate::config::merge_toml(params, lp.clone());
             }
             let mut resolved_cap = cap.clone();
             resolved_cap.params = params;
 
-            self.resolved.push(ResolvedCapability {
-                capability: resolved_cap,
+            self.resolved.push(ResolvedFragment {
+                fragment: resolved_cap,
                 via_profile: via_profile.to_string(),
                 reason,
                 inline: false,
@@ -425,8 +426,8 @@ impl Accumulator {
     }
 }
 
-/// Whether a capability's own `when` gate is satisfied (empty = always).
-fn capability_applies(ctx: &Context, cap: &Capability) -> bool {
+/// Whether a fragment's own `when` gate is satisfied (empty = always).
+fn fragment_applies(ctx: &Context, cap: &Fragment) -> bool {
     cap.when.is_empty() || cap.when.iter().all(|r| rule_matches(ctx, r))
 }
 
@@ -444,7 +445,7 @@ fn apply(op: Op, candidate: &str, value: &str) -> bool {
         Op::Matches => regex::Regex::new(value)
             .map(|re| re.is_match(candidate))
             .unwrap_or_else(|e| {
-                crate::warn_user!("invalid regex {value:?} in capability `when` rule: {e}");
+                crate::warn_user!("invalid regex {value:?} in fragment `when` rule: {e}");
                 false
             }),
     }
@@ -472,14 +473,15 @@ fn field_values(ctx: &Context, field: Field) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::Risk;
     use crate::context::test_support::sample_context;
+    use crate::fragment::Risk;
 
-    fn cap(id: &str, guidance: &str) -> Capability {
-        Capability {
+    fn cap(id: &str, guidance: &str) -> Fragment {
+        Fragment {
             id: id.into(),
             description: Some(id.into()),
             tags: vec![],
+            category: None,
             risk: Risk::Info,
             when: vec![],
             requires: vec![],
@@ -492,7 +494,7 @@ mod tests {
             icon: None,
             allow_exec: true,
             cache: None,
-            origin: crate::capability::Layer::default(),
+            origin: crate::fragment::Layer::default(),
         }
     }
 
@@ -508,9 +510,9 @@ mod tests {
         ProfileConfig {
             name: name.into(),
             targets: targets.iter().map(|s| s.to_string()).collect(),
-            capabilities: caps
+            fragments: caps
                 .iter()
-                .map(|s| CapabilityRef::Id(s.to_string()))
+                .map(|s| FragmentRef::Id(s.to_string()))
                 .collect(),
             template: None,
             guidance: None,
@@ -518,18 +520,15 @@ mod tests {
         }
     }
 
-    fn compose_t(ctx: &Context, profile: &ProfileConfig, caps: &[Capability]) -> Composition {
+    fn compose_t(ctx: &Context, profile: &ProfileConfig, caps: &[Fragment]) -> Composition {
         compose_profile(ctx, profile, caps, &BTreeMap::new())
     }
 
     fn ids(c: &Composition) -> Vec<String> {
-        c.capabilities
-            .iter()
-            .map(|r| r.capability.id.clone())
-            .collect()
+        c.fragments.iter().map(|r| r.fragment.id.clone()).collect()
     }
 
-    // --- capability `when` building blocks (still used for self-gating) -----
+    // --- fragment `when` building blocks (still used for self-gating) -----
 
     #[test]
     fn rule_stack_equals_matches() {
@@ -683,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_tracks_profile_and_capability_changes() {
+    fn fingerprint_tracks_profile_and_fragment_changes() {
         let ctx = sample_context();
         let caps = vec![cap("a", "A body"), cap("b", "B body")];
 
@@ -693,12 +692,12 @@ mod tests {
             base.fingerprint(),
             compose_t(&ctx, &prof("p", &["rust"], &["a"]), &caps).fingerprint()
         );
-        // Adding a capability changes it.
+        // Adding a fragment changes it.
         assert_ne!(
             base.fingerprint(),
             compose_t(&ctx, &prof("p", &["rust"], &["a", "b"]), &caps).fingerprint()
         );
-        // Editing a composed capability's guidance changes it (the cache-staleness
+        // Editing a composed fragment's guidance changes it (the cache-staleness
         // bug: same context, different rendered content).
         let edited = vec![cap("a", "A body — EDITED"), cap("b", "B body")];
         assert_ne!(
@@ -719,11 +718,7 @@ mod tests {
         let caps = vec![top, cap("dep", "D")];
         let c = compose_t(&sample_context(), &prof("p", &["rust"], &["top"]), &caps);
         assert_eq!(ids(&c), vec!["dep", "top"]);
-        let dep = c
-            .capabilities
-            .iter()
-            .find(|r| r.capability.id == "dep")
-            .unwrap();
+        let dep = c.fragments.iter().find(|r| r.fragment.id == "dep").unwrap();
         assert!(dep.reason.contains("required by 'top'"));
     }
 
@@ -741,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn compose_filters_capability_when() {
+    fn compose_filters_fragment_when() {
         let mut gated = cap("gated", "G");
         gated.when = vec![rule(Field::Stack, Op::Equals, "go")];
         let caps = vec![gated, cap("always", "A")];
@@ -756,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn compose_unknown_capability_is_skipped() {
+    fn compose_unknown_fragment_is_skipped() {
         let caps = vec![cap("real", "R")];
         let p = prof("p", &["rust"], &["does-not-exist", "real"]);
         let c = compose_t(&sample_context(), &p, &caps);
@@ -770,7 +765,7 @@ mod tests {
         p.guidance = Some("note".into());
         let c = compose_t(&sample_context(), &p, &caps);
         assert_eq!(ids(&c), vec!["a", "p:inline"]);
-        assert!(c.capabilities.last().unwrap().inline);
+        assert!(c.fragments.last().unwrap().inline);
     }
 
     #[test]
@@ -778,7 +773,7 @@ mod tests {
         let mut ssh = cap("ssh", "ssh {{ params.user }}@{{ params.host }}");
         ssh.params = toml::from_str("user = \"root\"\nport = 22\n").unwrap();
         let mut p = prof("p", &["rust"], &[]);
-        p.capabilities = vec![CapabilityRef::Detailed {
+        p.fragments = vec![FragmentRef::Detailed {
             id: "ssh".into(),
             params: Some(toml::from_str("user = \"deploy\"").unwrap()),
         }];
@@ -789,7 +784,7 @@ mod tests {
         );
 
         let c = compose_profile(&sample_context(), &p, &[ssh], &private);
-        let params = &c.capabilities[0].capability.params;
+        let params = &c.fragments[0].fragment.params;
         assert_eq!(params.get("user").unwrap().as_str(), Some("deploy")); // ref > default
         assert_eq!(params.get("host").unwrap().as_str(), Some("box.local")); // private adds
         assert_eq!(params.get("port").unwrap().as_integer(), Some(2222)); // private > default
@@ -799,7 +794,7 @@ mod tests {
     fn compose_selection_none_is_empty_overlay() {
         let c = compose_selection(&sample_context(), &Selection::None, &[], &BTreeMap::new());
         assert!(c.profile.is_none());
-        assert!(c.capabilities.is_empty());
+        assert!(c.fragments.is_empty());
         assert_eq!(c.label(), "none");
     }
 }

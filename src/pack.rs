@@ -1,19 +1,19 @@
-//! Starter packs — curated bundles of palette capabilities plus one ready-made,
+//! Starter packs — curated bundles of palette fragments plus one ready-made,
 //! self-contained profile. Packs are how rosita ships *default profiles* without
 //! breaking the "own your config, no magic" model: applying a pack stages the
-//! same edits you'd make by hand — it duplicates each capability from the
-//! read-only [`palette`](crate::capability::palette) into your own config, then
+//! same edits you'd make by hand — it duplicates each fragment from the
+//! read-only [`palette`](crate::fragment::palette) into your own config, then
 //! creates the profile that composes them. Nothing is auto-active; everything is
 //! staged → reviewed → applied like any other studio edit.
 //!
 //! Because composition is one-profile-per-repo (no profile stacking), every
 //! pack's profile is **self-contained**: the shared "everyday" essentials are
-//! baked into each one. Duplicating an already-owned capability is a no-op, so
+//! baked into each one. Duplicating an already-owned fragment is a no-op, so
 //! applying several packs never conflicts.
 
-use crate::profile::{CapabilityRef, ProfileConfig};
+use crate::profile::{FragmentRef, ProfileConfig};
 
-/// A curated starter bundle: capabilities to duplicate + a profile to create.
+/// A curated starter bundle: fragments to duplicate + a profile to create.
 #[derive(Debug, Clone)]
 pub struct Pack {
     /// Stable pack id (also the `/packs/<id>/apply` route segment).
@@ -31,23 +31,23 @@ pub struct Pack {
     pub profile_name: &'static str,
     /// The created profile's selection targets.
     pub targets: &'static [&'static str],
-    /// The palette capability ids this pack duplicates into the library *and*
+    /// The palette fragment ids this pack duplicates into the library *and*
     /// composes into the profile, in this order. Every id must exist in
-    /// [`palette`](crate::capability::palette) — guarded by a test.
-    pub caps: &'static [&'static str],
+    /// [`palette`](crate::fragment::palette) — guarded by a test.
+    pub fragments: &'static [&'static str],
 }
 
 impl Pack {
-    /// The self-contained profile this pack creates (composes every `caps` id, in
+    /// The self-contained profile this pack creates (composes every `fragments` id, in
     /// order). `origin`/layer is assigned when the staged config is assembled.
     pub fn profile(&self) -> ProfileConfig {
         ProfileConfig {
             name: self.profile_name.to_string(),
             targets: self.targets.iter().map(|s| s.to_string()).collect(),
-            capabilities: self
-                .caps
+            fragments: self
+                .fragments
                 .iter()
-                .map(|s| CapabilityRef::Id(s.to_string()))
+                .map(|s| FragmentRef::Id(s.to_string()))
                 .collect(),
             template: None,
             guidance: None,
@@ -62,7 +62,7 @@ impl Pack {
     }
 }
 
-// Each pack's capability set is spelled out below (a stack cap + the shared
+// Each pack's fragment set is spelled out below (a stack cap + the shared
 // "everyday" essentials) so each profile is self-contained; the integrity tests
 // keep the shared tail consistent across the stack packs.
 const EVERYDAY: &[&str] = &[
@@ -145,7 +145,7 @@ pub fn packs() -> Vec<Pack> {
             recommended_for: &["machine"],
             profile_name: "everyday",
             targets: &["machine"],
-            caps: EVERYDAY,
+            fragments: EVERYDAY,
         },
         Pack {
             id: "rust",
@@ -156,7 +156,7 @@ pub fn packs() -> Vec<Pack> {
             recommended_for: &["rust"],
             profile_name: "rust",
             targets: &["rust"],
-            caps: RUST,
+            fragments: RUST,
         },
         Pack {
             id: "node",
@@ -167,7 +167,7 @@ pub fn packs() -> Vec<Pack> {
             recommended_for: &["node"],
             profile_name: "node",
             targets: &["node"],
-            caps: NODE,
+            fragments: NODE,
         },
         Pack {
             id: "nextjs",
@@ -178,7 +178,7 @@ pub fn packs() -> Vec<Pack> {
             recommended_for: &["nextjs"],
             profile_name: "nextjs",
             targets: &["nextjs"],
-            caps: NEXTJS,
+            fragments: NEXTJS,
         },
         Pack {
             id: "go",
@@ -189,7 +189,7 @@ pub fn packs() -> Vec<Pack> {
             recommended_for: &["go"],
             profile_name: "go",
             targets: &["go"],
-            caps: GO,
+            fragments: GO,
         },
         Pack {
             id: "python",
@@ -200,7 +200,7 @@ pub fn packs() -> Vec<Pack> {
             recommended_for: &["python"],
             profile_name: "python",
             targets: &["python"],
-            caps: PYTHON,
+            fragments: PYTHON,
         },
     ]
 }
@@ -208,7 +208,7 @@ pub fn packs() -> Vec<Pack> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::palette;
+    use crate::fragment::palette;
     use std::collections::HashSet;
 
     /// The shared "everyday" essentials every stack pack must bake in to stay
@@ -239,11 +239,11 @@ mod tests {
     }
 
     #[test]
-    fn every_pack_cap_exists_in_the_palette() {
+    fn every_pack_fragment_exists_in_the_palette() {
         let palette_ids: HashSet<String> = palette().into_iter().map(|c| c.id).collect();
         for p in packs() {
-            assert!(!p.caps.is_empty(), "pack {} has no caps", p.id);
-            for cap in p.caps {
+            assert!(!p.fragments.is_empty(), "pack {} has no fragments", p.id);
+            for cap in p.fragments {
                 assert!(
                     palette_ids.contains(*cap),
                     "pack {} references unknown palette cap {cap}",
@@ -257,7 +257,7 @@ mod tests {
     fn pack_caps_have_no_duplicates() {
         for p in packs() {
             let mut seen = HashSet::new();
-            for cap in p.caps {
+            for cap in p.fragments {
                 assert!(seen.insert(*cap), "pack {} lists cap {cap} twice", p.id);
             }
         }
@@ -273,11 +273,11 @@ mod tests {
                 "pack {} profile has no targets",
                 p.id
             );
-            let prof_caps: Vec<&str> = prof.capabilities.iter().map(|r| r.id()).collect();
-            let pack_caps: Vec<&str> = p.caps.to_vec();
+            let prof_caps: Vec<&str> = prof.fragments.iter().map(|r| r.id()).collect();
+            let pack_caps: Vec<&str> = p.fragments.to_vec();
             assert_eq!(
                 prof_caps, pack_caps,
-                "pack {} profile must compose exactly its caps in order",
+                "pack {} profile must compose exactly its fragments in order",
                 p.id
             );
         }
@@ -289,7 +289,7 @@ mod tests {
         for p in packs().into_iter().filter(|p| p.id != "everyday") {
             for essential in STACK_TAIL {
                 assert!(
-                    p.caps.contains(essential),
+                    p.fragments.contains(essential),
                     "stack pack {} is missing essential {essential}",
                     p.id
                 );

@@ -100,14 +100,14 @@ fn studio_binds_and_serves_secured_spine() {
         ),
     );
 
-    // 5. A write over the real socket: stage a capability (exercises POST-body
-    //    parsing + the Origin guard end-to-end), then apply it. Capabilities are
+    // 5. A write over the real socket: stage a fragment (exercises POST-body
+    //    parsing + the Origin guard end-to-end), then apply it. Fragments are
     //    global-only, so it lands in the global config dir (ROSITA_CONFIG_DIR).
     let body = "name=smoke&kind=markdown&guidance=hello&visibility=public";
     let create = http(
         port,
         &format!(
-            "POST /capabilities HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "POST /fragments HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         ),
     );
@@ -148,8 +148,8 @@ fn studio_binds_and_serves_secured_spine() {
     );
     assert!(shell.contains("rosita studio"), "shell renders the page");
     assert!(
-        shell.contains("Profiles") && shell.contains("Capabilities"),
-        "shell renders the Profiles/Capabilities tabs"
+        shell.contains("Profiles") && shell.contains("Fragments"),
+        "shell renders the Profiles/Fragments tabs"
     );
 
     assert!(
@@ -169,8 +169,8 @@ fn studio_binds_and_serves_secured_spine() {
         head(&create)
     );
     assert!(
-        create.contains("staged capability"),
-        "create stages the capability; got:\n{create}"
+        create.contains("staged fragment"),
+        "create stages the fragment; got:\n{create}"
     );
     assert!(
         apply.starts_with("HTTP/1.1 200"),
@@ -179,7 +179,7 @@ fn studio_binds_and_serves_secured_spine() {
     );
     assert!(
         written.contains("id = \"smoke\""),
-        "apply wrote the capability to disk; got:\n{written}"
+        "apply wrote the fragment to disk; got:\n{written}"
     );
     assert!(
         no_origin.starts_with("HTTP/1.1 403"),
@@ -262,7 +262,7 @@ fn studio_packs_gallery_applies_a_pack_over_socket() {
     );
     assert!(
         written.contains("id = \"terse-comms\""),
-        "apply wrote the pack's capabilities; got:\n{written}"
+        "apply wrote the pack's fragments; got:\n{written}"
     );
 }
 

@@ -248,7 +248,7 @@ pub fn agent_ids(config: &Config) -> Vec<String> {
 pub struct AppContext<'a> {
     /// Detected context.
     pub context: &'a Context,
-    /// Composed capabilities + matching profiles.
+    /// Composed fragments + matching profiles.
     pub composition: &'a Composition,
     /// Merged config.
     pub config: &'a Config,
@@ -535,7 +535,7 @@ pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult
 // --- shared mechanics --------------------------------------------------------
 
 fn render_overlay(d: &AgentDescriptor, app: &AppContext) -> crate::Result<render::RenderOutput> {
-    // Dry-run (and explain's dry apply) resolves dynamic capabilities cache-only
+    // Dry-run (and explain's dry apply) resolves dynamic fragments cache-only
     // — never executing providers/commands or writing — so it touches nothing.
     let dynamic = if app.writer.is_dry_run() {
         crate::dynamic::DynamicMode::ReadOnly
