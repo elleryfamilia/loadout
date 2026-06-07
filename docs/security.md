@@ -24,8 +24,8 @@ private.**
 
 | Kind | Example | Where it lives |
 | --- | --- | --- |
-| Generic structure | capability guidance, profile rules | public layer (commit / open-source) |
-| Sensitive specifics | real hostnames, `host_classes` globs, capability `params` values | **private** layer (gitignored `local.toml` / private repo) |
+| Generic structure | fragment guidance, profile rules | public layer (commit / open-source) |
+| Sensitive specifics | real hostnames, `host_classes` globs, fragment `params` values | **private** layer (gitignored `local.toml` / private repo) |
 | Live topology | tailnet hosts, containers | **don't store** — probe at runtime via a provider |
 | Secrets | tokens, keys | **never** anywhere |
 
@@ -35,7 +35,7 @@ the world. Keep the *behavior* public ("you may SSH within my tailnet, confirm
 first") and the *specifics* private or detected.
 
 **`rosita doctor` lints** the public layer and warns if a
-capability/profile/`host_class` there contains hostname/IP/domain-looking
+fragment/profile/`host_class` there contains hostname/IP/domain-looking
 literals ("looks private — move it to local.toml").
 
 ## Derived artifacts are gitignored, never committed **(implemented)**
@@ -53,16 +53,16 @@ gitignore management is skipped entirely outside a git repo (no stray
 
 ## Command execution **(implemented)**
 
-Dynamic capabilities can run code at render time, so the surface is kept small:
+Dynamic fragments can run code at render time, so the surface is kept small:
 
 - **Built-in providers** (`host`, `toolchain`, `ai-tools`, `tailnet`, `docker`)
   are rosita-controlled probes — they never run arbitrary commands.
-- **`command`-backed capabilities** run a shell command. The per-capability
+- **`command`-backed fragments** run a shell command. The per-fragment
   `allow_exec` flag is the off-switch: `allow_exec = false` makes rosita embed a
   skip note instead of running it.
-- **Capabilities are global-only** (see [configuration](configuration.md)).
+- **Fragments are global-only** (see [configuration](configuration.md)).
   They're honored only from your built-in / global / global-local config — *you*
-  author them. A cloned repo cannot contribute a capability at all: repo-declared
+  author them. A cloned repo cannot contribute a fragment at all: repo-declared
   caps are dropped by the loader and `doctor` flags them. So there's no
   "untrusted command from a cloned repo" to gate — the global-only model removes
   that surface rather than prompting for it (there is no `rosita allow`).
@@ -76,6 +76,6 @@ never reads or runs what the repo itself declares.
 
 rosita defends against: leaking secrets into overlays; leaking sensitive
 topology into shareable/committed config; and running code a cloned repo tries
-to introduce (it can't — capabilities are global-only). It does **not** attempt
+to introduce (it can't — fragments are global-only). It does **not** attempt
 to constrain what the agent does once it reads the overlay — that is out of scope
 by design (guidance, not policy).

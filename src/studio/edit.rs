@@ -681,6 +681,35 @@ mod tests {
     }
 
     #[test]
+    fn create_fragment_appends_to_legacy_capabilities_table() {
+        // A pre-rename file uses `[[capabilities]]`. A new fragment must append
+        // to that same array-of-tables — never add a second `[[fragments]]`
+        // table, which would make the file fail to deserialize (serde would see
+        // both keys for one field).
+        let body = "[[capabilities]]\nid = \"a\"\nguidance = \"A\"\n";
+        let (d, gdir) = repo_with_global(body);
+        let mut s = session_global(d.path(), &gdir);
+        s.stage(StagedOp::CreateFragment {
+            layer: Layer::Global,
+            cap: Box::new(cap("b", "B body")),
+        })
+        .unwrap();
+        let after = s.diff()[0].staged_after.clone();
+        assert!(
+            after.contains("[[capabilities]]"),
+            "appends into the existing legacy table"
+        );
+        assert!(
+            !after.contains("[[fragments]]"),
+            "must not create a duplicate table:\n{after}"
+        );
+        assert!(after.contains("id = \"b\""));
+        // Re-parses without a duplicate-field error; both fragments are present.
+        s.validate().unwrap();
+        assert_eq!(s.staged_config().unwrap().fragments.len(), 2);
+    }
+
+    #[test]
     fn edit_then_delete_fragment() {
         let body = "[[fragments]]\nid = \"a\"\nguidance = \"old\"\n\n[[fragments]]\nid = \"b\"\nguidance = \"B\"\n";
         let (d, gdir) = repo_with_global(body);

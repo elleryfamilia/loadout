@@ -611,6 +611,39 @@ mod tests {
     }
 
     #[test]
+    fn legacy_capabilities_key_still_loads_via_alias() {
+        // A pre-rename config using `[[capabilities]]`, the inner profile key
+        // `capabilities = [...]`, and `[capability_params]` must load unchanged.
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [[capabilities]]
+            id = "rc"
+            guidance = "rust"
+
+            [[profiles]]
+            name = "rust"
+            targets = ["rust"]
+            capabilities = ["rc"]
+
+            [capability_params.rc]
+            host = "box"
+            "#,
+        )
+        .unwrap();
+        let c = raw.finalize(vec![]);
+        assert!(
+            c.fragments.iter().any(|f| f.id == "rc"),
+            "alias on [[capabilities]]"
+        );
+        let prof = c.profiles.iter().find(|p| p.name == "rust").unwrap();
+        assert_eq!(prof.fragments.len(), 1, "alias on inner capabilities key");
+        assert!(
+            c.fragment_params.contains_key("rc"),
+            "alias on [capability_params]"
+        );
+    }
+
+    #[test]
     fn repo_layer_overrides_and_extends() {
         let mut base = RawConfig::default();
         let overlay: RawConfig = toml::from_str(

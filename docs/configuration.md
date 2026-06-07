@@ -15,12 +15,12 @@ Built-in defaults ← global `config.toml` ← global `local.toml` ← repo
 | repo | `<repo_base>/.rosita/config.toml` | yes (committable) |
 | repo-local | `<repo_base>/.rosita/local.toml` | **no** (gitignored) |
 
-**Capabilities and profiles are global-only.** You author them once, in the
+**Fragments and profiles are global-only.** You author them once, in the
 global layers, and share them across machines by committing `config.toml` to a
 synced repo. A repo's `.rosita/` carries only the per-project **`[binding]`** (in
 the gitignored `local.toml`), the generated overlays, the audit log, the probe
-cache, and optional template overrides — *not* capabilities or profiles.
-Capabilities or profiles declared in a repo layer are ignored, and `rosita
+cache, and optional template overrides — *not* fragments or profiles.
+Fragments or profiles declared in a repo layer are ignored, and `rosita
 doctor` flags them.
 
 - `$ROSITA_CONFIG_DIR` overrides the global dir (used in tests / isolation).
@@ -62,17 +62,17 @@ max_output_kib = 32      # warn when generated output exceeds this
 ## `[[profiles]]` (implemented)
 
 A profile is tied to one or more detected **targets** and composes a list of
-capabilities. It is the unit of selection — one profile per context.
+fragments. It is the unit of selection — one profile per context.
 
 ```toml
 [[profiles]]
 name = "rust — web"
 targets = ["rust"]                                  # selected when the repo detects as rust
-capabilities = [
+fragments = [
   "rust-conventions",
   { id = "ssh", params = { user = "deploy" } },     # optional inline params override
 ]
-# guidance = "…"        # optional inline guidance (becomes a <profile>:inline capability)
+# guidance = "…"        # optional inline guidance (becomes a <profile>:inline fragment)
 # template = "infra"    # optional body-template override
 # disabled = true       # keep the definition but never select or compose it
 ```
@@ -85,11 +85,11 @@ capabilities = [
   used — 0 → none (empty overlay), 1 → auto, 2+ → you pick once and it's
   remembered (the [`[binding]`](#binding-implemented)). Profiles do **not** merge;
   there is no `priority`, `exclude`, or `exclusive`, and no built-in profiles.
-- A saved profile needs **≥1 capability** (studio enforces it; the parser accepts
+- A saved profile needs **≥1 fragment** (studio enforces it; the parser accepts
   zero for hand-edits).
 
-Profiles select on `targets`, not rules — a *capability* may still self-gate with
-`when` rules (see [`[[capabilities]]`](#capabilities-implemented)).
+Profiles select on `targets`, not rules — a *fragment* may still self-gate with
+`when` rules (see [`[[fragments]]`](#fragments-implemented)).
 
 ## `[binding]` (implemented)
 
@@ -165,13 +165,20 @@ work     = ["*.corp.example.com", "work-*"]
 personal = ["my-laptop", "*.tailnet.ts.net"]
 ```
 
-## `[[capabilities]]` (implemented)
+## `[[fragments]]` (implemented)
+
+> Renamed from `[[capabilities]]`. The old key (and the inner profile key
+> `capabilities = [...]`, and `[fragment_params]`'s former `[capability_params]`)
+> is still accepted, so existing configs load unchanged; studio writes the new
+> `[[fragments]]` form. Guidance templates may use `{{ fragment }}` or the
+> back-compat alias `{{ capability }}`.
 
 ```toml
-[[capabilities]]
+[[fragments]]
 id          = "ssh-tailnet"
 description = "SSH into machines on my tailnet to do work"
-tags        = ["infra", "network"]
+category    = "Local Environment"  # groups it in studio's tree (free-form)
+tags        = ["infra", "network"] # free-form discovery keywords
 risk        = "caution"            # info | caution | dangerous (informational)
 when        = [{ field = "host_class", op = "equals", value = "personal" }]   # self-gate
 requires    = ["network-awareness"]
@@ -181,8 +188,8 @@ You may SSH to {{ params.allowed_hosts | join(', ') }}.
 Confirm before any destructive remote command.
 """
 
-# dynamic capability (native provider):
-[[capabilities]]
+# dynamic fragment (native provider):
+[[fragments]]
 id       = "network-awareness"
 provider = "tailnet"     # built-in provider (or: command = "..." for the generic shell-command form)
 cache    = "60s"

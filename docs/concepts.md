@@ -11,11 +11,11 @@ stack, package manager, build/test/lint/run commands, OS/arch/host/user, the
 calling process, and an allowlisted+redacted slice of the environment. Detection
 is best-effort and degrades gracefully (e.g. outside a git repo).
 
-## Capabilities **(implemented)**
+## Fragments **(implemented)**
 
-A **capability** is one reusable, self-contained unit of guidance — e.g.
+A **fragment** is one reusable, self-contained unit of guidance — e.g.
 "Rust conventions", "you may SSH within my tailnet", "be terse, lead with the
-result". You author them once into your own library (`[[capabilities]]` in your
+result". You author them once into your own library (`[[fragments]]` in your
 global config); a shipped, read-only **palette** of starters is there to
 duplicate from (it is never auto-composed). Profiles compose them.
 
@@ -24,21 +24,21 @@ Two flavors:
 - **Dynamic** — guidance computed at render time from a `provider`
   (a built-in probe) or a `command` (a shell command), whose live output is
   embedded as `{{ provider.output }}` / `{{ provider.data }}`. Cache-backed
-  (per-capability `cache` TTL), redacted, and gated only by `allow_exec` (see
+  (per-fragment `cache` TTL), redacted, and gated only by `allow_exec` (see
   *Providers*). This is how rosita natively answers "what
   machine/network am I on?"
 
-Capabilities are parameterized (`params`), can self-gate (`when`), declare
+Fragments are parameterized (`params`), can self-gate (`when`), declare
 dependencies (`requires`), can be restricted to specific `agents`, and carry
 `risk`/`tags` metadata. Each renders as its own `###` section, annotated when its
-risk is not `Info`. See [configuration](configuration.md#capabilities-implemented).
+risk is not `Info`. See [configuration](configuration.md#fragments-implemented).
 
 ## Profiles & selection **(implemented)**
 
-A **profile** is a named bundle of capabilities tied to one or more **targets** —
+A **profile** is a named bundle of fragments tied to one or more **targets** —
 the coarse thing rosita detects: `rust`, `node`, `nextjs`, `go`, `python`,
 `android`, `java`, or `machine` (the no-repo context). Inline `guidance` is still
-supported for back-compat (it becomes a `<profile>:inline` capability, rendered
+supported for back-compat (it becomes a `<profile>:inline` fragment, rendered
 after the explicit ones).
 
 **One profile per context — not a union.** rosita gathers the profiles whose
@@ -49,12 +49,12 @@ after the explicit ones).
 - **2+ match** → you pick once, and the choice is remembered for that project
   (the **binding**, below).
 
-Composition then happens *within* the chosen profile, over its capability list:
+Composition then happens *within* the chosen profile, over its fragment list:
 deduped by id, `requires`-resolved (dependencies first, cycle-protected), each
-capability's own `when` self-gate applied (fields `stack`, `language`,
+fragment's own `when` self-gate applied (fields `stack`, `language`,
 `package_manager`, `path`, `branch`, `repo`, `host_class`, `os`, `arch`; ops
-`equals`/`starts_with`/`contains`/`matches`), and `params` merged (capability
-default ← profile-supplied ← private `[capability_params]`). There is **no**
+`equals`/`starts_with`/`contains`/`matches`), and `params` merged (fragment
+default ← profile-supplied ← private `[fragment_params]`). There is **no**
 priority ordering, no `exclude`/`exclusive`, and no always-on baseline profile —
 all retired along with additive composition. Selection is deterministic and
 inspectable (`rosita explain` shows what was detected, which profiles matched,
@@ -82,12 +82,12 @@ environment and returns output (`text` + structured `data`):
 - `tailnet` — tailscale peers (parsed from `tailscale status`).
 - `docker` — running containers (parsed from `docker ps`).
 
-The generic escape hatch is a capability's `command` (run any shell command,
+The generic escape hatch is a fragment's `command` (run any shell command,
 embed redacted stdout) rather than a provider — it runs unless `allow_exec` is
 `false`.
 
 Probing is **opt-in** via `rosita detect --probes` (a bare `detect` never spawns
-subprocesses), and dynamic capabilities embed provider/command output into the
+subprocesses), and dynamic fragments embed provider/command output into the
 (gitignored) overlay at render time. Output is **machine-specific and volatile**,
 so it is redacted, kept **out of `Context`** (never affects the context hash;
 dynamic overlays always rewrite, governed by the cache TTL not the hash), and
@@ -138,16 +138,16 @@ prevented.
 The guiding principle: **references are public; definitions of sensitive
 specifics are private.**
 
-- **Public / shareable** — capability guidance and profile rule *references*
+- **Public / shareable** — fragment guidance and profile rule *references*
   (`host_class == "work"`, `{{ params.host }}`). Lives in `config.toml`. Safe to
   commit, even open-source.
 - **Private** — the sensitive *definitions*: real hostnames, `host_classes`
-  globs, capability `params` values, and all dynamic provider/command output
+  globs, fragment `params` values, and all dynamic provider/command output
   (which only ever lands in the gitignored overlay/cache). These live in
   `local.toml` (global and/or repo), gitignored, layered **after** `config.toml`
-  so they win. `[capability_params.<id>]` supplies a capability's
+  so they win. `[fragment_params.<id>]` supplies a fragment's
   private params without redefining it; a profile may also pass public `params`
-  overrides via `{ id = "x", params = … }`. Merge order: capability default ←
+  overrides via `{ id = "x", params = … }`. Merge order: fragment default ←
   profile-supplied ← local.
 - **`rosita doctor` lints** the public layers for machine-specific literals
   (IPv4, `*.domain.tld` globs, multi-label hostnames) and nudges you to move
@@ -156,7 +156,7 @@ specifics are private.**
 - **Prefer detection over storage** — don't store network topology; let a
   provider probe it at runtime. It can't leak (it's local) and can't go stale.
 
-This is what lets you share a capability library across machines (and publicly)
+This is what lets you share a fragment library across machines (and publicly)
 without exposing what your machines are or what they can reach.
 
 ## Safety posture **(implemented)**

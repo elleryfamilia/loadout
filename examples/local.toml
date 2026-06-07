@@ -3,10 +3,10 @@
 # This file is gitignored and layered AFTER config.toml (it wins). Put sensitive
 # specifics here so the shareable config.toml stays free of them:
 #   - real hostnames and host_classes globs
-#   - capability `params` values (hosts, users, paths, tokens-by-reference)
+#   - fragment `params` values (hosts, users, paths, tokens-by-reference)
 #
 # (A repo's own .rosita/local.toml is the same private layer for that repo — it
-# also holds the per-project [binding].) Capabilities and profiles, however, are
+# also holds the per-project [binding].) Fragments and profiles, however, are
 # global-only and belong in config.toml. Nothing below is active until you
 # uncomment it.
 
@@ -16,8 +16,9 @@
 # work = ["*.corp.example.com", "work-laptop-*"]
 # home = ["nas.local", "*.home.arpa"]
 
-# Fill in the private params a public capability's guidance references. These
-# deep-merge over the capability's defaults and any profile-supplied params.
-# [capability_params.ssh]
+# Fill in the private params a public fragment's guidance references. These
+# deep-merge over the fragment's defaults and any profile-supplied params.
+# (`[capability_params.*]` is still accepted as the pre-rename key.)
+# [fragment_params.ssh]
 # host = "build-box.corp.example.com"
 # user = "deploy"

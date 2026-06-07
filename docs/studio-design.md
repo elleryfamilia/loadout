@@ -9,7 +9,7 @@
 
 `rosita studio` is an **ephemeral, localhost-only web UI** — run a command, it
 starts a server, opens the browser, and exits on Ctrl-C — for **viewing,
-creating, and managing capabilities and profiles** visually. It is **not a
+creating, and managing fragments and profiles** visually. It is **not a
 daemon** and not a service.
 
 The guiding principle: studio is a **lens and editor over your plain TOML
@@ -26,7 +26,7 @@ config**, never a hidden store. That yields three non-negotiables:
 
 ## 2. Locked decisions
 
-- **CRUD scope (v1):** capabilities and profiles only. Explicitly deferred to
+- **CRUD scope (v1):** fragments and profiles only. Explicitly deferred to
   hand-editing / future tabs: `[env]` allow/deny, `[defaults]`, `[codex]`,
   `[[agents]]`, per-profile `templates/*.j2`.
 - **Write model:** stage edits → show the exact per-file TOML diff → Apply.
@@ -42,33 +42,33 @@ config**, never a hidden store. That yields three non-negotiables:
 - **Command:** `rosita studio` (`--port`, `--no-open`; cwd via the existing
   global `--cwd`).
 
-## 3. Capability model — a flat, owned library
+## 3. Fragment model — a flat, owned library
 
 This is the core simplification relative to v1's layered/override framing.
 
-- **Capabilities are one flat library you own.** There are **no defaults, no
+- **Fragments are one flat library you own.** There are **no defaults, no
   seeding, no always-on baseline.**
-- **Shipped capabilities are a read-only *palette*** compiled into the binary —
+- **Shipped fragments are a read-only *palette*** compiled into the binary —
   things you can *pick from* when composing a profile. They are **never
   auto-composed and never written into your config**. To customize one, you
   **duplicate it into your config** and own the copy.
-- **A profile renders exactly the capabilities added to it.** A profile with
-  zero capabilities **cannot be saved** (≥1 required). An empty overlay happens
+- **A profile renders exactly the fragments added to it.** A profile with
+  zero fragments **cannot be saved** (≥1 required). An empty overlay happens
   only when *no profile applies* to the current context.
 - **Delete just deletes.** No override, no tombstone, no "reveal the layer
   beneath." (You only ever edit/create/delete entries that physically live in
   *your* config files; palette items are immutable templates.)
 
-Consequence in code: `compose()` stops injecting built-in capabilities; the
-always-on `default`/`baseline` profile is removed; `builtin_capabilities()`
+Consequence in code: `compose()` stops injecting built-in fragments; the
+always-on `default`/`baseline` profile is removed; `builtin_fragments()`
 becomes the palette (a read-only catalog), not an active layer.
 
 ## 4. Profile & selection model — pick-one
 
 **Additive composition is retired.** A project uses **one** profile and renders
-*its* capabilities — not a union of every matching profile. This removes
+*its* fragments — not a union of every matching profile. This removes
 priority-ordering, `exclude`, `exclusive`, and all cross-profile merging.
-Composition now happens only *within* a profile (a profile is its capability
+Composition now happens only *within* a profile (a profile is its fragment
 list).
 
 **Detection stays coarse and easy.** rosita detects language/platform at the
@@ -114,7 +114,7 @@ ever involved in selection — the agent only consumes the resulting overlay.
 - **Machine scope = general devops/sysadmin assistance** (anything you'd use a
   terminal for, not in a repo). Rather than a fixed task taxonomy, machine mode
   leans on the **existing providers** (`host`/`toolchain`/`tailnet`/`docker`) for
-  situational awareness plus a **careful-operator safety posture** capability;
+  situational awareness plus a **careful-operator safety posture** fragment;
   you add your own caps for your workflows. `machine` is just the "no repo"
   context for selection purposes.
 - **Machine overlay delivery = emit-only in v1.** With no repo to write into,
@@ -131,7 +131,7 @@ ever involved in selection — the agent only consumes the resulting overlay.
 
 The **public/private split *is* the sync boundary** — no new mechanism needed:
 
-- **Global `config.toml`** = your reusable capabilities and profiles → commit it
+- **Global `config.toml`** = your reusable fragments and profiles → commit it
   to a synced git repo (e.g. the maintainer's `_git/agent-config` dotfiles repo).
   It syncs because you commit it.
 - **Global `local.toml`** = this-box specifics (real hostnames, `host_class`
@@ -165,9 +165,9 @@ formatting on round-trip; the `toml` crate does not.
   `{ path, original_bytes, doc: DocumentMut, staged: DocumentMut, mtime, sha256 }`,
   plus an ordered, replayable `Vec<StagedOp>`, the simulator overrides, and the
   target agent.
-- **`StagedOp`** (typed): `CreateCapability{layer, cap}`, `EditCapability{…}`,
-  `DeleteCapability{layer, id}`, `Create/Edit/DeleteProfile{…}`,
-  `SetCapabilityParam{…}`, and a `DuplicatePaletteItem{id → layer}` (the only way
+- **`StagedOp`** (typed): `CreateFragment{layer, cap}`, `EditFragment{…}`,
+  `DeleteFragment{layer, id}`, `Create/Edit/DeleteProfile{…}`,
+  `SetFragmentParam{…}`, and a `DuplicatePaletteItem{id → layer}` (the only way
   to "edit" a shipped palette cap). New array-of-tables entries are built via
   `toml_edit::Table::new()` + `array.push` so toml_edit owns formatting — never
   string concatenation. Because we mutate the parsed tree in place, comments and
@@ -189,18 +189,18 @@ formatting on round-trip; the `toml` crate does not.
 - **In-memory config assembly seam** — required, and not "free reuse":
   `RawConfig`/`merge`/`finalize` are private and `load_from` only reads from
   disk. Add a public `Config::from_layer_strs(Vec<(Layer, path, text)>)` that
-  parses staged docs and **re-tags each capability's `origin` by layer exactly as
+  parses staged docs and **re-tags each fragment's `origin` by layer exactly as
   disk load does** (`config.rs:106`). This is security-critical: `origin` is
   `#[serde(skip)]` and defaults to `BuiltIn`, and the trust gate keys off origin
-  — a repo-authored `command` capability assembled without re-tagging would look
+  — a repo-authored `command` fragment assembled without re-tagging would look
   built-in and **bypass `rosita allow`**.
 - **Validation** (gates Apply; surfaced inline; never blocks *staging*): a new
   structured `validate()` that *returns diagnostics* (compose currently only
   logs warnings). Covers: re-parse through `RawConfig` (`deny_unknown_fields`);
-  unknown/`requires`-cycle capabilities; `Op::Matches` regex compiled up-front;
+  unknown/`requires`-cycle fragments; `Op::Matches` regex compiled up-front;
   minijinja compile+render of guidance against the simulated context; the
   leak-lint warning; id/name uniqueness within a layer; and a **dangling-ref
-  warning** when deleting a capability a profile still references.
+  warning** when deleting a fragment a profile still references.
 - **External-edit detection:** record (mtime, sha256) at load; re-check before
   Apply and on a light `every 3s` poll; on mismatch a banner offers **Reload**
   (re-read, replay staged ops, re-diff) or **Overwrite** (explicit). Hash, not
@@ -215,10 +215,10 @@ passes the Host-header check.
 
 - `GET /` — page shell (library / profile composer / simulator+preview panes).
 - `GET /assets/*` — embedded static (htmx, CSS).
-- `GET /library`, `GET /capabilities/{id}/edit`, `POST|DELETE /capabilities/{id}`,
-  `POST /capabilities/{id}/duplicate`.
+- `GET /library`, `GET /fragments/{id}/edit`, `POST|DELETE /fragments/{id}`,
+  `POST /fragments/{id}/duplicate`.
 - `GET /profiles/{name}/edit`, `POST|DELETE /profiles/{name}` — the composer:
-  name, the **language/platform tie** (`targets`), and the **capability picker**
+  name, the **language/platform tie** (`targets`), and the **fragment picker**
   (add from palette + your own).
 - `POST /preview` — recompute live: assemble the staged config, select the
   profile for the simulated context, render the overlay via `compose`+`render`
@@ -235,18 +235,18 @@ passes the Host-header check.
 `#overlay-pane`. No SSE/websocket (no push source; stays daemon-free). The 400ms
 debounce + ReadOnly mode means no per-keystroke shelling out. Swaps target
 `#overlay-pane`/`#errors`, never the active form → no lost form state. Dynamic
-capabilities with no cache entry render nothing under ReadOnly, so the UI
+fragments with no cache entry render nothing under ReadOnly, so the UI
 **badges them "runs live — not previewed"** with an explicit per-section "Render
 live (executes probe)" opt-in.
 
 ## 10. Trust & security
 
-- **Trust:** command-backed capabilities show the existing skip note plus a
+- **Trust:** command-backed fragments show the existing skip note plus a
   teaching banner; `POST /trust/allow` is explicit + `hx-confirm`, calls
   `trust::allow`, never implicit. Because an Apply changes the `.rosita` bundle
   hash, trust re-locks afterward — studio surfaces that proactively ("config
   changed → command caps re-locked; re-allow?"). Studio itself **never executes**
-  a capability `command` (preview is ReadOnly), keeping it off the command-trust
+  a fragment `command` (preview is ReadOnly), keeping it off the command-trust
   attack surface.
 - **Security:** bind **127.0.0.1 only**; a one-time **bootstrap-token route** is
   the sole tokenless route, which sets an **`HttpOnly; SameSite=Strict` cookie**
@@ -264,7 +264,7 @@ live (executes probe)" opt-in.
   **selection** function (match → 0/1/many → none/auto/prompt) and the
   per-project **binding** (read/write the remembered choice). Remove
   `builtin_profiles()` (no shipped profiles).
-- `capability`: `builtin_capabilities()` becomes the read-only **palette**
+- `fragment`: `builtin_fragments()` becomes the read-only **palette**
   (compiled-in, never injected into composition).
 - `config`: `Config::from_layer_strs(...)` (origin-tagging, in-memory assembly);
   an `include` directive; a namespaced `global_generated_dir()` for machine
@@ -326,8 +326,8 @@ studio UI.
 - **Slice 1 — read-only HTTP spine + live preview:** `serve()` binds 127.0.0.1,
   bootstrap-token + guards, `GET /` library list, `POST /preview` rendering the
   selected profile's overlay in ReadOnly.
-- **Slice 2 — wire write engine to HTTP:** capability editor, profile composer
-  (language tie + capability picker), diff/apply, trust banner, leak warning, and
+- **Slice 2 — wire write engine to HTTP:** fragment editor, profile composer
+  (language tie + fragment picker), diff/apply, trust banner, leak warning, and
   the "which profile?" prompt surfaced in `rosita run`.
 
 ## 16. UI wireframes
@@ -342,13 +342,13 @@ and the **staged-changes → Apply** control. All updates are htmx fragment swap
 drawer over the editor. The preview fragment keeps updating via htmx even while
 hidden, so it's current the moment it's revealed.
 
-### Shell — Capabilities mode (library + editor + preview)
+### Shell — Fragments mode (library + editor + preview)
 
 ```
 ┌ rosita studio ──────────────────────────────────────────── ◷ 127.0.0.1:7777 ┐
 │ Simulate ▸ lang[rust ▾]  scope[repo ▾]  agent[claude ▾]   ◍ 2 staged › Review │
 ├───────────────┬────────────────────────────────────┬─────────────────────────┤
-│ Capabilities ▸│  EDIT  rust-conventions             │ Live overlay · claude   │
+│ Fragments ▸│  EDIT  rust-conventions             │ Live overlay · claude   │
 │ Profiles      │  ──────────────────────────────────  │ # demo — agent context  │
 │  YOURS        │  id       rust-conventions           │ _profile: rust—browser_ │
 │  ● rust-conv ✎│  desc     Rust conventions           │ ## Rust conventions     │
@@ -372,16 +372,16 @@ visible and non-blocking.
 │  ● rust—kernel│  name     rust — browser             │ ## Rust conventions     │
 │  ● rust—brows…│  targets  [rust ▾] [＋]  ← language   │ …                       │
 │  ● machine    │           tie (detected lang)        │ ## WASM                 │
-│ [＋ New prof] │  capabilities  (need ≥1 to save)     │ Target wasm32; keep     │
+│ [＋ New prof] │  fragments  (need ≥1 to save)     │ Target wasm32; keep     │
 │               │   ┌────────────────────────────────┐ │ bindings thin…          │
 │               │   │ ⠿ rust-conventions          ✕ │ │                         │
 │               │   │ ⠿ wasm-conventions          ✕ │ │ ⟳ live                  │
 │               │   └────────────────────────────────┘ │                         │
-│               │   [＋ add capability ▾] palette+yours │                         │
+│               │   [＋ add fragment ▾] palette+yours │                         │
 │               │  lives in ◉repo ○global · ◉public  [Discard] [Stage change]    │
 ```
 `targets` is the language tie (§4); `⠿` drag handles set render order. Save
-disabled until ≥1 capability.
+disabled until ≥1 fragment.
 
 ### Review & apply (diff against raw bytes; normalization surfaced)
 
@@ -430,7 +430,7 @@ explain *why* the overlay is empty (so it reads "not set up," not "broken"):
 ```
 
 Quick start → composer pre-filled (name `rust`, `targets [rust]` from detection,
-capabilities suggested from the palette, **labeled "suggested, edit freely"** —
+fragments suggested from the palette, **labeled "suggested, edit freely"** —
 a head start, not a magic default), and the preview lights up. A language profile
 **defaults to `global`** with a first-use explainer (`ⓘ global = reuse in every
 rust repo; repo = just this one`). On apply, since it's the only rust profile, it
@@ -443,7 +443,7 @@ reminds that machine scope is emit-only with the `@import` line to copy);
 **has profiles, none target here** (`You have 4 profiles, none target rust.
 [Create one] · [Pick an existing one] · [None]`).
 
-### Dynamic capability + trust
+### Dynamic fragment + trust
 
 ```
 EDIT  current-ctx  ·  kind ○ static  ◉ dynamic

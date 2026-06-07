@@ -525,4 +525,20 @@ mod tests {
         assert_eq!(full.requires, vec!["baseline"]);
         assert_eq!(full.params.get("host").unwrap().as_str(), Some("box"));
     }
+
+    #[test]
+    fn category_none_is_omitted_from_serialization() {
+        // The freshness fingerprint serializes the struct by field; a `None`
+        // category must not appear, so an uncategorized fragment fingerprints
+        // exactly as it did before the field existed. A set category does appear.
+        let mut frag: Fragment = toml::from_str("id = \"x\"\nguidance = \"g\"\n").unwrap();
+        let none = serde_json::to_string(&frag).unwrap();
+        assert!(!none.contains("category"), "None category must be skipped");
+        frag.category = Some("Operating Style".into());
+        let some = serde_json::to_string(&frag).unwrap();
+        assert!(
+            some.contains("Operating Style"),
+            "set category is serialized"
+        );
+    }
 }

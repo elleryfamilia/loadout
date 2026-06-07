@@ -1,4 +1,4 @@
-# Implementation plan — capabilities, providers, dynamic, public/private
+# Implementation plan — fragments, providers, dynamic, public/private
 
 > **Historical record.** This plan describes the original phased build, which used
 > **additive** composition. The selection model has since changed to **pick-one +
@@ -35,9 +35,9 @@ Implemented and tested (83 tests, clippy+fmt clean) on branch `feat/rosita-mvp`:
 
 ## Locked decisions
 
-1. **Capabilities** = reusable guidance atoms; **profiles compose them**.
+1. **Fragments** = reusable guidance atoms; **profiles compose them**.
 2. **Composition is additive** — all matching profiles contribute; union by id,
-   priority-ordered, `requires`-resolved, per-capability `when`-filtered,
+   priority-ordered, `requires`-resolved, per-fragment `when`-filtered,
    `exclude`-applied; `exclusive` profile can replace.
 3. **Native environment discovery** — the "agent-env idea" is built into rosita
    as native **providers** (`tailnet`/`docker`/`toolchain`/`ai-tools`/`host`),
@@ -48,27 +48,27 @@ Implemented and tested (83 tests, clippy+fmt clean) on branch `feat/rosita-mvp`:
    refused until `rosita allow`.
 5. **Public/private** — references public, sensitive definitions private. Add
    `local.toml` layers (global-local, repo-local), gitignored. `host_classes`,
-   capability `params`, and all provider output are private/local. Prefer
+   fragment `params`, and all provider output are private/local. Prefer
    detection over stored topology.
 6. **Dynamic output** — sensitive → local/gitignored overlay only, redacted,
    excluded from the context hash, cached with TTL, re-probed on `rosita run`,
    graceful on missing tools.
 
-## Phase 1 — Capabilities (static) + additive composition ✅ done
+## Phase 1 — Fragments (static) + additive composition ✅ done
 
-**Goal:** profiles compose reusable static capabilities; selection becomes additive.
+**Goal:** profiles compose reusable static fragments; selection becomes additive.
 
-**Status:** landed. `src/capability.rs` ships `Capability`/`Risk` +
-`builtin_capabilities()`; `profile::compose` → `Composition`/`ResolvedCapability`
-replaces single-winner `select`; built-in profiles reference capabilities;
-config merges `[[capabilities]]` by id; render emits one `###` section per
-capability (risk-annotated, agent-filtered, inline template-file override
-preserved); explain lists active capabilities with provenance; audit records the
-capability set. 102 tests, clippy+fmt clean.
+**Status:** landed. `src/fragment.rs` ships `Fragment`/`Risk` +
+`builtin_fragments()`; `profile::compose` → `Composition`/`ResolvedFragment`
+replaces single-winner `select`; built-in profiles reference fragments;
+config merges `[[fragments]]` by id; render emits one `###` section per
+fragment (risk-annotated, agent-filtered, inline template-file override
+preserved); explain lists active fragments with provenance; audit records the
+fragment set. 102 tests, clippy+fmt clean.
 
-- New `src/capability.rs`:
+- New `src/fragment.rs`:
   ```rust
-  pub struct Capability {
+  pub struct Fragment {
       pub id: String,
       pub description: Option<String>,
       pub tags: Vec<String>,
@@ -80,48 +80,48 @@ capability set. 102 tests, clippy+fmt clean.
       pub agents: Vec<String>,        // optional restriction; empty = all
       // dynamic (Phase 4): provider/command/cache — add later, default None
   }
-  pub fn builtin_capabilities() -> Vec<Capability> { /* starter library */ }
+  pub fn builtin_fragments() -> Vec<Fragment> { /* starter library */ }
   ```
-- `src/profile.rs`: add to `ProfileConfig`: `capabilities: Vec<String>` (default
+- `src/profile.rs`: add to `ProfileConfig`: `fragments: Vec<String>` (default
   []), `exclude: Vec<String>` (default []), `exclusive: bool` (default false).
   Keep `guidance` (back-compat: treat a profile's inline guidance as an implicit
-  capability named `<profile>:inline`, appended last).
-- `src/config.rs`: add `capabilities: Vec<Capability>` to `Config`; `RawConfig`
-  gets `#[serde(default)] capabilities`; merge by id (mirror the profiles/agents
-  merge); finalize seeds `builtin_capabilities()` then overrides by id.
+  fragment named `<profile>:inline`, appended last).
+- `src/config.rs`: add `fragments: Vec<Fragment>` to `Config`; `RawConfig`
+  gets `#[serde(default)] fragments`; merge by id (mirror the profiles/agents
+  merge); finalize seeds `builtin_fragments()` then overrides by id.
 - New selection in `src/profile.rs` (replace single-winner usage in
   `commands::prepare`):
   ```rust
   pub struct Composition {
       pub profiles: Vec<String>,         // matching profile names, priority order
-      pub capabilities: Vec<ResolvedCapability>,  // ordered, deduped
-      pub reasons: Vec<String>,          // "capability X via profile Y (rule …)"
+      pub fragments: Vec<ResolvedFragment>,  // ordered, deduped
+      pub reasons: Vec<String>,          // "fragment X via profile Y (rule …)"
   }
-  pub fn compose(ctx, profiles, capabilities) -> Composition
+  pub fn compose(ctx, profiles, fragments) -> Composition
   ```
   Algorithm: collect matching profiles (existing `matches`); if any `exclusive`
   matches, keep only the highest-priority exclusive; else union. Order profiles
-  by priority desc then declaration. For each, append its `capabilities` (skip if
+  by priority desc then declaration. For each, append its `fragments` (skip if
   already added or in any profile's `exclude`). Expand `requires` (topological,
-  cycle-guarded). Filter each capability by its own `when` against ctx. Drop
-  capabilities whose `agents` excludes the current agent (at render time, since
+  cycle-guarded). Filter each fragment by its own `when` against ctx. Drop
+  fragments whose `agents` excludes the current agent (at render time, since
   agent varies). Record reasons.
 - `commands/mod.rs`: replace `Prepared.selection: Selection` with
   `Prepared.composition: Composition` (keep a `profile_label` for display/audit —
   e.g. join of matching profile names, or the top one). Update render/explain/
   refresh/run/clean/audit accordingly.
-- `src/render/`: render the overlay body from the ordered capabilities. Each
-  capability's `guidance` is rendered with the model `{ context, profile,
-  capability, params, agent }`. Concatenate under `## <description>` headings;
+- `src/render/`: render the overlay body from the ordered fragments. Each
+  fragment's `guidance` is rendered with the model `{ context, profile,
+  fragment, params, agent }`. Concatenate under `## <description>` headings;
   annotate `risk` when not `Info`. Keep the header banner. The
-  `profile_guidance` template var becomes the concatenated capability output (so
+  `profile_guidance` template var becomes the concatenated fragment output (so
   the existing `overlay.md.j2` keeps working with minimal change).
-- `commands/explain.rs`: list active capabilities + the rule/profile that pulled
+- `commands/explain.rs`: list active fragments + the rule/profile that pulled
   each in.
-- `audit::AuditEvent`: add `capabilities: Vec<String>`.
-- Ship a starter `builtin_capabilities()` library (see [concepts](concepts.md)):
+- `audit::AuditEvent`: add `fragments: Vec<String>`.
+- Ship a starter `builtin_fragments()` library (see [concepts](concepts.md)):
   awareness, dev-workflow, infra, safety, comms, machine. Port the built-in
-  profiles' inline guidance into named capabilities where it makes sense.
+  profiles' inline guidance into named fragments where it makes sense.
 - **Tests:** compose() additive union/order/exclude/requires/when; back-compat
   inline guidance; render concatenation; explain provenance.
 
@@ -132,8 +132,8 @@ capability set. 102 tests, clippy+fmt clean.
 **Status:** landed. `Config::load_from` now layers built-in ← global
 `config.toml` ← global `local.toml` ← repo `config.toml` ← repo `local.toml`
 (`global_local_path`/`repo_local_path` helpers, each recorded in `sources`).
-`capability_params` (keyed by id) deep-merge across layers via `merge_toml`;
-`CapabilityRef` lets a profile pass public `params` overrides; compose resolves
+`fragment_params` (keyed by id) deep-merge across layers via `merge_toml`;
+`FragmentRef` lets a profile pass public `params` overrides; compose resolves
 effective params as default ← profile-supplied ← local. `init` scaffolds a
 gitignored `local.toml` stub and gitignores it (repo + `--global`); the sample
 `[host_classes]` moved out of the public `config.toml` into `local.toml`.
@@ -148,11 +148,11 @@ hostnames). 108 tests, clippy+fmt clean.
   commented `[host_classes]`/`params` example); ensure `.rosita/local.toml` is in
   `.gitignore` (and `~/.config/rosita/.gitignore` ignores `local.toml` when
   `--global`). Move the sample `[host_classes]` out of the public sample.
-- Capability `params` resolution: a profile that lists a capability may pass
+- Fragment `params` resolution: a profile that lists a fragment may pass
   `params` overrides; private values come from the local layer. Define merge:
-  capability default params ← profile-supplied params ← local-layer params.
+  fragment default params ← profile-supplied params ← local-layer params.
 - `src/commands/doctor.rs`: add a **leak lint** — scan public-layer
-  capabilities/profiles/`host_classes` for hostname/IP/domain-looking literals
+  fragments/profiles/`host_classes` for hostname/IP/domain-looking literals
   (regex: IPv4, `*.tld` globs, `\w+\.\w+\.\w+` hostnames) and warn "looks private
   — move to local.toml". Only lint files in public layers.
 - **Tests:** layer precedence (local overrides global/repo); params merge; lint
@@ -204,15 +204,15 @@ into rendered overlays come in Phase 4.)
 - **Tests:** pure parsers (`parse_tailscale`, docker, version lines) with fixture
   strings; cache TTL logic; graceful `None` when tool absent.
 
-## Phase 4 — Dynamic capabilities + `command` provider + trust ✅ done
+## Phase 4 — Dynamic fragments + `command` provider + trust ✅ done
 
-**Goal:** capabilities embed live provider/command output, safely.
+**Goal:** fragments embed live provider/command output, safely.
 
-**Status:** landed. `Capability` gained `provider`/`command`/`cache` (+ a
+**Status:** landed. `Fragment` gained `provider`/`command`/`cache` (+ a
 `#[serde(skip)] origin: Layer` set during config load). `src/trust.rs` is a
 direnv-style store at `<global>/trust.toml` (repo path → sha256 of the
 `config.toml`+`local.toml` bundle) with `allow`/`deny`/`status` and testable
-`*_at` cores. `src/dynamic.rs` resolves dynamic capabilities (`DynamicMode`
+`*_at` cores. `src/dynamic.rs` resolves dynamic fragments (`DynamicMode`
 Live vs ReadOnly): built-in providers and built-in/global commands always run;
 repo-authored commands run only when the repo is trusted, else render a
 `> [rosita] skipped untrusted command` note. `providers` gained
@@ -223,18 +223,18 @@ TTL governs churn). `explain`/dry-run are ReadOnly (no exec, no writes). New
 commands `rosita allow`/`deny`/`trust`. 123 tests (trust unit tests landed
 first), clippy+fmt clean.
 
-- `src/capability.rs`: add `provider: Option<String>`, `command: Option<String>`,
-  `cache: Option<String>` (duration). In render, if a capability is dynamic:
+- `src/fragment.rs`: add `provider: Option<String>`, `command: Option<String>`,
+  `cache: Option<String>` (duration). In render, if a fragment is dynamic:
   resolve the provider (built-in registry) or the command, run it (honoring
   cache), and expose `provider.output` (text) + `provider.data` (json) in the
-  capability's template model.
+  fragment's template model.
 - **Trust** (`src/trust.rs`): a store at `<global>/trust.toml` mapping a repo
   path → the sha256 of its `.rosita` config bundle. Rules:
   - built-in `provider` → always allowed.
   - `command` from global/global-local layer → allowed (you authored it).
   - `command` from repo/repo-local layer → allowed **only** if the repo's current
     config hash is present in the trust store; else **refuse to run it** (render
-    the capability as a `> [rosita] skipped untrusted command — run \`rosita
+    the fragment as a `> [rosita] skipped untrusted command — run \`rosita
     allow\`` note) and warn.
   - New commands: `rosita allow` (record current repo config hash), `rosita deny`
     (remove), `rosita trust status`.
@@ -242,21 +242,21 @@ first), clippy+fmt clean.
   redacted; excluded from hash; cache-backed.
 - **Tests:** trust gating (repo command refused pre-allow, runs post-allow,
   re-refused after config change); cache hit/miss; provider-backed dynamic
-  capability renders embedded output; command provider from global layer runs
+  fragment renders embedded output; command provider from global layer runs
   without `allow`.
 
 ## Phase 5 — Introspection & polish ✅ done
 
-- `rosita capabilities [list|show <id>]`, `rosita profiles list`, `rosita agents
+- `rosita fragments [list|show <id>]`, `rosita profiles list`, `rosita agents
   list` — print the resolved/active sets (great for debugging composition).
-- Update `examples/` with a capabilities-based config and a `local.toml` example.
+- Update `examples/` with a fragments-based config and a `local.toml` example.
 - Update these docs' status markers as phases land.
 
-**Status:** landed. `src/commands/introspect.rs` adds `rosita capabilities`
+**Status:** landed. `src/commands/introspect.rs` adds `rosita fragments`
 (`list` default, `show <id>`), `rosita profiles`, and `rosita agents`, each with
 `--json`; all run the real config-load + detection + composition so they mark
-which capabilities are **active** and which profiles **match** the current
-context. `examples/config.toml` is capabilities-based (with commented dynamic +
+which fragments are **active** and which profiles **match** the current
+context. `examples/config.toml` is fragments-based (with commented dynamic +
 `host_classes`-in-local notes) and `examples/local.toml` ships the private-layer
 stub. Docs' status markers updated across all phases. 126 tests, clippy+fmt
 clean. **All five phases complete.**

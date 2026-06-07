@@ -51,23 +51,23 @@ the TOML surface follows automatically. Add a unit test.
 Drop `<repo>/.rosita/templates/<name>.md.j2` or
 `<global>/templates/<name>.md.j2`. Any name falls back to the embedded
 `overlay.md.j2`. The model exposes `context`, `profile`, `profile_guidance`,
-`agent`; inside a capability, `params` and `provider.output`/`provider.data` are
+`agent`; inside a fragment, `params` and `provider.output`/`provider.data` are
 in scope. The provenance/freshness banner is prepended in Rust
 (`render/header.rs`), so the body template stays simple.
 
-## Add a capability **(implemented — no code)**
+## Add a fragment **(implemented — no code)**
 
-Add a `[[capabilities]]` entry to your **global** config and reference its `id`
-from a profile's `capabilities` list. Static capabilities are just templated
+Add a `[[fragments]]` entry to your **global** config and reference its `id`
+from a profile's `fragments` list. Static fragments are just templated
 guidance; dynamic ones name a `provider` (or a `command`, run unless `allow_exec`
 is `false`). See
-[configuration](configuration.md#capabilities-implemented).
+[configuration](configuration.md#fragments-implemented).
 
 ## Add a native provider **(implemented — code)**
 
 Implement the `EnvProvider` trait (id + `probe(&Context) -> Result<ProviderOutput>`),
 register it in the provider registry, and it becomes usable as
-`provider = "<id>"` in a dynamic capability and as a `detect` section. Built-ins
+`provider = "<id>"` in a dynamic fragment and as a `detect` section. Built-ins
 for reference: `host`, `toolchain`, `ai-tools`, `tailnet`, `docker`. Probes must
 degrade gracefully (missing tool → empty), redact output, and be cacheable.
 

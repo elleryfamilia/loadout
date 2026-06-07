@@ -17,13 +17,13 @@ cargo fmt --check               # → clean
 `tests/cli.rs` drives the real binary against temp repos and `tests/studio.rs`
 drives the studio HTTP handlers; the lib tests cover detection, **pick-one
 selection + the per-project binding**, the comment-preserving **studio
-`toml_edit` write engine** (stage/diff/apply), capability-params merge, the
+`toml_edit` write engine** (stage/diff/apply), fragment-params merge, the
 providers' pure parsers, the cache TTL, trust, rendering, atomic writes, and
 redaction. All three green ⇒ the build is sound.
 
 ## Level 2 — Hands-on walkthrough (sandboxed)
 
-**Why a sandbox:** capabilities and profiles are **global-only**, so rosita
+**Why a sandbox:** fragments and profiles are **global-only**, so rosita
 writes them into your global config dir (`~/.config/rosita`, where the trust
 store also lives); in a repo it writes only the gitignored overlay, the binding,
 and `.gitignore`. To kick the tires without touching your real config or any real
@@ -67,29 +67,29 @@ Context
 
 ### 2. Author your library (global-only)
 
-Capabilities and profiles live in the **global** config, not the repo. (Normally
+Fragments and profiles live in the **global** config, not the repo. (Normally
 you'd do this visually with `rosita studio`; here we write the file directly.)
 
 ```bash
 cat > "$ROSITA_CONFIG_DIR/config.toml" <<'TOML'
-[[capabilities]]
+[[fragments]]
 id = "rust-conventions"
 tags = ["stack"]
 guidance = "Build with cargo, lint with clippy; prefer ?/Result over unwrap()."
 
-[[capabilities]]
+[[fragments]]
 id = "terse-comms"
 tags = ["comms"]
 guidance = "Be terse: lead with the result and what changed."
 
-[[capabilities]]                          # self-gates: only contributes under infra/
+[[fragments]]                          # self-gates: only contributes under infra/
 id = "infra-caution"
 risk = "caution"
 tags = ["safety"]
 when = [{ field = "path", op = "starts_with", value = "infra/" }]
 guidance = "Infrastructure path — prefer plans; confirm before touching shared state."
 
-[[capabilities]]                          # dynamic: live output embedded at render
+[[fragments]]                          # dynamic: live output embedded at render
 id = "host-info"
 provider = "host"
 guidance = "Running on {{ provider.output }}"
@@ -97,7 +97,7 @@ guidance = "Running on {{ provider.output }}"
 [[profiles]]
 name = "rust"
 targets = ["rust"]
-capabilities = ["rust-conventions", "terse-comms", "infra-caution", "host-info"]
+fragments = ["rust-conventions", "terse-comms", "infra-caution", "host-info"]
 TOML
 ```
 
@@ -110,10 +110,10 @@ rosita explain
 Detected targets: [rust]
 Profile selection → rust
 
-Active capabilities
-  • rust-conventions   capability 'rust-conventions' via profile 'rust'
-  • terse-comms        capability 'terse-comms' via profile 'rust'
-  • host-info          capability 'host-info' via profile 'rust'
+Active fragments
+  • rust-conventions   fragment 'rust-conventions' via profile 'rust'
+  • terse-comms        fragment 'terse-comms' via profile 'rust'
+  • host-info          fragment 'host-info' via profile 'rust'
 
 Profiles considered
   → rust           targets [rust] match
@@ -128,14 +128,14 @@ self-gate (`path starts_with "infra/"`) doesn't match the repo root.
 rosita --cwd "$SB/infra/db" explain
 ```
 ```
-Active capabilities
+Active fragments
   • rust-conventions
   • terse-comms
   • infra-caution [⚠️ caution]
   • host-info
 ```
 Same profile, but now `infra-caution` contributes — its `when` matches the
-`infra/` path. Gating happens **inside** the chosen profile (per-capability
+`infra/` path. Gating happens **inside** the chosen profile (per-fragment
 `when`), not by composing extra profiles. (`--cwd` runs as if invoked there.)
 
 ### 5. Render the overlay and inspect it
@@ -166,11 +166,11 @@ Committed files like `AGENTS.md` are never touched.
 ### 6. Introspect the resolved sets
 
 ```bash
-rosita capabilities          # ● = active here, · = available but inactive
+rosita fragments          # ● = active here, · = available but inactive
 rosita profiles              # marks which match, and the selected one
 ```
 ```
-Capabilities (4 in library, 3 active for this context)
+Fragments (4 in library, 3 active for this context)
   ● rust-conventions — rust-conventions  (tags: stack)
   ● terse-comms — terse-comms  (tags: comms)
   · infra-caution — infra-caution  (⚠️ caution; tags: safety)
@@ -178,24 +178,24 @@ Capabilities (4 in library, 3 active for this context)
 
 Profiles (1 configured; selected: rust)
   → rust             targets [rust]
-        capabilities: rust-conventions, terse-comms, infra-caution, host-info
+        fragments: rust-conventions, terse-comms, infra-caution, host-info
 ```
 
 ### 7. Global-only enforcement
 
-Capabilities and profiles declared in a **repo** are ignored — `rosita doctor`
+Fragments and profiles declared in a **repo** are ignored — `rosita doctor`
 flags the mistake instead of silently honoring it:
 
 ```bash
 mkdir -p .rosita
-printf '[[capabilities]]\nid="repo-cap"\nguidance="x"\n' > .rosita/config.toml
+printf '[[fragments]]\nid="repo-cap"\nguidance="x"\n' > .rosita/config.toml
 rosita doctor | grep "global-only"
-# → ⚠ .rosita/config.toml declares capabilities — these are global-only and are
+# → ⚠ .rosita/config.toml declares fragments — these are global-only and are
 #   ignored here; move them to ~/.config/rosita/config.toml
 rm .rosita/config.toml
 ```
 
-### 8. Dynamic capabilities, providers & trust
+### 8. Dynamic fragments, providers & trust
 
 `host-info` above is a built-in **provider** — always safe, no trust needed.
 Providers (`host`/`toolchain`/`ai-tools`/`tailnet`/`docker`) probe the live
@@ -207,9 +207,9 @@ kept out of the context hash. A bare `detect` never probes; `rosita detect
 rosita detect --probes        # host/toolchain/ai-tools/(tailnet/docker if present)
 ```
 
-The generic escape hatch is a capability `command` (any shell command, redacted
+The generic escape hatch is a fragment `command` (any shell command, redacted
 stdout embedded). It runs at render unless you set `allow_exec = false` (the
-per-capability off-switch). There's no repo-trust prompt: capabilities are
+per-fragment off-switch). There's no repo-trust prompt: fragments are
 global-only (§7), so a `command` is always one you authored globally.
 
 ### 9. Freshness lifecycle
@@ -222,7 +222,7 @@ rosita run claude --dry-run -- chat --model sonnet
 rosita clean      # removes the overlay + CLAUDE.local.md; never touches AGENTS.md
 ```
 A **static** overlay is idempotent — re-rendering an unchanged context is a
-no-op. An overlay with a **dynamic** capability (like `host-info`) re-probes, so
+no-op. An overlay with a **dynamic** fragment (like `host-info`) re-probes, so
 `refresh` rewrites it. (`rosita run claude` without `--dry-run` launches the
 `claude` CLI if installed, passing your args through.)
 
@@ -240,5 +240,5 @@ throwaway one.
 - **Level 1:** green tests / clippy / fmt (210 tests).
 - **Level 2:** `rust` auto-selected as the **one** profile; `infra-caution`
   gated in only under `infra/`; the dynamic `host-info` output rendered into the
-  overlay; a repo-declared capability flagged as **ignored** (global-only); and
+  overlay; a repo-declared fragment flagged as **ignored** (global-only); and
   `clean` removing only the generated artifacts.

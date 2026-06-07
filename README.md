@@ -9,7 +9,7 @@ that fits each project, so you're not pasting the same `CLAUDE.md` into every re
 and every tool.
 
 <p align="center">
-  <img src="docs/diagrams/journey.svg" alt="How you use rosita: run rosita studio to author capabilities and reusable profiles; run rosita run to detect your stack, select the right profile, and inject the global context into the agent — wired per agent through each one's native gitignored hook." width="900">
+  <img src="docs/diagrams/journey.svg" alt="How you use rosita: run rosita studio to author fragments and reusable profiles; run rosita run to detect your stack, select the right profile, and inject the global context into the agent — wired per agent through each one's native gitignored hook." width="900">
 </p>
 
 <p align="center"><sub><i>* how the overlay reaches each agent is detailed in <a href="#agents--one-overlay-n-deliveries">Agents — one overlay, N deliveries</a>.</i></sub></p>
@@ -28,7 +28,7 @@ and every tool.
 cargo install --git https://github.com/elleryfamilia/rosita
 ```
 
-**2. Author your context** — reusable capabilities and profiles, in a local web UI:
+**2. Author your context** — reusable fragments and profiles, in a local web UI:
 
 ```bash
 rosita studio
@@ -56,11 +56,11 @@ After that it's automatic — `rosita run` pulls the latest first. See
 
 rosita has **three** things you author, and one rule for putting them together.
 
-- **Capabilities** — reusable atoms of guidance: *"Rust conventions"*,
+- **Fragments** — reusable atoms of guidance: *"Rust conventions"*,
   *"be terse"*, *"be careful with infrastructure"*, or a live script like
   *"here are my running containers"*. You keep a **library** of your own, and
   there's a shipped read-only **palette** to duplicate starters from.
-- **Profiles** — a named bundle of capabilities, tied to one or more **targets**
+- **Profiles** — a named bundle of fragments, tied to one or more **targets**
   (the coarse thing rosita detects: `rust`, `node`, `nextjs`, `go`, `python`,
   `android`, `java`, or `machine` when you're not in a repo).
 - **The binding** — when more than one profile could apply, rosita asks **once**
@@ -69,9 +69,9 @@ rosita has **three** things you author, and one rule for putting them together.
 **The rule — one profile per context.** rosita detects the context, finds the
 profiles whose `targets` match, and selects **exactly one** (or none). Profiles
 do **not** merge or stack; composition happens *inside* the chosen profile, over
-its capability list. That's the whole trick: no priority math, no union of
+its fragment list. That's the whole trick: no priority math, no union of
 half-a-dozen matching rules — just *this repo looks like rust → use the rust
-profile → render its capabilities.*
+profile → render its fragments.*
 
 ```
 0 profiles match  →  empty overlay (nothing applies here)
@@ -98,7 +98,7 @@ Project
 Detected targets: [rust]
 Profile selection → rust          # 1 match → auto-selected, no prompt
 
-Active capabilities
+Active fragments
   • rust-conventions
   • terse-comms
 
@@ -123,21 +123,21 @@ The repo itself gains no committed rosita content — only a gitignored overlay 
 
 ## Where everything lives
 
-You author capabilities and profiles **once, globally**. A repo never stores them
+You author fragments and profiles **once, globally**. A repo never stores them
 — it only remembers *which profile to use here*.
 
 <p align="center">
-  <img src="docs/diagrams/layout.svg" alt="Where rosita stores things: a read-only palette you duplicate from, your global library of capabilities and profiles split into shared config.toml and private local.toml, and a repo that only remembers which profile to use." width="900">
+  <img src="docs/diagrams/layout.svg" alt="Where rosita stores things: a read-only palette you duplicate from, your global library of fragments and profiles split into shared config.toml and private local.toml, and a repo that only remembers which profile to use." width="900">
 </p>
 
-- **Global** (`~/.config/rosita/`) holds your whole library — capabilities *and*
+- **Global** (`~/.config/rosita/`) holds your whole library — fragments *and*
   profiles. It splits into a **public** `config.toml` (shareable, commit it to a
   dotfiles repo to sync across machines) and a **private** `local.toml`
   (gitignored — real hostnames, `[host_classes]`, secret-adjacent params).
 - **The palette** is shipped inside the binary, read-only. You *duplicate* a
   starter from it into your library to own and edit it; it is never auto-composed.
 - **A repo** (`.rosita/`) carries only the **binding** (`local.toml`,
-  gitignored) and the generated overlay (gitignored). Capabilities and profiles
+  gitignored) and the generated overlay (gitignored). Fragments and profiles
   declared in a repo are ignored — `rosita doctor` flags them and points you at
   the global config.
 
@@ -153,18 +153,18 @@ gone. It's a **lens over your TOML**, never a hidden store: every edit is shown
 as the exact file diff before you **Apply**, and it writes clean,
 comment-preserving TOML you could have hand-written.
 
-- **Capabilities** — a content-first editor for static guidance or scripts (with
+- **Fragments** — a content-first editor for static guidance or scripts (with
   syntax highlighting and on-demand "run this script" preview).
-- **Profiles** — a composer: name, targets, and a capability picker, with a
+- **Profiles** — a composer: name, targets, and a fragment picker, with a
   **live overlay preview** that updates as you edit.
 - **Stage → diff → apply** — nothing touches disk until you review the per-file
   diff (against the raw bytes on disk) and apply.
 - **First launch** — on a fresh config, studio greets you, shows what it
   detected, and offers a **quick start**: a starter profile pre-filled from the
-  detected target plus a few palette capabilities, all staged for you to tweak.
+  detected target plus a few palette fragments, all staged for you to tweak.
 
 Hand-edit a config file and studio reflects it; everything stays git-diffable and
-yours. Studio never executes a capability during preview — editing is
+yours. Studio never executes a fragment during preview — editing is
 side-effect-free until you Apply.
 
 ## Install
@@ -186,7 +186,7 @@ cargo install --path .       # or: cargo build --release  → ./target/release/r
 
 ## Sync across machines
 
-Because capabilities and profiles are **global-only**, sharing them across
+Because fragments and profiles are **global-only**, sharing them across
 machines is just syncing one file — `config.toml`. rosita git-backs your config
 dir and keeps it current automatically, so your laptop's library is there on every
 headless box (a VPS, Proxmox, a container).
@@ -235,7 +235,7 @@ inert until you `sync init`; tune them under `[sync]` (see
 
 Don't hand-translate it. rosita ships a Claude Code **skill**,
 [`rosita-migrate`](skills/rosita-migrate/SKILL.md), that reads your existing
-global agent instructions and turns them into rosita capabilities plus the few
+global agent instructions and turns them into rosita fragments plus the few
 profiles you actually need — additively (your originals are left untouched).
 
 ```bash
@@ -247,7 +247,7 @@ ln -s "$PWD/skills/rosita-migrate" ~/.claude/skills/rosita-migrate
 
 | Command | What it does |
 | --- | --- |
-| `rosita studio [--port N] [--no-open]` | Launch the local web UI to view/edit capabilities & profiles. |
+| `rosita studio [--port N] [--no-open]` | Launch the local web UI to view/edit fragments & profiles. |
 | `rosita sync [init [url] \| clone <url>]` | Sync your global config across machines (git-backed); bare `sync` pulls + pushes. See [Sync across machines](#sync-across-machines). |
 | `rosita detect [--json] [--probes]` | Detect and print the current context; `--probes` also runs environment providers (host/toolchain/ai-tools/tailnet/docker). |
 | `rosita explain [--agent <id>\|all] [--json]` | Show what was detected, which profiles matched their `targets`, the selected one, and the write plan. |
@@ -256,7 +256,7 @@ ln -s "$PWD/skills/rosita-migrate" ~/.claude/skills/rosita-migrate
 | `rosita refresh [--agent <id>\|all] [--force]` | Re-render already-initialized overlays (no-op if context unchanged). |
 | `rosita clean [--agent <id>\|all]` | Remove rosita-generated overlays + managed blocks (never touches committed files). |
 | `rosita doctor` | Diagnose environment, config, agents, templates, overlay freshness, public-config leaks, and repo-declared caps/profiles. |
-| `rosita capabilities [list\|show <id>] [--json]` | List your capability library (active ones marked), or show one in detail. |
+| `rosita fragments [list\|show <id>] [--json]` | List your fragment library (active ones marked), or show one in detail. |
 | `rosita profiles [--json]` | List your profiles with their `targets`, marking which match and which is selected. |
 | `rosita agents [--json]` | List configured agents and how each delivers the overlay. |
 
@@ -278,12 +278,12 @@ variables. The coarse **stack** is what profile `targets` match against.
 
 ## Configuration
 
-Capabilities and profiles are **global-only**. They live in:
+Fragments and profiles are **global-only**. They live in:
 
 - `~/.config/rosita/config.toml` — **public / shareable** (honors
   `$XDG_CONFIG_HOME`, and `$ROSITA_CONFIG_DIR` for tests/isolation).
 - `~/.config/rosita/local.toml` — **private / gitignored**: real hostnames,
-  `[host_classes]` globs, and `[capability_params.<id>]` values. Layered *after*
+  `[host_classes]` globs, and `[fragment_params.<id>]` values. Layered *after*
   `config.toml`, so it wins. `rosita doctor` flags machine-specific literals that
   belong here.
 
@@ -296,22 +296,22 @@ overrides (`templates/`). Sharing your library across machines is just committin
 See [`examples/config.toml`](examples/config.toml) and
 [`examples/local.toml`](examples/local.toml) for annotated configs.
 
-### Capabilities & profiles
+### Fragments & profiles
 
-A **capability** is a reusable unit of guidance. A **profile** ties a set of
-capabilities to one or more detected **targets** and is the unit of selection.
-Within the selected profile, its capabilities are composed: deduped by id,
-`requires`-resolved (dependencies first), each capability's own `when` self-gate
-applied, and `params` merged (capability default ← profile-supplied ← private
-`[capability_params]`).
+A **fragment** is a reusable unit of guidance. A **profile** ties a set of
+fragments to one or more detected **targets** and is the unit of selection.
+Within the selected profile, its fragments are composed: deduped by id,
+`requires`-resolved (dependencies first), each fragment's own `when` self-gate
+applied, and `params` merged (fragment default ← profile-supplied ← private
+`[fragment_params]`).
 
 ```toml
-[[capabilities]]
+[[fragments]]
 id = "rust-conventions"
 tags = ["stack"]
 guidance = "Build with cargo, lint with clippy; prefer ?/Result over unwrap()."
 
-[[capabilities]]
+[[fragments]]
 id = "terse-comms"
 tags = ["comms"]
 guidance = "Be terse: lead with the result and what changed; skip preamble."
@@ -319,14 +319,14 @@ guidance = "Be terse: lead with the result and what changed; skip preamble."
 [[profiles]]
 name = "rust"
 targets = ["rust"]                       # matches when the repo detects as rust
-capabilities = ["rust-conventions", "terse-comms"]
+fragments = ["rust-conventions", "terse-comms"]
 ```
 
 - **Targets:** the coarse detected tags — `rust`, `node`, `nextjs`, `go`,
   `python`, `android`, `java`, and `machine` (the no-repo context). A profile is
   a candidate when **any** of its targets matches; rosita then picks one (see
   [the model](#the-model-in-60-seconds)).
-- **Capability `when` self-gate:** a capability may carry `when` rules (fields
+- **Fragment `when` self-gate:** a fragment may carry `when` rules (fields
   `stack`, `language`, `package_manager`, `path`, `branch`, `repo`, `host_class`,
   `os`, `arch`; ops `equals`, `starts_with`, `contains`, `matches`) so it only
   contributes in part of a profile's reach. Profiles themselves select on
@@ -335,22 +335,22 @@ capabilities = ["rust-conventions", "terse-comms"]
   in `local.toml`), then referenced via `host_class equals "work"`.
 
 Inline `guidance = "…"` on a profile still works (back-compat) — it becomes a
-`<profile>:inline` capability rendered after the explicit ones. Inspect with
-`rosita capabilities` / `rosita profiles`.
+`<profile>:inline` fragment rendered after the explicit ones. Inspect with
+`rosita fragments` / `rosita profiles`.
 
-### Dynamic capabilities & providers
+### Dynamic fragments & providers
 
-A capability may embed **live** environment output via a built-in `provider`
+A fragment may embed **live** environment output via a built-in `provider`
 (`host` / `toolchain` / `ai-tools` / `tailnet` / `docker`) or a shell `command`
 (`{{ provider.output }}` / `{{ provider.data }}` in scope, cache-backed). Output
 is redacted, kept out of the context hash, and lands only in the gitignored
-overlay. A `command`-backed capability runs at render unless you set
-`allow_exec = false` (the per-capability off-switch); built-in providers are
-always safe. Because capabilities are global-only, a cloned repo can't introduce
+overlay. A `command`-backed fragment runs at render unless you set
+`allow_exec = false` (the per-fragment off-switch); built-in providers are
+always safe. Because fragments are global-only, a cloned repo can't introduce
 one — there's nothing untrusted to gate.
 
 ```toml
-[[capabilities]]
+[[fragments]]
 id = "containers"
 provider = "docker"          # or: command = "docker ps --format '{{.Names}}'"
 cache = "30s"
@@ -472,7 +472,7 @@ cargo fmt --check
 ```
 
 Unit tests cover detection, pick-one selection + binding, the comment-preserving
-studio write engine (stage/diff/apply), the git-backed sync engine, capability-
+studio write engine (stage/diff/apply), the git-backed sync engine, fragment-
 params merge, the providers' parsers, the cache TTL, rendering, atomic writes, and
 redaction;
 `tests/cli.rs` drives the real binary against temp repos, and `tests/studio.rs`
