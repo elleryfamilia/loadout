@@ -267,7 +267,41 @@ pub fn render_profile_config(
     mode: DynamicMode,
 ) -> crate::Result<PreviewOutcome> {
     let cfg = staged_config(snap)?;
-    let ctx = context_for_profile(&snap.base_context, profile);
+    render_profile_in_config(&cfg, &snap.base_context, profile, agent, mode)
+}
+
+/// Render a starter pack's profile as a preview document, **before** applying.
+/// The pack's palette fragments aren't owned yet, so the library is augmented
+/// with the palette versions of the pack's ids that aren't already in the config
+/// (exactly what `apply_pack` would duplicate in) so each section renders.
+pub fn render_pack(
+    snap: &Snapshot,
+    pack: &Pack,
+    agent: &str,
+    mode: DynamicMode,
+) -> crate::Result<PreviewOutcome> {
+    let mut cfg = staged_config(snap)?;
+    let owned: std::collections::HashSet<String> =
+        cfg.fragments.iter().map(|c| c.id.clone()).collect();
+    let extra: Vec<Fragment> = palette()
+        .into_iter()
+        .filter(|p| pack.fragments.contains(&p.id.as_str()) && !owned.contains(&p.id))
+        .collect();
+    cfg.fragments.extend(extra);
+    render_profile_in_config(&cfg, &snap.base_context, &pack.profile(), agent, mode)
+}
+
+/// Compose + render `profile` against an explicit `cfg` (its fragment library +
+/// agent/template config). Shared by the live profile preview and the pack
+/// preview (which augments `cfg` with the pack's not-yet-owned palette caps).
+fn render_profile_in_config(
+    cfg: &Config,
+    base_context: &Context,
+    profile: &ProfileConfig,
+    agent: &str,
+    mode: DynamicMode,
+) -> crate::Result<PreviewOutcome> {
+    let ctx = context_for_profile(base_context, profile);
     let composition = profile::compose_profile(&ctx, profile, &cfg.fragments, &cfg.fragment_params);
 
     let agent_id = if agent.is_empty() {
@@ -275,7 +309,7 @@ pub fn render_profile_config(
     } else {
         agent.to_string()
     };
-    let descriptor = adapters::descriptor(&cfg, &agent_id)
+    let descriptor = adapters::descriptor(cfg, &agent_id)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("unknown agent '{agent_id}'"))?;
     let out = render::render(&RenderRequest {
@@ -283,7 +317,7 @@ pub fn render_profile_config(
         template_name: &descriptor.template,
         context: &ctx,
         composition: &composition,
-        config: &cfg,
+        config: cfg,
         generated_at: now_rfc3339(),
         dynamic: mode,
     })?;
@@ -973,7 +1007,6 @@ pub fn profile_from_form(pairs: &[(String, String)]) -> crate::Result<ProfileCon
         targets: values_for(pairs, "targets"),
         fragments,
         template: opt(value_of(pairs, "template")),
-        guidance: opt(value_of(pairs, "guidance")),
         disabled: value_of(pairs, "disabled").is_some(),
     })
 }
@@ -1031,7 +1064,6 @@ pub fn draft_profile_from_form(pairs: &[(String, String)]) -> ProfileConfig {
             .map(FragmentRef::Id)
             .collect(),
         template: None,
-        guidance: opt(value_of(pairs, "guidance")),
         disabled: value_of(pairs, "disabled").is_some(),
     }
 }

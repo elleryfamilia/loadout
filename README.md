@@ -358,12 +358,10 @@ guidance = "Running containers (as of {{ generated_at }}):\n{{ provider.output }
 ### Templates
 
 Markdown templates rendered with [minijinja](https://github.com/mitsuhiko/minijinja).
-The model exposes `context`, `profile`, `profile_guidance`, and `agent`. Profile
-guidance resolves with precedence: a `profiles/<name>.md.j2` template file (repo
-then global) wins; otherwise the inline `guidance` string is used — both are
-themselves templated. Every generated file starts with a header carrying the
-generation timestamp, selected profile, **context hash**, source config files,
-and a "do not edit" warning.
+The model exposes `context`, `profile`, `profile_guidance` (the composed
+fragments, joined into the overlay body), and `agent`. Every generated file
+starts with a header carrying the generation timestamp, selected profile,
+**context hash**, source config files, and a "do not edit" warning.
 
 ## Agents — one overlay, N deliveries
 

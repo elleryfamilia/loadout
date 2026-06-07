@@ -50,7 +50,6 @@ impl Pack {
                 .map(|s| FragmentRef::Id(s.to_string()))
                 .collect(),
             template: None,
-            guidance: None,
             disabled: false,
         }
     }

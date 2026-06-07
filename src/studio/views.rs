@@ -779,12 +779,12 @@ pub fn packs_gallery(packs: &[PackView]) -> Markup {
         div class="tab-packs" {
             div class="dash-head" {
                 div class="editor-head" {
-                    button type="button" class="icon-btn" title="Back" hx-get="/tab/fragments" hx-target="#main" { (icon("arrow-right")) }
+                    button type="button" class="icon-btn" title="Back" hx-get="/tab/profiles" hx-target="#main" { (icon("arrow-right")) }
                     h1 { "Starter packs" }
                 }
                 (legend())
             }
-            p class="muted gallery-lead" { "A pack copies a curated set of fragments into your library and creates a ready-made profile — all staged for you to review and Apply." }
+            p class="muted gallery-lead" { "A pack copies a curated set of fragments into your library and creates a ready-made profile — all staged for you to review and Apply. " strong { "Preview" } " any pack first, and customize it freely once added." }
             div class="pack-grid" { @for p in packs { (pack_card(p)) } }
         }
     }
@@ -818,6 +818,7 @@ fn pack_card(p: &PackView) -> Markup {
                 span class="atoms" { @for a in &p.atoms { (atom_dot(a)) } }
                 span class="muted small" { (p.atoms.len()) " caps" }
                 span class="pack-spacer" {}
+                button class="btn btn-ghost btn-sm" hx-get=(format!("/packs/{e}/preview")) hx-target="#modal" { (icon("eye")) "Preview" }
                 @if p.applied {
                     button class="btn btn-ghost btn-sm" disabled { (icon("check")) "Applied" }
                 } @else {
@@ -826,6 +827,54 @@ fn pack_card(p: &PackView) -> Markup {
             }
         }
     }
+}
+
+/// The starter-pack preview modal: the pack's profile rendered as a full
+/// document, each composed fragment demarcated by its glyph + title + id, plus a
+/// note that the profile is fully customizable once added.
+pub fn pack_preview(pack: &crate::pack::Pack, outcome: &PreviewOutcome) -> String {
+    let e = enc(pack.id);
+    html! {
+        div class="modal-root" {
+            div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
+            div class="modal" {
+                div class="modal-head" {
+                    h2 { "Preview · " (pack.name) }
+                    (close_btn())
+                }
+                div class="modal-body" {
+                    p class="muted" {
+                        "Applying stages " (outcome.caps.len()) " fragments and the "
+                        strong { (pack.profile_name) } " profile. You review the diff before "
+                        "anything is saved — and can edit, add, or remove any of it afterward."
+                    }
+                    @if outcome.caps.is_empty() {
+                        p class="empty-card muted" { "This pack composes nothing in the current context." }
+                    } @else {
+                        div class="pack-preview-doc" {
+                            @for c in &outcome.caps {
+                                section class="pack-preview-frag" {
+                                    div class="pack-preview-frag-head" {
+                                        span class="fragment-glyph" { (icon(c.glyph)) }
+                                        span class="pack-preview-frag-title" { (c.title) }
+                                        span class="fragment-id" { (c.id) }
+                                    }
+                                    div class="markdown-body" { (render_markdown(&c.markdown)) }
+                                }
+                            }
+                        }
+                    }
+                }
+                div class="modal-foot" {
+                    button type="button" class="btn btn-ghost" hx-get="/close" hx-target="#modal" { "Close" }
+                    @if !outcome.caps.is_empty() {
+                        button type="button" class="btn btn-primary" hx-post=(format!("/packs/{e}/apply")) hx-target="#main" { (icon("plus")) "Apply" }
+                    }
+                }
+            }
+        }
+    }
+    .into_string()
 }
 
 // --- fragment dialog (modal) ----------------------------------------------
@@ -1100,9 +1149,6 @@ pub fn profile_editor(
                         }
                     }
                     (inline_new_cap())
-                }
-                label class="field" { span class="field-label" { "inline guidance" span class="field-hint" { "optional" } }
-                    textarea name="guidance" rows="2" { (draft.guidance.as_deref().unwrap_or("")) }
                 }
                 fieldset class="lives-in" {
                     legend { "Where it lives" }

@@ -13,9 +13,6 @@
 //! none, exactly 1 = auto-use, 2+ = ambiguous (the caller prompts and remembers
 //! the choice as a [`Binding`](crate::binding::Binding)). Selection is fully
 //! deterministic; no LLM is ever involved.
-//!
-//! Back-compat: a profile's inline `guidance` is treated as an implicit
-//! `<profile>:inline` fragment, appended after its explicit fragments.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -25,8 +22,8 @@ use crate::binding::Binding;
 use crate::context::Context;
 use crate::fragment::Fragment;
 
-/// A configured profile: the language/platform it targets and the fragments
-/// (and/or inline guidance) it contributes when selected.
+/// A configured profile: the language/platform it targets and the fragments it
+/// composes when selected.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileConfig {
@@ -48,10 +45,6 @@ pub struct ProfileConfig {
     /// agent suffix). Rarely needed.
     #[serde(default)]
     pub template: Option<String>,
-    /// Inline guidance markdown (back-compat; becomes a `<profile>:inline`
-    /// fragment appended after the explicit ones).
-    #[serde(default)]
-    pub guidance: Option<String>,
     /// When `true`, the profile is never selected or composed (an off-switch that
     /// keeps the definition around). Only serialized when set.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -153,9 +146,6 @@ pub struct ResolvedFragment {
     pub via_profile: String,
     /// Human-readable provenance, e.g. "fragment 'rust-conventions' via profile 'rust'".
     pub reason: String,
-    /// True for a synthetic `<profile>:inline` fragment — enables the
-    /// `profiles/<name>.md.j2` template-file override at render time.
-    pub inline: bool,
 }
 
 /// A fragment id a profile referenced but that isn't in the library. Recorded
@@ -309,8 +299,7 @@ pub fn compose_selection(
 /// In declaration order, add each referenced fragment — expanding `requires`
 /// depth-first (dependencies first) with cycle protection, filtering each by its
 /// own `when`, and skipping ids not in *your* library (palette items must be
-/// duplicated in first). Then append the profile's inline guidance as a
-/// synthetic fragment.
+/// duplicated in first).
 ///
 /// Agent restriction (`Fragment::agents`) is intentionally **not** applied
 /// here — the active agent varies per render, so it is applied at render time.
@@ -341,22 +330,6 @@ pub fn compose_profile(
             fragment_ref.params(),
             &mut HashSet::new(),
         );
-    }
-
-    // Back-compat: inline guidance as a synthetic fragment, appended after the
-    // profile's explicit fragments.
-    if let Some(text) = &profile.guidance {
-        let inline = Fragment::inline(&profile.name, text.clone());
-        if acc.added.insert(inline.id.clone()) {
-            let reason = format!("inline guidance via profile '{}'", profile.name);
-            acc.reasons.push(reason.clone());
-            acc.resolved.push(ResolvedFragment {
-                fragment: inline,
-                via_profile: profile.name.clone(),
-                reason,
-                inline: true,
-            });
-        }
     }
 
     Composition {
@@ -444,7 +417,6 @@ impl Accumulator {
                 fragment: resolved_cap,
                 via_profile: via_profile.to_string(),
                 reason,
-                inline: false,
             });
         }
         in_progress.remove(id);
@@ -536,7 +508,6 @@ mod tests {
                 .map(|s| FragmentRef::Id(s.to_string()))
                 .collect(),
             template: None,
-            guidance: None,
             disabled: false,
         }
     }
@@ -784,16 +755,6 @@ mod tests {
         assert_eq!(m.id, "does-not-exist");
         assert_eq!(m.via_profile, "p");
         assert!(m.provenance.contains("via profile 'p'"));
-    }
-
-    #[test]
-    fn compose_back_compat_inline_guidance_follows_explicit() {
-        let caps = vec![cap("a", "A")];
-        let mut p = prof("p", &["rust"], &["a"]);
-        p.guidance = Some("note".into());
-        let c = compose_t(&sample_context(), &p, &caps);
-        assert_eq!(ids(&c), vec!["a", "p:inline"]);
-        assert!(c.fragments.last().unwrap().inline);
     }
 
     #[test]

@@ -506,9 +506,6 @@ fn profile_table(p: &ProfileConfig) -> Result<Table> {
     if let Some(tmpl) = &p.template {
         t["template"] = value(tmpl.as_str());
     }
-    if let Some(g) = &p.guidance {
-        t["guidance"] = value(g.as_str());
-    }
     if p.disabled {
         t["disabled"] = value(true);
     }
@@ -689,7 +686,6 @@ mod tests {
             targets: vec!["rust".into()],
             fragments: vec![crate::profile::FragmentRef::Id("a".into())],
             template: None,
-            guidance: None,
             disabled: false,
         };
         s.stage(StagedOp::CreateProfile {

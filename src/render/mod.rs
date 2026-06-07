@@ -8,13 +8,11 @@
 
 pub mod header;
 
-use std::path::Path;
-
 use chrono::{DateTime, Utc};
 use minijinja::{Environment, UndefinedBehavior, Value};
 use serde::Serialize;
 
-use crate::config::{self, Config};
+use crate::config::Config;
 use crate::context::Context;
 use crate::dynamic::{self, DynamicMode};
 use crate::fragment::Fragment;
@@ -96,9 +94,9 @@ pub struct RenderOutput {
 /// the overlay body).
 #[derive(Debug, Clone)]
 pub struct RenderedFragment {
-    /// Fragment id (`<profile>:inline` for a synthetic inline fragment).
+    /// Fragment id.
     pub id: String,
-    /// Section title (the inline profile name, else the fragment's title).
+    /// Section title (the fragment's title).
     pub title: String,
     /// Rendered guidance markdown, or the skip note.
     pub body: String,
@@ -228,9 +226,7 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
 /// this list; studio also consumes it for per-fragment preview cards.
 ///
 /// Fragments restricted to other agents are skipped (the active agent varies
-/// per render), as are ones that render empty. A synthetic `<profile>:inline`
-/// fragment can still be overridden by a `profiles/<name>.md.j2` template file
-/// (repo, then global). A **dynamic** fragment resolves its provider/command
+/// per render), as are ones that render empty. A **dynamic** fragment resolves its provider/command
 /// output (cache-backed) with `provider.output`/`provider.data` in scope; a
 /// command with `allow_exec = false` renders a skip note instead.
 fn render_fragment_list(
@@ -298,16 +294,10 @@ fn render_fragment_list(
             }
             // Static fragment.
             None => {
-                let template_src = if rc.inline {
-                    read_profile_template(&ctx.repo_base, &rc.via_profile)
-                        .unwrap_or_else(|| cap.guidance.clone())
-                } else {
-                    cap.guidance.clone()
-                };
-                if template_src.trim().is_empty() {
+                if cap.guidance.trim().is_empty() {
                     continue;
                 }
-                let rendered = render_tmpl(&template_src, None)?;
+                let rendered = render_tmpl(&cap.guidance, None)?;
                 if rendered.is_empty() {
                     continue;
                 }
@@ -315,13 +305,7 @@ fn render_fragment_list(
             }
         };
 
-        // Inline fragments are titled by their profile (their description is
-        // synthetic); named fragments use their title.
-        let title = if rc.inline {
-            rc.via_profile.clone()
-        } else {
-            cap.title().to_string()
-        };
+        let title = cap.title().to_string();
         out.push(RenderedFragment {
             id: cap.id.clone(),
             title,
@@ -342,20 +326,6 @@ fn join_fragment_sections(caps: &[RenderedFragment]) -> String {
         .map(|c| format!("### {}\n\n{}", c.title, c.body))
         .collect::<Vec<_>>()
         .join("\n\n")
-}
-
-fn read_profile_template(repo_base: &Path, profile: &str) -> Option<String> {
-    let file = format!("profiles/{profile}.md.j2");
-    let repo = config::repo_templates_dir(repo_base).join(&file);
-    if let Ok(s) = std::fs::read_to_string(&repo) {
-        return Some(s);
-    }
-    if let Some(global) = config::global_templates_dir() {
-        if let Ok(s) = std::fs::read_to_string(global.join(&file)) {
-            return Some(s);
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -384,12 +354,11 @@ mod tests {
         }
     }
 
-    fn resolved(cap: Fragment, via: &str, inline: bool) -> ResolvedFragment {
+    fn resolved(cap: Fragment, via: &str) -> ResolvedFragment {
         ResolvedFragment {
             fragment: cap,
             via_profile: via.into(),
             reason: "test".into(),
-            inline,
         }
     }
 
@@ -418,7 +387,6 @@ mod tests {
                     "Use cargo for **{{ context.stacks | join(\",\") }}**.",
                 ),
                 "rust",
-                false,
             )],
         );
 
@@ -451,8 +419,8 @@ mod tests {
         let comp = composition(
             "infra",
             vec![
-                resolved(named_cap("infra-caution", "Be careful."), "infra", false),
-                resolved(named_cap("baseline", "Keep it minimal."), "default", false),
+                resolved(named_cap("infra-caution", "Be careful."), "infra"),
+                resolved(named_cap("baseline", "Keep it minimal."), "default"),
             ],
         );
         let out = render(&RenderRequest {
@@ -483,8 +451,8 @@ mod tests {
         let comp = composition(
             "infra",
             vec![
-                resolved(named_cap("infra-caution", "Be careful."), "infra", false),
-                resolved(named_cap("baseline", "Keep it minimal."), "default", false),
+                resolved(named_cap("infra-caution", "Be careful."), "infra"),
+                resolved(named_cap("baseline", "Keep it minimal."), "default"),
             ],
         );
         let out = render(&RenderRequest {
@@ -511,7 +479,7 @@ mod tests {
         let cfg = Config::defaults();
         let mut only_codex = named_cap("codex-only", "Codex specifics.");
         only_codex.agents = vec!["codex".into()];
-        let comp = composition("default", vec![resolved(only_codex, "default", false)]);
+        let comp = composition("default", vec![resolved(only_codex, "default")]);
 
         let out = render(&RenderRequest {
             agent: "claude",
@@ -526,40 +494,6 @@ mod tests {
         // Restricted to codex → absent from a claude render's guidance.
         assert!(!out.content.contains("Codex specifics."));
         assert!(out.profile_guidance.is_empty());
-    }
-
-    #[test]
-    fn profile_template_file_overrides_inline_guidance() {
-        let d = tempfile::tempdir().unwrap();
-        let pdir = config::repo_templates_dir(d.path()).join("profiles");
-        std::fs::create_dir_all(&pdir).unwrap();
-        std::fs::write(pdir.join("rust.md.j2"), "FILE GUIDANCE for {{ profile }}").unwrap();
-
-        let mut ctx = sample_context();
-        ctx.repo_base = d.path().to_path_buf();
-        ctx.cwd = d.path().to_path_buf();
-        let cfg = Config::defaults();
-        // An inline fragment whose guidance must be overridden by the file.
-        let inline = resolved(
-            Fragment::inline("rust", "INLINE GUIDANCE".into()),
-            "rust",
-            true,
-        );
-        let comp = composition("rust", vec![inline]);
-
-        let out = render(&RenderRequest {
-            agent: "claude",
-            template_name: "claude",
-            context: &ctx,
-            composition: &comp,
-            config: &cfg,
-            generated_at: "2026-05-29T00:00:00Z".into(),
-            dynamic: DynamicMode::ReadOnly,
-        })
-        .unwrap();
-
-        assert!(out.content.contains("FILE GUIDANCE for rust"));
-        assert!(!out.content.contains("INLINE GUIDANCE"));
     }
 
     #[test]

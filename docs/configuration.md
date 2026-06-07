@@ -72,7 +72,6 @@ fragments = [
   "rust-conventions",
   { id = "ssh", params = { user = "deploy" } },     # optional inline params override
 ]
-# guidance = "…"        # optional inline guidance (becomes a <profile>:inline fragment)
 # template = "infra"    # optional body-template override
 # disabled = true       # keep the definition but never select or compose it
 ```

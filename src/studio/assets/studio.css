@@ -575,6 +575,13 @@ pre.error { color: var(--error-fg); padding: 16px; font-family: var(--mono); whi
 .pack-foot { display: flex; align-items: center; gap: 8px; }
 .pack-spacer { flex: 1; }
 
+/* Pack preview modal — the composed profile as a document, fragment by fragment. */
+.pack-preview-doc { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
+.pack-preview-frag { border-top: 1px solid var(--border); padding-top: 12px; }
+.pack-preview-frag:first-child { border-top: none; padding-top: 0; }
+.pack-preview-frag-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.pack-preview-frag-title { font-weight: 600; font-size: 13.5px; }
+
 /* Legend — a collapsible popover keying the visual language. */
 .legend { position: relative; align-self: flex-start; }
 .legend > summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; color: var(--muted); padding: 5px 10px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: var(--panel-2); font-size: 12px; font-weight: 600; }

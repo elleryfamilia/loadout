@@ -625,7 +625,7 @@ mod tests {
             [[profiles]]
             name = "rust"
             targets = ["rust"]
-            guidance = "custom rust guidance"
+            fragments = ["rust-conventions"]
             "#,
         )
         .unwrap();
@@ -638,10 +638,10 @@ mod tests {
         // An explicit allowlist in any layer REPLACES the built-in defaults
         // (full user control); built-in defaults apply only when unset.
         assert_eq!(c.env.allowlist, vec!["MY_FLAG".to_string()]);
-        // The user profile is carried through with its targets + guidance.
+        // The user profile is carried through with its targets + fragments.
         let rust = c.profiles.iter().find(|p| p.name == "rust").unwrap();
         assert_eq!(rust.targets, vec!["rust".to_string()]);
-        assert_eq!(rust.guidance.as_deref(), Some("custom rust guidance"));
+        assert_eq!(rust.fragments.len(), 1);
     }
 
     #[test]

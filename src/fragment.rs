@@ -140,28 +140,6 @@ impl Fragment {
         self.provider.is_some() || self.command.is_some()
     }
 
-    /// The synthetic fragment that carries a profile's inline `guidance`
-    /// (back-compat). Its id is `<profile>:inline`; it always applies and is
-    /// rendered last among a profile's contributions.
-    pub fn inline(profile: &str, guidance: String) -> Fragment {
-        Fragment {
-            id: format!("{profile}:inline"),
-            description: None,
-            category: None,
-            when: Vec::new(),
-            requires: Vec::new(),
-            params: empty_params(),
-            guidance,
-            agents: Vec::new(),
-            provider: None,
-            command: None,
-            script_lang: None,
-            allow_exec: true,
-            cache: None,
-            origin: Layer::default(),
-        }
-    }
-
     /// Whether this fragment applies to `agent` given its `agents` restriction.
     pub fn applies_to_agent(&self, agent: &str) -> bool {
         self.agents.is_empty() || self.agents.iter().any(|a| a == agent)

@@ -536,7 +536,7 @@ fn handle_fragment_delete(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         })?;
         let mut emptied = Vec::new();
         for p in cleaned {
-            if p.fragments.is_empty() && p.guidance.is_none() {
+            if p.fragments.is_empty() {
                 emptied.push(p.name.clone());
             }
             let player = s.session.profile_layer(&p.name).unwrap_or(Layer::Global);
@@ -635,7 +635,21 @@ fn handle_pack_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let (id, action) = id_and_action(&req.path, "/packs/");
     match (req.method.as_str(), action) {
         ("POST", "apply") => handle_pack_apply(state, &id),
+        ("GET", "preview") => handle_pack_preview(state, &id),
         _ => Resp::not_found(),
+    }
+}
+
+/// `GET /packs/<id>/preview` — render the pack's profile as a full document
+/// (each fragment demarcated) in a modal, before applying.
+fn handle_pack_preview(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
+    let Some(pack) = crate::pack::packs().into_iter().find(|p| p.id == id) else {
+        return Resp::html(views::error_fragment(&format!("unknown pack '{id}'")));
+    };
+    let snap = state.lock().unwrap().snapshot();
+    match state::render_pack(&snap, &pack, "", DynamicMode::ReadOnly) {
+        Ok(out) => Resp::html(views::pack_preview(&pack, &out)),
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
@@ -673,7 +687,14 @@ fn apply_pack_and_show(state: &Arc<Mutex<StudioState>>, pack: &Pack) -> Resp {
         }
     }
     let flash = format!("staged the “{}” pack — review and Apply", pack.name);
-    profiles_tab_resp(state, Some(pack.profile_name), Some(&flash), true)
+    let mut resp = profiles_tab_resp(state, Some(pack.profile_name), Some(&flash), true);
+    // Applying may have been triggered from the preview modal — close it. (A
+    // harmless no-op when applied from the gallery card, where #modal is empty.)
+    if resp.status == 200 {
+        resp.body
+            .extend_from_slice(views::modal_close_loader().as_bytes());
+    }
+    resp
 }
 
 fn handle_profile_edit(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
