@@ -42,6 +42,24 @@ fn spawn_studio() -> (Child, tempfile::TempDir, u16, String) {
     }
     assert!(!url.is_empty(), "studio did not print a bootstrap URL");
 
+    // Keep draining the child's stdout/stderr to EOF in the background. After we
+    // stop reading, the studio keeps writing (its "(serving …)" banner, any logs).
+    // If the pipe's read end were dropped here, that next write would hit EPIPE —
+    // and since Rust ignores SIGPIPE, `println!` panics, killing the server
+    // mid-test (the port then refuses connections). That race is the source of
+    // the intermittent ConnectionRefused failures, so never close the read end:
+    // move the reader into a drain thread that lives as long as the child.
+    std::thread::spawn(move || {
+        let mut sink = String::new();
+        let _ = reader.read_to_string(&mut sink);
+    });
+    if let Some(err) = child.stderr.take() {
+        std::thread::spawn(move || {
+            let mut sink = String::new();
+            let _ = BufReader::new(err).read_to_string(&mut sink);
+        });
+    }
+
     // http://127.0.0.1:<port>/__studio/bootstrap?token=<token>
     let after_host = url.strip_prefix("http://127.0.0.1:").unwrap();
     let port: u16 = after_host
