@@ -8,7 +8,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Spawn `rosita studio --no-open --port 0` in an isolated tempdir and parse the
 /// bound port + session token from its startup output.
@@ -54,9 +54,28 @@ fn spawn_studio() -> (Child, tempfile::TempDir, u16, String) {
     (child, dir, port, token)
 }
 
+/// Connect to the just-spawned studio, retrying briefly. The child prints its
+/// bootstrap URL once the listener is bound, but on a loaded CI runner there can
+/// be a small window before it's accepting — a single immediate connect races it
+/// (observed as `ConnectionRefused` on macOS runners), so poll until ready.
+fn connect(port: u16) -> TcpStream {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(s) => return s,
+            Err(e) => {
+                if Instant::now() >= deadline {
+                    panic!("connect to studio on 127.0.0.1:{port}: {e}");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
 /// Send one raw HTTP/1.1 request and return the full response text.
 fn http(port: u16, request: &str) -> String {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to studio");
+    let mut stream = connect(port);
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
