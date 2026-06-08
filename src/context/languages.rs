@@ -46,10 +46,10 @@ impl ContextDetector for LanguageDetector {
         let (stacks, pms) = detect_stacks_and_pms(base);
         ctx.stacks = stacks;
         ctx.package_managers = pms;
-        // User-defined custom targets (declarative rules) detected against the
-        // repo, kept separate from built-in `stacks`. Script-predicate targets
-        // are resolved on the live render path, not here.
-        ctx.custom_targets = crate::target::detect_custom(&input.config.targets, base);
+        // User-defined custom targets detected against the repo, kept separate
+        // from built-in `stacks`. Script predicates execute only when `live`
+        // (real renders); otherwise their cached verdict is served.
+        ctx.custom_targets = crate::target::detect_custom(&input.config.targets, base, input.live);
         Ok(())
     }
 }

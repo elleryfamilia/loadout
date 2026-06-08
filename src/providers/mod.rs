@@ -133,6 +133,78 @@ pub fn run_once(command: &str, lang: Option<&str>) -> ProviderOutput {
     exec_command(command, lang)
 }
 
+/// Hard cap on a detection script predicate, so a hanging script can't stall
+/// `rosita run` (which fronts the agent launch). A timeout is fail-closed.
+const PREDICATE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Run a **script predicate** for target detection: exit 0 ⇒ match. Unlike
+/// [`run_command`], it runs with the working directory set to `repo_base`
+/// (so `test -f WORKSPACE` works), bounds the run with [`PREDICATE_TIMEOUT`],
+/// and caches only the boolean verdict (keyed by `key`, which the caller derives
+/// from the target id + a hash of the script so an edited script busts the
+/// cache). `live = false` serves an existing cached verdict and never executes.
+/// Returns `None` when there is no verdict — a cold cache in read-only mode, a
+/// spawn failure, or a timeout — and callers treat `None` as **no match**.
+pub fn run_predicate(
+    command: &str,
+    lang: Option<&str>,
+    repo_base: &Path,
+    key: &str,
+    ttl: Duration,
+    now: DateTime<Utc>,
+    live: bool,
+) -> Option<bool> {
+    cached(repo_base, key, ttl, now, live, || {
+        Ok(Some(exec_predicate(command, lang, repo_base)))
+    })
+    .ok()
+    .flatten()
+    .and_then(|out| out.data.get("matched").and_then(serde_json::Value::as_bool))
+}
+
+/// Run a script predicate under the chosen interpreter with `cwd = repo_base`
+/// and a bounded timeout, capturing only the exit-0 verdict into a
+/// [`ProviderOutput`] (`data.matched`). stdout/stderr are discarded — only the
+/// exit code decides the match. A non-zero exit, a signal/timeout kill, or a
+/// spawn failure all resolve to `matched: false` (fail-closed).
+fn exec_predicate(command: &str, lang: Option<&str>, repo_base: &Path) -> ProviderOutput {
+    use std::process::Stdio;
+    use std::time::Instant;
+    let (program, args) = interpreter(lang);
+    let spawned = Command::new(program)
+        .args(args)
+        .arg(command)
+        .current_dir(repo_base)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let matched = match spawned {
+        Ok(mut child) => {
+            let deadline = Instant::now() + PREDICATE_TIMEOUT;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break status.success(),
+                    Ok(None) => {
+                        if Instant::now() >= deadline {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            break false; // timed out → fail-closed
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(_) => break false,
+                }
+            }
+        }
+        Err(_) => false,
+    };
+    ProviderOutput {
+        text: String::new(),
+        data: serde_json::json!({ "matched": matched }),
+    }
+}
+
 /// The interpreter program + leading args for a script `lang` (or a plain
 /// `sh -c` shell line when `lang` is `None`/unrecognized).
 fn interpreter(lang: Option<&str>) -> (&'static str, &'static [&'static str]) {

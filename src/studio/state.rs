@@ -572,7 +572,9 @@ pub fn targets_view(snap: &Snapshot) -> TargetsView {
     let custom_matched: std::collections::HashSet<String> = cfg
         .as_ref()
         .map(|c| {
-            crate::target::detect_custom(&c.targets, &ctx.repo_base)
+            // Cache-only: a tab load never executes a detection script; it shows
+            // the cached verdict (warmed by a live render or the editor's Try).
+            crate::target::detect_custom(&c.targets, &ctx.repo_base, false)
                 .into_iter()
                 .collect()
         })

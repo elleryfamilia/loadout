@@ -225,23 +225,75 @@ pub fn reserved_target_ids() -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// Default cache TTL for a script-predicate target verdict. Targets change far
+/// less often than environment probes, so this is generous — a live render
+/// re-checks at most this often.
+const DEFAULT_SCRIPT_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
 /// Evaluate the user's `custom` targets against `repo_base`, returning the ids
 /// that matched (deduped, in declaration order). Disabled targets and any whose
 /// id is reserved (a built-in stack or `machine`) are skipped — built-ins are
-/// detected in Rust and are not overridable. Only the **declarative** rules are
-/// evaluated here; script predicates are resolved on the live render path.
-pub fn detect_custom(custom: &[TargetDef], repo_base: &Path) -> Vec<String> {
+/// detected in Rust and are not overridable.
+///
+/// `live` controls script predicates: `true` executes them (cwd = repo, bounded
+/// timeout, verdict cached); `false` serves only a cached verdict and never
+/// executes — so read-only commands (`explain`, `detect`, …) stay side-effect
+/// free. Declarative rules are always evaluated (pure filesystem reads).
+pub fn detect_custom(custom: &[TargetDef], repo_base: &Path, live: bool) -> Vec<String> {
     let reserved = reserved_target_ids();
     let mut matched: Vec<String> = Vec::new();
     for t in custom {
         if t.disabled || reserved.contains(&t.id) || matched.contains(&t.id) {
             continue;
         }
-        if t.rule.declarative_match(repo_base) {
+        if eval_rule(&t.rule, &t.id, repo_base, live) {
             matched.push(t.id.clone());
         }
     }
     matched
+}
+
+/// Evaluate one rule, executing any script predicate via the cached, bounded
+/// predicate runner (under the `live` policy above).
+fn eval_rule(rule: &TargetRule, id: &str, repo_base: &Path, live: bool) -> bool {
+    match rule {
+        TargetRule::FileExists { .. } | TargetRule::FileContains { .. } => {
+            rule.declarative_match(repo_base)
+        }
+        TargetRule::AllOf { rules } => rules.iter().all(|r| eval_rule(r, id, repo_base, live)),
+        TargetRule::AnyOf { rules } => rules.iter().any(|r| eval_rule(r, id, repo_base, live)),
+        TargetRule::Script {
+            command,
+            script_lang,
+            allow_exec,
+            cache,
+        } => {
+            if !*allow_exec {
+                return false; // off-switch → fail-closed
+            }
+            let ttl = cache
+                .as_deref()
+                .and_then(crate::providers::parse_duration)
+                .unwrap_or(DEFAULT_SCRIPT_TTL);
+            // Key by target id + a hash of the script body, so editing the
+            // script busts the cached verdict.
+            let key = format!(
+                "target-{}-{}",
+                id,
+                crate::hash::context_hash(&(command, script_lang))
+            );
+            crate::providers::run_predicate(
+                command,
+                script_lang.as_deref(),
+                repo_base,
+                &key,
+                ttl,
+                chrono::Utc::now(),
+                live,
+            )
+            .unwrap_or(false)
+        }
+    }
 }
 
 /// A plain-language, one-line summary of a detection rule — the studio's "how
@@ -405,10 +457,47 @@ mod tests {
             mk("machine", false), // reserved scope → ignored
             mk("off", true),      // disabled → ignored
         ];
-        assert_eq!(detect_custom(&targets, d.path()), vec!["deno".to_string()]);
+        assert_eq!(
+            detect_custom(&targets, d.path(), false),
+            vec!["deno".to_string()]
+        );
         // No matching file → nothing detected.
         let empty = tmp();
-        assert!(detect_custom(&targets, empty.path()).is_empty());
+        assert!(detect_custom(&targets, empty.path(), false).is_empty());
+    }
+
+    #[test]
+    fn detect_custom_runs_script_predicate_live() {
+        let d = tmp();
+        let scripted = |allow_exec: bool| TargetDef {
+            id: "scripted".to_string(),
+            description: None,
+            rule: TargetRule::Script {
+                command: "test -f marker".to_string(),
+                script_lang: Some("bash".to_string()),
+                allow_exec,
+                cache: Some("0s".to_string()), // re-run each call (no fresh cache)
+            },
+            disabled: false,
+            origin: Layer::Global,
+        };
+        let on = scripted(true);
+        // No marker → exit 1 → no match.
+        assert!(detect_custom(std::slice::from_ref(&on), d.path(), true).is_empty());
+        // Marker present → exit 0 → match.
+        fs::write(d.path().join("marker"), "").unwrap();
+        assert_eq!(
+            detect_custom(std::slice::from_ref(&on), d.path(), true),
+            vec!["scripted".to_string()]
+        );
+        // allow_exec = false → never matches, even with the marker.
+        let off = scripted(false);
+        assert!(detect_custom(std::slice::from_ref(&off), d.path(), true).is_empty());
+        // Cache-only (live = false) with a cold cache → fail-closed (no match),
+        // even though the marker is present.
+        let cold = tmp();
+        fs::write(cold.path().join("marker"), "").unwrap();
+        assert!(detect_custom(std::slice::from_ref(&on), cold.path(), false).is_empty());
     }
 
     #[test]

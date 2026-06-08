@@ -171,6 +171,7 @@ mod tests {
             cwd: ".".into(),
             repo_base: ".".into(),
             config: &cfg,
+            live: false,
         };
         assert_eq!(
             classify_host("ci.corp.example.com", &input).as_deref(),

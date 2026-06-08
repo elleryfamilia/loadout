@@ -116,21 +116,43 @@ impl ProfileChooser for SkipChooser {
 
 /// Load config, detect context, select a profile, and compose its fragments
 /// for `rt` (non-interactively — see [`prepare_with`] to supply a chooser).
+/// Detection is **cache-only** for script-predicate targets — the safe default
+/// for inspection commands (`explain`, `detect`, `doctor`, …). Real render
+/// commands use [`prepare_live`].
 pub fn prepare(rt: &Runtime) -> crate::Result<Prepared> {
     prepare_with(rt, &SkipChooser, MissingPolicy::Warn)
 }
 
+/// Like [`prepare`] but **live**: script-predicate custom targets may execute
+/// during detection. For `render`/`refresh` (and `run`, via [`prepare_with`]).
+pub fn prepare_live(rt: &Runtime) -> crate::Result<Prepared> {
+    prepare_with_live(rt, &SkipChooser, MissingPolicy::Warn, true)
+}
+
 /// Like [`prepare`] but resolves an ambiguous selection via `chooser` (which may
 /// prompt and persist the choice as a [`Binding`]) and lets the caller choose
-/// how missing-fragment references are surfaced via `missing`.
+/// how missing-fragment references are surfaced via `missing`. Detection is
+/// cache-only; use [`prepare_with_live`] to detect live.
 pub fn prepare_with(
     rt: &Runtime,
     chooser: &dyn ProfileChooser,
     missing: MissingPolicy,
 ) -> crate::Result<Prepared> {
+    prepare_with_live(rt, chooser, missing, false)
+}
+
+/// The full [`prepare`] with both a `chooser` and an explicit `live` detection
+/// policy (`true` lets script-predicate targets execute).
+pub fn prepare_with_live(
+    rt: &Runtime,
+    chooser: &dyn ProfileChooser,
+    missing: MissingPolicy,
+    live: bool,
+) -> crate::Result<Prepared> {
     let repo_base = context::repo_base_for(&rt.cwd);
     let config = Config::load(&repo_base).context("loading configuration")?;
-    let context = context::detect_context(&rt.cwd, &config).context("detecting context")?;
+    let context =
+        context::detect_context_with(&rt.cwd, &config, live).context("detecting context")?;
 
     let remembered = binding::read(&context);
     let selection = profile::select(&context, &config.profiles, remembered.as_ref());

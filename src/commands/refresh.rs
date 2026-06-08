@@ -4,14 +4,14 @@
 //! exists; if none do, falls back to the default agent. Hash-skipping means a
 //! refresh with no context change is a cheap no-op (unless `--force`).
 
-use super::{prepare, resolve_agents, Prepared, Runtime};
+use super::{prepare_live, resolve_agents, Prepared, Runtime};
 use crate::adapters::ApplyOptions;
 use crate::cli::RefreshArgs;
 use crate::config;
 
 /// Entry point for `rosita refresh`.
 pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
-    let prep = prepare(rt)?;
+    let prep = prepare_live(rt)?;
 
     let agents: Vec<String> = match &args.agent {
         Some(_) => resolve_agents(args.agent.as_deref(), &prep.config)?,

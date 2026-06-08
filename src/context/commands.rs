@@ -125,6 +125,7 @@ mod tests {
             cwd: dir.to_path_buf(),
             repo_base: dir.to_path_buf(),
             config: &cfg,
+            live: false,
         };
         let mut ctx = crate::context::test_support::sample_context();
         ctx.cwd = dir.to_path_buf();

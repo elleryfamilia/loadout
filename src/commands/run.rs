@@ -23,7 +23,7 @@ use anyhow::anyhow;
 
 use std::time::Duration;
 
-use super::{now_rfc3339, prepare_with, Choice, MissingPolicy, ProfileChooser, Runtime};
+use super::{now_rfc3339, prepare_with_live, Choice, MissingPolicy, ProfileChooser, Runtime};
 use crate::adapters::{self, AgentDescriptor, ApplyOptions, ApplyResult};
 use crate::cli::{RunArgs, StudioArgs};
 use crate::context::Context;
@@ -171,7 +171,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     let sync_status = sync_before_render(rt);
     print_sync_step(&p, &sync_status);
 
-    let prep = prepare_with(rt, &StdinChooser, MissingPolicy::Defer)?;
+    let prep = prepare_with_live(rt, &StdinChooser, MissingPolicy::Defer, true)?;
 
     // A profile that references a fragment id not in the library would silently
     // drop it from the overlay. Interrupt here — before any render/launch work —

@@ -2,7 +2,7 @@
 
 use anyhow::anyhow;
 
-use super::{now_rfc3339, prepare, resolve_agents, Prepared, Runtime};
+use super::{now_rfc3339, prepare_live, resolve_agents, Prepared, Runtime};
 use crate::adapters::{self, AppContext, ApplyOptions, ApplyResult};
 use crate::audit::{self, AuditEvent};
 use crate::cli::RenderArgs;
@@ -12,7 +12,7 @@ use crate::writer::AtomicWriter;
 
 /// Entry point for `rosita render`.
 pub fn run(rt: &Runtime, args: &RenderArgs) -> crate::Result<()> {
-    let prep = prepare(rt)?;
+    let prep = prepare_live(rt)?;
     let agents = resolve_agents(args.agent.as_deref(), &prep.config)?;
     let opts = ApplyOptions {
         codex_override: args.codex_override,

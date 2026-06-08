@@ -209,6 +209,11 @@ pub struct DetectInput<'a> {
     pub repo_base: PathBuf,
     /// Merged configuration (for env allowlist, host classes, …).
     pub config: &'a Config,
+    /// Whether detection may execute side-effecting probes — specifically
+    /// script-predicate custom targets. `false` (the default, used by
+    /// inspection commands like `explain`/`detect`) serves cached verdicts
+    /// only; `true` (real renders: `run`/`render`/`refresh`) runs them.
+    pub live: bool,
 }
 
 /// A unit of context detection that enriches the shared [`Context`].
@@ -235,13 +240,29 @@ pub fn repo_base_for(cwd: &Path) -> PathBuf {
     git::find_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
 }
 
-/// Run the full detector pipeline for `cwd` against `config`.
+/// Run the full detector pipeline for `cwd` against `config`. Detection is
+/// **cache-only** for script-predicate targets (no code runs) — the default for
+/// inspection commands; use [`detect_context_live`] on the real render paths.
 pub fn detect_context(cwd: &Path, config: &Config) -> crate::Result<Context> {
+    detect_context_with(cwd, config, false)
+}
+
+/// Like [`detect_context`] but **live**: script-predicate custom targets may
+/// execute (and cache their verdict). For `run`/`render`/`refresh`, which
+/// already execute dynamic fragments.
+pub fn detect_context_live(cwd: &Path, config: &Config) -> crate::Result<Context> {
+    detect_context_with(cwd, config, true)
+}
+
+/// Run the full detector pipeline for `cwd` against `config`, with `live`
+/// controlling whether script-predicate targets execute.
+pub fn detect_context_with(cwd: &Path, config: &Config, live: bool) -> crate::Result<Context> {
     let repo_base = repo_base_for(cwd);
     let input = DetectInput {
         cwd: cwd.to_path_buf(),
         repo_base: repo_base.clone(),
         config,
+        live,
     };
     let mut ctx = Context::empty(cwd.to_path_buf(), repo_base);
     for d in default_detectors() {
