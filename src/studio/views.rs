@@ -701,14 +701,28 @@ fn target_row(t: &TargetView) -> Markup {
     }
 }
 
-/// The simple-editor field values for a rule, or `None` when the rule is too
-/// rich for the two-shape form (a script, an all-of, or a nested composite) and
-/// must be hand-edited as TOML.
-fn target_form_fields(rule: &TargetRule) -> Option<(&'static str, String, String, String)> {
+/// The simple-editor field values for a custom-target rule.
+#[derive(Default)]
+struct TargetForm {
+    kind: &'static str,
+    paths: String,
+    contains_path: String,
+    contains_value: String,
+    command: String,
+    lang: String,
+    allow_exec: bool,
+}
+
+/// Map a rule to the editor's fields, or `None` when it's too rich for the form
+/// (an all-of, or a composite that isn't a plain any-of-files) and must be
+/// hand-edited as TOML.
+fn target_form_fields(rule: &TargetRule) -> Option<TargetForm> {
     match rule {
-        TargetRule::FileExists { path } => {
-            Some(("file_exists", path.clone(), String::new(), String::new()))
-        }
+        TargetRule::FileExists { path } => Some(TargetForm {
+            kind: "file_exists",
+            paths: path.clone(),
+            ..Default::default()
+        }),
         TargetRule::AnyOf { rules }
             if !rules.is_empty()
                 && rules
@@ -723,11 +737,30 @@ fn target_form_fields(rule: &TargetRule) -> Option<(&'static str, String, String
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            Some(("file_exists", paths, String::new(), String::new()))
+            Some(TargetForm {
+                kind: "file_exists",
+                paths,
+                ..Default::default()
+            })
         }
-        TargetRule::FileContains { path, value, .. } => {
-            Some(("file_contains", String::new(), path.clone(), value.clone()))
-        }
+        TargetRule::FileContains { path, value, .. } => Some(TargetForm {
+            kind: "file_contains",
+            contains_path: path.clone(),
+            contains_value: value.clone(),
+            ..Default::default()
+        }),
+        TargetRule::Script {
+            command,
+            script_lang,
+            allow_exec,
+            ..
+        } => Some(TargetForm {
+            kind: "script",
+            command: command.clone(),
+            lang: script_lang.clone().unwrap_or_else(|| "bash".to_string()),
+            allow_exec: *allow_exec,
+            ..Default::default()
+        }),
         _ => None,
     }
 }
@@ -746,22 +779,24 @@ pub fn target_dialog(target: Option<&TargetDef>, layer: Layer) -> String {
             div class="modal" {
                 div class="modal-head" { h2 { "Advanced target" } (close_btn()) }
                 div class="modal-body" {
-                    p class="hint" { "“" (id) "” uses a rule the quick editor can't show (a script or a composite). Edit it directly in your config TOML." }
+                    p class="hint" { "“" (id) "” uses a rule the quick editor can't show (a composite all-of/any-of). Edit it directly in your config TOML." }
                 }
                 div class="modal-foot" { button class="btn btn-ghost" hx-get="/close" hx-target="#modal" { "Close" } }
             }
         }
         .into_string();
     }
-    let (kind, paths, cpath, cvalue) =
-        fields
-            .flatten()
-            .unwrap_or(("file_exists", String::new(), String::new(), String::new()));
+    let f = fields.flatten().unwrap_or(TargetForm {
+        kind: "file_exists",
+        lang: "bash".to_string(),
+        allow_exec: true,
+        ..Default::default()
+    });
     let desc = target.and_then(|t| t.description.as_deref()).unwrap_or("");
     html! {
         div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
         div class="modal" {
-            form class="fragment-form" hx-post="/targets" hx-target="#main" {
+            form class="fragment-form target-form" hx-post="/targets" hx-target="#main" {
                 div class="modal-head" {
                     h2 { (if is_new { "New target" } else { "Edit target" }) }
                     (close_btn())
@@ -775,23 +810,51 @@ pub fn target_dialog(target: Option<&TargetDef>, layer: Layer) -> String {
                         input type="text" name="description" value=(desc) placeholder="a Deno project";
                     }
                     div class="seg" {
-                        input type="radio" name="kind" id="tkind-fe" value="file_exists" checked[kind != "file_contains"];
+                        input type="radio" name="kind" id="tkind-fe" value="file_exists" checked[f.kind == "file_exists"];
                         label class="seg-opt" for="tkind-fe" { "File exists" }
-                        input type="radio" name="kind" id="tkind-fc" value="file_contains" checked[kind == "file_contains"];
+                        input type="radio" name="kind" id="tkind-fc" value="file_contains" checked[f.kind == "file_contains"];
                         label class="seg-opt" for="tkind-fc" { "File contains" }
+                        input type="radio" name="kind" id="tkind-sc" value="script" checked[f.kind == "script"];
+                        label class="seg-opt" for="tkind-sc" { "Script" }
                     }
                     div class="kind-fe" {
                         label class="field" { span class="field-label" { "file(s)" span class="field-hint" { "comma-separated; matches if any exists" } }
-                            input type="text" name="paths" value=(paths) placeholder="deno.json, deno.jsonc";
+                            input type="text" name="paths" value=(f.paths) placeholder="deno.json, deno.jsonc";
                         }
                     }
                     div class="kind-fc" {
                         label class="field" { span class="field-label" { "file" }
-                            input type="text" name="contains_path" value=(cpath) placeholder="pyproject.toml";
+                            input type="text" name="contains_path" value=(f.contains_path) placeholder="pyproject.toml";
                         }
                         label class="field" { span class="field-label" { "contains text" }
-                            input type="text" name="contains_value" value=(cvalue) placeholder="django";
+                            input type="text" name="contains_value" value=(f.contains_value) placeholder="django";
                         }
+                    }
+                    div class="kind-sc" {
+                        div class="script-head" {
+                            label class="field grow" { span class="field-label" { "script" span class="field-hint" { "exit 0 = match; runs in the repo" } } }
+                            div class="seg seg-sm" {
+                                @for (val, lbl) in SCRIPT_LANGS {
+                                    @let lid = format!("tlang-{val}");
+                                    input type="radio" name="script_lang" id=(lid) value=(val) checked[f.lang == *val];
+                                    label class="seg-opt" for=(lid) { (lbl) }
+                                }
+                            }
+                        }
+                        div class="code-edit-wrap" {
+                            pre class="code-hl" aria-hidden="true" { code {} }
+                            textarea name="command" rows="6" class="mono code-edit" spellcheck="false" placeholder="test -f deno.json" { (f.command) }
+                        }
+                        div class="script-actions" {
+                            label class="check exec-check" { input type="checkbox" name="allow_exec" checked[is_new || f.allow_exec]; span { "Allow execution" } }
+                            button type="button" class="btn btn-ghost btn-sm script-try"
+                                hx-post="/targets/try" hx-target="#target-tryout"
+                                title="Run this predicate now against the repo (nothing is saved)" {
+                                (icon("play")) "Run"
+                            }
+                        }
+                        div id="target-tryout" class="script-tryout" {}
+                        p class="hint small" { "The predicate runs at detection (only on real renders), cwd set to the repo; its verdict is cached. Uncheck " strong { "Allow execution" } " to disable it." }
                     }
                     (lives_in(layer))
                     p class="hint small" { "Detected against each repo at render. A profile whose targets include this id applies wherever it matches." }

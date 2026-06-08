@@ -142,6 +142,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/fragments/try") => handle_fragment_try(req),
         ("GET", "/targets/new") => Resp::html(views::target_dialog(None, Layer::Global)),
         ("POST", "/targets") => handle_target_save(state, req),
+        ("POST", "/targets/try") => handle_target_try(state, req),
         ("GET", "/packs") => handle_packs(state),
         ("GET", "/onboarding/welcome") => handle_onboarding_welcome(state),
         ("POST", "/onboarding/quickstart") => handle_quickstart(state),
@@ -666,6 +667,26 @@ fn handle_target_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         return Resp::html(views::error_fragment(&e.to_string()));
     }
     target_result(state, &format!("staged target “{id}”"))
+}
+
+/// Run a draft script predicate once against the repo (cwd = repo base), so the
+/// editor can show what it does before saving. Nothing is staged or cached.
+fn handle_target_try(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+    let command = field(&req.body, "command");
+    if command.trim().is_empty() {
+        return Resp::html(views::script_tryout_empty());
+    }
+    let lang = field(&req.body, "script_lang");
+    let lang = (!lang.is_empty()).then_some(lang.as_str());
+    let repo_base = state
+        .lock()
+        .unwrap()
+        .snapshot()
+        .base_context
+        .repo_base
+        .clone();
+    let out = crate::providers::run_once_in(&command, lang, &repo_base);
+    Resp::html(views::script_tryout(&out))
 }
 
 fn handle_target_edit(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
@@ -1608,6 +1629,34 @@ mod tests {
             "target written: {on_disk}"
         );
         assert!(on_disk.contains("deno.json"), "rule written");
+    }
+
+    #[test]
+    fn create_script_target_stages_and_applies() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = body_of(route(
+            &st,
+            &req(
+                "POST",
+                "/targets",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "name=Bazel&kind=script&command=test+-f+WORKSPACE&script_lang=bash&allow_exec=on&visibility=public",
+            ),
+        ));
+        assert!(r.contains("staged target"), "save flash: {r}");
+        body_of(route(
+            &st,
+            &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
+        assert!(
+            on_disk.contains("id = \"bazel\""),
+            "target written: {on_disk}"
+        );
+        assert!(on_disk.contains("kind = \"script\""), "script rule written");
+        assert!(on_disk.contains("WORKSPACE"), "command written");
     }
 
     #[test]

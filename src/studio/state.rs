@@ -1027,6 +1027,21 @@ pub fn target_from_form(
     };
     let description = opt(value_of(pairs, "description"));
     let rule = match value_of(pairs, "kind") {
+        Some("script") => {
+            let command = opt(value_of(pairs, "command"))
+                .ok_or_else(|| anyhow::anyhow!("a script target needs a command"))?;
+            let script_lang = match value_of(pairs, "script_lang") {
+                Some("python") => Some("python".to_string()),
+                Some("sh") => Some("sh".to_string()),
+                _ => Some("bash".to_string()),
+            };
+            TargetRule::Script {
+                command,
+                script_lang,
+                allow_exec: value_of(pairs, "allow_exec").is_some(),
+                cache: None,
+            }
+        }
         Some("file_contains") => {
             let path = opt(value_of(pairs, "contains_path"))
                 .ok_or_else(|| anyhow::anyhow!("“file contains” needs a file path"))?;

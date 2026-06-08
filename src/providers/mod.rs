@@ -121,7 +121,7 @@ pub fn run_command(
     live: bool,
 ) -> Option<ProviderOutput> {
     cached(repo_base, key, ttl, now, live, || {
-        Ok(Some(exec_command(command, lang)))
+        Ok(Some(exec_command(command, lang, None)))
     })
     .unwrap_or(None)
 }
@@ -130,7 +130,14 @@ pub fn run_command(
 /// script in the editor. Same interpreter + capture path as render-time
 /// execution ([`run_command`]), so what the user sees is what would be embedded.
 pub fn run_once(command: &str, lang: Option<&str>) -> ProviderOutput {
-    exec_command(command, lang)
+    exec_command(command, lang, None)
+}
+
+/// Like [`run_once`] but with the working directory set to `dir` — for the
+/// studio "Try" of a draft target predicate, so a `test -f …` resolves against
+/// the repo (matching how detection runs it).
+pub fn run_once_in(command: &str, lang: Option<&str>, dir: &Path) -> ProviderOutput {
+    exec_command(command, lang, Some(dir))
 }
 
 /// Hard cap on a detection script predicate, so a hanging script can't stall
@@ -304,9 +311,14 @@ fn sanitize_key(key: &str) -> String {
 /// Run a command/script body under the chosen interpreter and capture its
 /// output into a [`ProviderOutput`]. stdout is preferred for `text`, falling
 /// back to stderr; the structured form keeps both plus the exit code.
-fn exec_command(command: &str, lang: Option<&str>) -> ProviderOutput {
+fn exec_command(command: &str, lang: Option<&str>, cwd: Option<&Path>) -> ProviderOutput {
     let (program, args) = interpreter(lang);
-    match Command::new(program).args(args).arg(command).output() {
+    let mut cmd = Command::new(program);
+    cmd.args(args).arg(command);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    match cmd.output() {
         Ok(o) => {
             let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
