@@ -231,7 +231,13 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     print_render_step(&p, &prep, agent, result.as_ref());
 
     let rendered_at = now_rfc3339();
-    let launch_args = build_launch_args(&descriptor, &prep, rendered, &rendered_at, &args.args);
+    let launch_args = build_launch_args(
+        &descriptor,
+        &prep,
+        result.as_ref(),
+        &rendered_at,
+        &args.args,
+    );
     let extra_env = launch_context_env(&descriptor, &prep);
 
     if rt.dry_run {
@@ -409,14 +415,33 @@ fn launch_context_env(
 fn build_launch_args(
     descriptor: &AgentDescriptor,
     prep: &super::Prepared,
-    rendered: bool,
+    result: Option<&ApplyResult>,
     rendered_at: &str,
     user_args: &[String],
 ) -> Vec<String> {
     let mut out = Vec::new();
-    if rendered {
-        if let Some(flag) = &descriptor.append_prompt_flag {
-            out.push(flag.clone());
+    if let (Some(flag), Some(result)) = (&descriptor.append_prompt_flag, result) {
+        out.push(flag.clone());
+        let guidance = result.profile_guidance.trim();
+        if result.wiring_suppressed && !guidance.is_empty() {
+            // Off-repo: the persistent importer was withheld (it would bleed into
+            // every repo under here), so carry the machine context into *this*
+            // session only — bounded so a huge overlay can't blow the arg up.
+            const CAP: usize = 16 * 1024;
+            let body = if guidance.len() > CAP {
+                let mut end = CAP;
+                while !guidance.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &guidance[..end]
+            } else {
+                guidance
+            };
+            out.push(format!(
+                "rosita machine context for profile '{}' (session-only — not written to any file):\n\n{body}",
+                prep.profile_label()
+            ));
+        } else {
             out.push(format!(
                 "rosita: project context refreshed for profile '{}' at {rendered_at} — current. \
                  Run `rosita refresh` if the project changes mid-session.",

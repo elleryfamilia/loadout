@@ -39,6 +39,11 @@ impl Fixture {
         self.repo.path().join(rel).exists()
     }
 
+    /// The working directory rosita is pointed at (`--cwd`).
+    fn repo_path(&self) -> &std::path::Path {
+        self.repo.path()
+    }
+
     /// Turn the fixture into a real git repo (so `.gitignore` management applies).
     fn git_init(&self) {
         let ok = std::process::Command::new("git")
@@ -195,6 +200,32 @@ fn render_in_non_repo_writes_overlay_but_no_gitignore() {
         .success()
         .stdout(predicate::str::contains("non-repo mode"))
         .stdout(predicate::str::contains("name       :"));
+}
+
+#[test]
+fn render_at_home_withholds_the_bleeding_importer() {
+    // When repo_base is $HOME, a managed CLAUDE.local.md there would be inherited
+    // by every repo underneath it (agents walk the tree upward) — the "bleed".
+    // rosita must still write the gitignored overlay, but NOT wire the importer.
+    let fx = Fixture::new(); // not a git repo
+    fx.rust_project();
+    fx.rust_profile();
+
+    fx.cmd()
+        .env("HOME", fx.repo_path()) // make repo_base look like $HOME
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("$HOME"));
+
+    assert!(
+        fx.exists(".rosita/generated/claude.md"),
+        "overlay still written"
+    );
+    assert!(
+        !fx.exists("CLAUDE.local.md"),
+        "the bleeding importer must NOT be written at $HOME"
+    );
 }
 
 #[test]

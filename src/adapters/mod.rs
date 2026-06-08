@@ -288,6 +288,13 @@ pub struct ApplyResult {
     pub notes: Vec<String>,
     /// Context hash of this render.
     pub context_hash: String,
+    /// The composed guidance body (the overlay minus header). Used by `run` to
+    /// inject context at launch when the persistent importer was withheld.
+    pub profile_guidance: String,
+    /// True when a persistent importer/override was *not* written — because no
+    /// profile applies, or because writing it would bleed into child repos
+    /// (off-repo / `$HOME`). `run` then delivers context via the launch prompt.
+    pub wiring_suppressed: bool,
 }
 
 /// Render the overlay and wire it up per the descriptor.
@@ -315,10 +322,38 @@ pub fn apply(
         &rendered.context_hash,
     )?);
 
-    // 2. Wiring.
+    // 2. Wiring. A persistent importer/override is written everywhere it's safe.
+    // The one place it isn't is `$HOME`: agents walk the directory tree upward,
+    // so a managed importer at `$HOME` loads in *every* repo underneath it — the
+    // "bleed". (A standalone off-repo project dir is fine; nothing inherits it.)
+    // The gitignored generated overlay (step 1) is still written; it's reached
+    // *only* through the wiring we're withholding, so withholding it at `$HOME`
+    // prevents the bleed, and `run` delivers context at launch instead (Claude's
+    // `--append-system-prompt`).
+    let bleeds = is_home(app.repo_base());
     let want_override =
         !opts.codex_no_override && (opts.codex_override || app.config.codex.write_override);
-    if let Some(importer) = &d.importer {
+    let suppress_wiring =
+        bleeds && (d.importer.is_some() || (d.override_target.is_some() && want_override));
+
+    if suppress_wiring {
+        let what = d
+            .importer
+            .as_deref()
+            .or(d.override_target.as_deref())
+            .unwrap_or("the overlay");
+        if d.append_prompt_flag.is_some() {
+            notes.push(format!(
+                "at $HOME — not writing {what} (it would load in every repo under here); \
+                 context is injected at launch instead"
+            ));
+        } else {
+            notes.push(format!(
+                "at $HOME — not writing {what} (it would load in every repo under here); \
+                 run inside a repo for persistent context"
+            ));
+        }
+    } else if let Some(importer) = &d.importer {
         // Auto-wire: managed @import block in a local file.
         let path = app.repo_base().join(importer);
         let existed = path.exists();
@@ -431,7 +466,20 @@ pub fn apply(
         warnings,
         notes,
         context_hash: rendered.context_hash,
+        profile_guidance: rendered.profile_guidance,
+        wiring_suppressed: suppress_wiring,
     })
+}
+
+/// Whether `repo_base` is the user's `$HOME` — where a managed importer would be
+/// inherited by every repo underneath it. Canonicalized so a symlinked home
+/// still compares equal. Honors a `$HOME` override (used by tests).
+fn is_home(repo_base: &Path) -> bool {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    canon(repo_base) == canon(&home)
 }
 
 /// Existing rosita-owned files for this agent (used by `clean` to discover what
