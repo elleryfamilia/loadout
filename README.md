@@ -502,6 +502,6 @@ feature, see **[docs/testing.md](docs/testing.md)**.
 
 ## License
 
-Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at
-your option. Unless you explicitly state otherwise, any contribution you submit
-for inclusion shall be dual-licensed as above, without additional terms.
+Licensed under the [MIT License](LICENSE). Unless you explicitly state otherwise,
+any contribution you submit for inclusion shall be licensed as above, without
+additional terms.
