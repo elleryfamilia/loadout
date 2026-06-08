@@ -9,9 +9,14 @@ GitHub Release with installers attached. No artifacts are built by hand.
 On a `vX.Y.Z` tag, `.github/workflows/release.yml` builds and attaches:
 
 - `rosita` for `aarch64-apple-darwin`, `x86_64-apple-darwin`,
-  `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`
-- `rosita-installer.sh` (macOS/Linux) and `rosita-installer.ps1` (Windows)
-- `.tar.xz` / `.zip` archives, SHA-256 checksums, and a `dist-manifest.json`
+  `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
+- `rosita-installer.sh` (macOS/Linux)
+- `.tar.xz` archives, SHA-256 checksums, and a `dist-manifest.json`
+
+Windows (`x86_64-pc-windows-msvc`) is intentionally omitted: rosita is unix-only
+today (parent-process detection, unix file modes, the tailnet provider). To add
+it, cfg-gate those paths for Windows, then add the target + the `powershell`
+installer back to `dist-workspace.toml` and re-run `dist init`.
 
 The build matrix and installers live in [`dist-workspace.toml`](dist-workspace.toml).
 

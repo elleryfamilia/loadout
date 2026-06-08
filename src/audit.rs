@@ -59,10 +59,7 @@ pub fn record(repo_base: &Path, event: &AuditEvent) -> crate::Result<()> {
 pub fn last_event(repo_base: &Path) -> Option<AuditEvent> {
     let path = config::audit_log_path(repo_base);
     let content = std::fs::read_to_string(path).ok()?;
-    let last = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .next_back()?;
+    let last = content.lines().rfind(|l| !l.trim().is_empty())?;
     serde_json::from_str(last).ok()
 }
 

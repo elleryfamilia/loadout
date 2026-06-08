@@ -19,8 +19,8 @@ First tagged release.
   what will change → "you're set" (names `rosita run <agent>`). A top-bar **?**
   button re-opens the tour anytime.
 - Release pipeline via [`dist`](https://opensource.axo.dev/cargo-dist/): tagging
-  `vX.Y.Z` builds prebuilt binaries for macOS (Apple Silicon + Intel), Linux
-  (x86_64 + ARM64), and Windows (x86_64), with shell + PowerShell installers
-  attached to the GitHub Release.
+  `vX.Y.Z` builds prebuilt binaries for macOS (Apple Silicon + Intel) and Linux
+  (x86_64 + ARM64), with a shell installer attached to the GitHub Release.
+  (Windows is omitted for now — rosita is unix-only today.)
 - CI workflow: rustfmt, clippy (`-D warnings`), the test suite on Linux + macOS,
   and an MSRV (1.85) check.

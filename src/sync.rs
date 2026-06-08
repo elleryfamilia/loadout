@@ -262,8 +262,13 @@ pub fn init(dir: &Path, remote: Option<&str>, timeout: Duration) -> Result<()> {
     ensure_gitignore(dir)?;
     if !dir.join(".git").exists() {
         run_ok(dir, &["init", "-q"])?;
-        run_ok(dir, &["branch", "-M", "main"])?;
     }
+    // Normalize the branch to `main` regardless of git's `init.defaultBranch`
+    // (some setups still default to `master`) and whether the repo pre-existed —
+    // we push `main` below, so the local branch must actually be named `main`.
+    // `git branch -M main` renames an unborn branch and is a no-op when already
+    // on `main`, so it's safe to run unconditionally.
+    run_ok(dir, &["branch", "-M", "main"])?;
     // Belt-and-suspenders: never track the private/derived files even if a prior
     // setup added them.
     let _ = git(
@@ -607,11 +612,13 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// A bare repo to act as the "remote".
+    /// A bare repo to act as the "remote". Its default branch is pinned to
+    /// `main` (like GitHub's default, and what `init`/`commit_push` push) so the
+    /// remote's HEAD resolves regardless of the host's `init.defaultBranch`.
     fn bare(parent: &Path) -> PathBuf {
         let r = parent.join("remote.git");
         Command::new("git")
-            .args(["init", "--bare", "-q"])
+            .args(["init", "--bare", "-b", "main", "-q"])
             .arg(&r)
             .status()
             .unwrap();

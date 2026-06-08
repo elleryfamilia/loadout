@@ -173,17 +173,14 @@ side-effect-free until you Apply.
 [GitHub Release](https://github.com/elleryfamilia/rosita/releases):
 
 ```bash
-# macOS / Linux
 curl -LsSf https://github.com/elleryfamilia/rosita/releases/latest/download/rosita-installer.sh | sh
-
-# Windows (PowerShell)
-irm https://github.com/elleryfamilia/rosita/releases/latest/download/rosita-installer.ps1 | iex
 ```
 
-Builds are published for macOS (Apple Silicon + Intel), Linux (x86_64 + ARM64),
-and Windows (x86_64). The installer drops `rosita` on your `PATH` and supports
-`rosita` self-update via the same script. *(These links resolve once the first
-release is tagged — until then, use the from-source path below.)*
+Builds are published for macOS (Apple Silicon + Intel) and Linux (x86_64 +
+ARM64). The installer drops `rosita` on your `PATH` and supports `rosita`
+self-update via the same script. *(The link resolves once the first release is
+tagged — until then, use the from-source path below.)* Windows isn't built yet
+(rosita is unix-only today); use WSL there.
 
 **From source** — requires a stable Rust toolchain (1.85+) and the `git` CLI
 (used for repo detection; no libgit2 build dependency):
