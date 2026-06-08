@@ -348,6 +348,21 @@ body {
 .fragment-id { font-family: var(--mono); font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fragment-tags { display: flex; gap: 6px; flex-wrap: wrap; flex: none; margin-top: 1px; }
 
+/* --- targets tab ----------------------------------------------------------- */
+.targets-lead { max-width: 64rem; margin: 0 0 16px; font-size: 13px; line-height: 1.5; }
+.targets-lead .tag { vertical-align: middle; }
+.target-list { display: flex; flex-direction: column; gap: 8px; }
+.target-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r); background: var(--panel-2); }
+.target-glyph { color: var(--accent); display: inline-flex; margin-top: 1px; }
+.target-glyph .icon { width: 20px; height: 20px; }
+.target-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.target-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.target-id { font-family: var(--mono); font-size: 13.5px; font-weight: 600; }
+.target-desc { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+.target-rule { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--faint); }
+.target-rule .icon { width: 13px; height: 13px; flex: none; }
+.rule-code { font-family: var(--mono); color: var(--muted); }
+
 /* --- modal dialog ---------------------------------------------------------- */
 .modal-root { position: fixed; inset: 0; z-index: 50; display: none; }
 .modal-root:has(.modal) { display: grid; place-items: center; }

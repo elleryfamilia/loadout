@@ -44,6 +44,7 @@ pub mod report;
 pub mod studio;
 pub mod style;
 pub mod sync;
+pub mod target;
 pub mod templates;
 pub mod writer;
 

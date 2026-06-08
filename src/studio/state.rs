@@ -191,6 +191,28 @@ pub struct LibraryView {
     pub profiles: Vec<ProfileView>,
 }
 
+/// One target row for the Targets tab.
+pub struct TargetView {
+    /// The label profiles match against (e.g. `rust`, `machine`).
+    pub id: String,
+    /// Human summary of what kind of project this target is.
+    pub description: Option<String>,
+    /// Plain-language one-liner of the detection rule.
+    pub rule_summary: String,
+    /// Built-in (read-only) vs a user-authored custom target.
+    pub builtin: bool,
+    /// Whether this target matches the *current* (real, un-simulated) context.
+    pub detected: bool,
+    /// Detection runs a script predicate (vs a pure declarative rule).
+    pub is_script: bool,
+}
+
+/// The Targets tab snapshot: built-in targets, the synthetic `machine` scope,
+/// and (later) custom targets.
+pub struct TargetsView {
+    pub targets: Vec<TargetView>,
+}
+
 /// Assemble the staged config (origin-tagged) from a snapshot.
 pub fn staged_config(snap: &Snapshot) -> crate::Result<Config> {
     Config::from_layer_strs(snap.layer_texts.clone())
@@ -529,6 +551,38 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
         palette,
         profiles,
     })
+}
+
+/// Build the Targets tab: the built-in target catalog plus the synthetic
+/// `machine` scope row. The `detected` flag reflects the **real** detected
+/// context (not the simulator), so it honestly answers "does this target match
+/// the repo studio is running in?". Built-ins are read-only; their `detected`
+/// state comes from the authoritative `ctx.stacks` rather than re-running the
+/// descriptor rule.
+pub fn targets_view(snap: &Snapshot) -> TargetsView {
+    let ctx = &snap.base_context;
+    let stacks: std::collections::HashSet<&str> = ctx.stacks.iter().map(String::as_str).collect();
+    let mut targets: Vec<TargetView> = crate::target::builtin_targets()
+        .into_iter()
+        .map(|t| TargetView {
+            detected: stacks.contains(t.id.as_str()),
+            is_script: t.rule.has_script(),
+            rule_summary: crate::target::rule_summary(&t.rule),
+            builtin: true,
+            id: t.id,
+            description: t.description,
+        })
+        .collect();
+    // `machine` is a scope, not a file-detected stack: it applies off-repo.
+    targets.push(TargetView {
+        id: "machine".to_string(),
+        description: Some("not inside a git repository (the bare-machine scope)".to_string()),
+        rule_summary: "the working directory is not in a git repository".to_string(),
+        builtin: true,
+        detected: ctx.git.is_none(),
+        is_script: false,
+    });
+    TargetsView { targets }
 }
 
 /// First-launch onboarding readout for a fresh config (no profiles **and** no

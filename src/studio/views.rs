@@ -20,7 +20,7 @@ use crate::profile::ProfileConfig;
 use crate::studio::edit::FileDiff;
 use crate::studio::state::{
     AtomDot, AtomState, FragmentView, LibraryView, Onboarding, PackView, PreviewCap,
-    PreviewOutcome, ProfileView,
+    PreviewOutcome, ProfileView, TargetView, TargetsView,
 };
 
 /// Language/platform targets a profile can declare.
@@ -39,6 +39,7 @@ const SCRIPT_LANGS: &[(&str, &str)] = &[("bash", "Bash"), ("python", "Python"), 
 fn icon(name: &str) -> Markup {
     let body: &str = match name {
         "plus" => r#"<path d="M12 5v14M5 12h14"/>"#,
+        "target" => r#"<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>"#,
         "sun" => {
             r#"<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>"#
         }
@@ -252,6 +253,7 @@ fn tab_bar(active: &str) -> Markup {
         nav class="tabs" {
             button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Profiles" }
             button class=(cls("fragments")) data-tab="fragments" hx-get="/tab/fragments" hx-target="#main" { (icon("box")) "Fragments" }
+            button class=(cls("targets")) data-tab="targets" hx-get="/tab/targets" hx-target="#main" { (icon("target")) "Targets" }
         }
     }
 }
@@ -631,6 +633,49 @@ pub fn fragments_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
 
 pub fn fragments_tab_fragment(lib: &LibraryView, flash: Option<&str>) -> String {
     fragments_tab(lib, flash).into_string()
+}
+
+/// The Targets tab: the list of targets rosita can detect, each with the rule
+/// that makes it work. Built-ins are read-only; the rule text is the answer to
+/// "how does rosita decide a repo is this target?".
+pub fn targets_tab(view: &TargetsView) -> Markup {
+    html! {
+        div class="tab-targets" {
+            div class="dash-head" {
+                h1 { "Targets" }
+            }
+            p class="muted targets-lead" {
+                "A " strong { "target" } " is a label rosita attaches to a project by detecting it (a Rust repo, a Next.js app, …). A profile applies to a repo when one of its targets matches. These are the built-in targets and how each is detected; "
+                span class="tag rec-tag" { (icon("check")) "matches here" }
+                " marks the ones that match the repo studio is running in."
+            }
+            div class="target-list" {
+                @for t in &view.targets { (target_row(t)) }
+            }
+        }
+    }
+}
+
+pub fn targets_tab_fragment(view: &TargetsView) -> String {
+    targets_tab(view).into_string()
+}
+
+/// One row in the Targets list: id, what it is, and the detection rule.
+fn target_row(t: &TargetView) -> Markup {
+    html! {
+        div class="target-row" {
+            span class="target-glyph" { (icon(if t.is_script { "terminal" } else { "target" })) }
+            div class="target-main" {
+                span class="target-top" {
+                    span class="target-id" { (t.id) }
+                    @if t.builtin { span class="tag" { "built-in" } }
+                    @if t.detected { span class="tag rec-tag" { (icon("check")) "matches here" } }
+                }
+                @if let Some(d) = &t.description { span class="target-desc" { (d) } }
+                span class="target-rule" { (icon("eye")) "Detected when " code class="rule-code" { (t.rule_summary) } }
+            }
+        }
+    }
 }
 
 /// Order known categories sensibly; unknown categories fall after them

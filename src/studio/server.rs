@@ -128,6 +128,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/") => handle_shell(state),
         ("GET", "/tab/profiles") => handle_tab(state, "profiles"),
         ("GET", "/tab/fragments") => handle_tab(state, "fragments"),
+        ("GET", "/tab/targets") => handle_tab(state, "targets"),
         ("GET", "/staged") => handle_staged(state),
         ("GET", "/close") => Resp::html(String::new()),
         ("GET", "/fs-status") => handle_fs_status(state),
@@ -230,6 +231,10 @@ fn handle_shell(state: &Arc<Mutex<StudioState>>) -> Resp {
 fn handle_tab(state: &Arc<Mutex<StudioState>>, tab: &str) -> Resp {
     if tab == "profiles" {
         return profiles_tab_resp(state, None, None, false);
+    }
+    if tab == "targets" {
+        let snap = state.lock().unwrap().snapshot();
+        return Resp::html(views::targets_tab_fragment(&state::targets_view(&snap)));
     }
     let snap = state.lock().unwrap().snapshot();
     match state::library_view(&snap) {
@@ -1460,6 +1465,26 @@ mod tests {
         // profile (EditProfile) — exactly one new op, no re-duplication.
         assert_eq!(after_first, 15);
         assert_eq!(after_second, 16);
+    }
+
+    #[test]
+    fn targets_tab_lists_builtins_with_rules() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/tab/targets", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Targets"), "tab heading");
+        // Built-in targets and their detection rules are shown.
+        assert!(body.contains("nextjs"), "lists the nextjs target");
+        assert!(
+            body.contains("Cargo.toml exists"),
+            "shows rust's detection rule"
+        );
+        // The synthetic machine scope row is present.
+        assert!(body.contains("machine"), "lists the machine scope");
+        // In a Rust repo, the rust target matches.
+        assert!(body.contains("matches here"), "flags a detected target");
     }
 
     #[test]
