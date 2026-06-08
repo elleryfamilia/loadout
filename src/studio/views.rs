@@ -62,6 +62,9 @@ fn icon(name: &str) -> Markup {
         "eye" => {
             r#"<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>"#
         }
+        "help" => {
+            r#"<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>"#
+        }
         "refresh" => {
             r#"<path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>"#
         }
@@ -231,6 +234,7 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str) -> String {
                     (tab_bar(active_tab))
                     div class="topbar-right" {
                         div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
+                        button type="button" class="icon-btn" title="Show me around" hx-get="/onboarding/welcome" hx-target="#main" { (icon("help")) }
                         (theme_toggle())
                     }
                 }
@@ -246,8 +250,8 @@ fn tab_bar(active: &str) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
         nav class="tabs" {
-            button class=(cls("fragments")) data-tab="fragments" hx-get="/tab/fragments" hx-target="#main" { (icon("box")) "Fragments" }
             button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Profiles" }
+            button class=(cls("fragments")) data-tab="fragments" hx-get="/tab/fragments" hx-target="#main" { (icon("box")) "Fragments" }
         }
     }
 }
@@ -389,8 +393,8 @@ fn studio_welcome(o: &Onboarding, packs: &[PackView]) -> Markup {
                     @if let Some(b) = &o.branch { span class="target-chip muted" { "branch " (b) } }
                 }
             }
-            p class="welcome-lead" { "A " strong { "profile" } " decides what guidance your agent gets here — you have none yet. Apply a " strong { "starter pack" } " to get one in a click." }
-            p class="muted" { "Each pack copies a curated set of fragments into your library and creates a ready-made profile — all staged; nothing is saved until you Apply." }
+            p class="welcome-lead" { "A " strong { "profile" } " decides what guidance your agent gets here. Apply a " strong { "starter pack" } " to get one in a click." }
+            p class="muted" { "Each pack copies a curated set of fragments into your library and creates a ready-made profile — all staged; nothing is saved until you Apply. You can customize everything afterward." }
             (legend())
             div class="pack-grid" { @for p in packs { (pack_card(p)) } }
             div class="welcome-actions" {
@@ -398,6 +402,12 @@ fn studio_welcome(o: &Onboarding, packs: &[PackView]) -> Markup {
             }
         }
     }
+}
+
+/// The first-launch welcome as a standalone `#main` fragment — used by the "?"
+/// tour button so it's reachable any time, not just on a fresh config.
+pub fn welcome_fragment(o: &Onboarding, packs: &[PackView]) -> String {
+    studio_welcome(o, packs).into_string()
 }
 
 /// One row in the profile rail: name + status + targets + fragment dots.
@@ -871,6 +881,97 @@ pub fn pack_preview(pack: &crate::pack::Pack, outcome: &PreviewOutcome) -> Strin
                         button type="button" class="btn btn-primary" hx-post=(format!("/packs/{e}/apply")) hx-target="#main" { (icon("plus")) "Apply" }
                     }
                 }
+            }
+        }
+    }
+    .into_string()
+}
+
+// --- guided onboarding beats -------------------------------------------------
+
+/// Pluralize a count: `n` + a singular/plural noun ("1 fragment" / "3 fragments").
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// Beat 2 of the guided first-run: after a starter pack is staged, a friendly
+/// "review what will change" summary (counts, not raw diffs) that stresses
+/// nothing is written yet — with an escape hatch to the exact unified diff.
+pub fn onboarding_review(summary: &crate::studio::state::StagedSummary) -> String {
+    html! {
+        div class="onboard onboard-review" {
+            div class="onboard-head" {
+                span class="onboard-badge" { (icon("eye")) }
+                h1 { "Review what will change" }
+            }
+            p class="muted" { "Nothing is written to disk yet. Applying will add:" }
+            ul class="onboard-summary" {
+                @if summary.fragments_added > 0 {
+                    li {
+                        span class="fragment-glyph" { (icon("file")) }
+                        (plural(summary.fragments_added, "fragment", "fragments"))
+                    }
+                }
+                @for p in &summary.profiles {
+                    li {
+                        span class="fragment-glyph" { (icon("layers")) }
+                        "profile " strong { (p.name) }
+                        @if !p.targets.is_empty() {
+                            span class="welcome-chips" {
+                                @for t in &p.targets { span class="target-chip" { (t) } }
+                            }
+                        }
+                    }
+                }
+            }
+            div class="onboard-actions" {
+                button class="btn btn-primary" hx-post="/apply" hx-target="#main" { (icon("check")) "Apply" }
+                button class="btn btn-ghost" hx-get="/diff" hx-target="#main" { (icon("eye")) "See exact diff" }
+                button class="btn btn-ghost" hx-post="/discard" hx-target="#main"
+                    hx-confirm="Discard staged changes and start over?" { (icon("x")) "Start over" }
+            }
+        }
+    }
+    .into_string()
+}
+
+/// Beat 3 of the guided first-run: after Apply, confirm the setup is live and —
+/// the piece that was missing — name the one command that actually uses it
+/// (`rosita run <agent>`) plus how to reopen the studio.
+pub fn onboarding_done(summary: &crate::studio::state::StagedSummary, agent: &str) -> String {
+    let targets: Vec<&String> = summary
+        .profiles
+        .iter()
+        .flat_map(|p| p.targets.iter())
+        .collect();
+    html! {
+        div class="onboard onboard-done" {
+            div class="onboard-head" {
+                span class="onboard-badge ok" { (icon("check")) }
+                h1 { "You're set" }
+            }
+            p class="welcome-lead" {
+                "Your guidance is live. When you launch an AI agent in a matching repo, "
+                "rosita injects it automatically — no per-project setup."
+            }
+            @if !targets.is_empty() {
+                div class="welcome-detect" {
+                    span class="muted small" { "active for" }
+                    span class="welcome-chips" {
+                        @for t in &targets { span class="target-chip" { (t) } }
+                    }
+                }
+            }
+            div class="cmd-block" {
+                span class="muted small" { "Use it in any agent session:" }
+                code { "rosita run " (agent) }
+            }
+            div class="cmd-block" {
+                span class="muted small" { "Reopen this studio anytime:" }
+                code { "rosita studio" }
+            }
+            div class="onboard-actions" {
+                button class="btn btn-primary" hx-get="/tab/profiles" hx-target="#main" { (icon("arrow-right")) "Explore your setup" }
             }
         }
     }

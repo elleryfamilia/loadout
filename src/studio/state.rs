@@ -66,6 +66,11 @@ pub struct StudioState {
     pub token: String,
     /// Bound port (for Host/Origin checks).
     pub port: u16,
+    /// Armed whenever the first-launch welcome is shown (a fresh config, or the
+    /// "?" tour button). While armed, applying a starter pack routes through the
+    /// guided "review → you're set" beats instead of dropping straight into the
+    /// Profiles tab; the first Apply disarms it.
+    pub onboarding_active: bool,
 }
 
 impl StudioState {
@@ -681,6 +686,44 @@ pub fn pack_views(snap: &Snapshot) -> crate::Result<Vec<PackView>> {
     // Recommended packs first; catalog order is otherwise preserved (stable sort).
     views.sort_by_key(|v| !v.recommended);
     Ok(views)
+}
+
+/// One profile a staged op will create, summarized for the onboarding review.
+pub struct ProfileBrief {
+    pub name: String,
+    pub targets: Vec<String>,
+}
+
+/// A friendly, human-readable rollup of what the current staged ops will add —
+/// fed to the guided onboarding "review what will change" beat. Counts only
+/// additive fragment ops (so "will add N fragments" reads true) and lists the
+/// profiles being created/replaced with their targets.
+pub struct StagedSummary {
+    pub fragments_added: usize,
+    pub profiles: Vec<ProfileBrief>,
+}
+
+pub fn staged_summary(session: &Session) -> StagedSummary {
+    let mut fragments_added = 0usize;
+    let mut profiles = Vec::new();
+    for op in session.ops() {
+        match op {
+            StagedOp::CreateFragment { .. } | StagedOp::DuplicatePaletteItem { .. } => {
+                fragments_added += 1;
+            }
+            StagedOp::CreateProfile { profile, .. } | StagedOp::EditProfile { profile, .. } => {
+                profiles.push(ProfileBrief {
+                    name: profile.name.clone(),
+                    targets: profile.targets.clone(),
+                });
+            }
+            _ => {}
+        }
+    }
+    StagedSummary {
+        fragments_added,
+        profiles,
+    }
 }
 
 /// Apply a starter pack into the staged session: duplicate each of its palette

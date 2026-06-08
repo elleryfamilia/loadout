@@ -142,6 +142,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/fragments") => handle_fragment_save(state, req),
         ("POST", "/fragments/try") => handle_fragment_try(req),
         ("GET", "/packs") => handle_packs(state),
+        ("GET", "/onboarding/welcome") => handle_onboarding_welcome(state),
         ("POST", "/onboarding/quickstart") => handle_quickstart(state),
         ("GET", "/profiles/new") => handle_profile_new(state),
         ("POST", "/profiles") => handle_profile_save(state, req),
@@ -212,22 +213,20 @@ fn field(body: &str, key: &str) -> String {
 
 // --- handlers (snapshot under the lock, render outside it) -------------------
 
+/// `GET /` — the full page. Lands on the Profiles tab (the unit of value: "what
+/// guidance does my agent get here?"); a fresh config shows the first-launch
+/// welcome there. Fragments live one tab over as the parts drawer.
 fn handle_shell(state: &Arc<Mutex<StudioState>>) -> Resp {
-    let (snap, staged) = snap_and_staged(state);
-    match state::library_view(&snap) {
-        Ok(lib) => Resp::html(views::shell(
-            views::fragments_tab(&lib, None),
-            staged,
-            "fragments",
-        )),
-        Err(e) => Resp::html(views::error_page(&e.to_string())),
+    let staged = state.lock().unwrap().session.ops().len();
+    match profiles_tab_main(state, None, None) {
+        Ok((main, armed)) => {
+            if armed {
+                state.lock().unwrap().onboarding_active = true;
+            }
+            Resp::html(views::shell(main, staged, "profiles"))
+        }
+        Err(e) => Resp::html(views::error_page(&e)),
     }
-}
-
-/// Snapshot + staged-op count, taken together under the session lock.
-fn snap_and_staged(state: &Arc<Mutex<StudioState>>) -> (state::Snapshot, usize) {
-    let s = state.lock().unwrap();
-    (s.snapshot(), s.session.ops().len())
 }
 
 fn handle_tab(state: &Arc<Mutex<StudioState>>, tab: &str) -> Resp {
@@ -246,17 +245,16 @@ fn handle_tab(state: &Arc<Mutex<StudioState>>, tab: &str) -> Resp {
 /// "pick a profile" prompt (no profile is auto-selected). `flash` shows a
 /// banner; `with_staged` appends the staged-indicator refresh loader (used after
 /// a mutation re-renders `#main`).
-fn profiles_tab_resp(
+/// Build the Profiles tab's `#main` markup, plus whether the first-launch welcome
+/// was shown (`armed` — which arms the guided onboarding flow). Shared by the
+/// full-page shell (`GET /`) and the htmx tab swap so both land identically.
+fn profiles_tab_main(
     state: &Arc<Mutex<StudioState>>,
     selected: Option<&str>,
     flash: Option<&str>,
-    with_staged: bool,
-) -> Resp {
+) -> Result<(maud::Markup, bool), String> {
     let snap = state.lock().unwrap().snapshot();
-    let lib = match state::library_view(&snap) {
-        Ok(l) => l,
-        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
-    };
+    let lib = state::library_view(&snap).map_err(|e| e.to_string())?;
     // No auto-selection: show a detail pane only when a profile was explicitly
     // requested (and still exists). On a bare tab open — or after delete/apply —
     // the rail renders with a "pick a profile" prompt instead of defaulting to
@@ -279,8 +277,9 @@ fn profiles_tab_resp(
     // shows the first-launch welcome instead of the bare "no profiles" prompt.
     let onboarding = (detail.is_none() && lib.profiles.is_empty() && lib.yours.is_empty())
         .then(|| state::onboarding(&snap.base_context));
+    let armed = onboarding.is_some();
     // The starter-pack gallery is only rendered inside the first-launch welcome.
-    let packs = if onboarding.is_some() {
+    let packs = if armed {
         state::pack_views(&snap).unwrap_or_default()
     } else {
         Vec::new()
@@ -300,11 +299,28 @@ fn profiles_tab_resp(
         ),
         None => views::profiles_tab(&lib, None, flash, onboarding.as_ref(), &packs),
     };
-    let mut html = markup.into_string();
-    if with_staged {
-        html.push_str(&views::staged_indicator_loader());
+    Ok((markup, armed))
+}
+
+fn profiles_tab_resp(
+    state: &Arc<Mutex<StudioState>>,
+    selected: Option<&str>,
+    flash: Option<&str>,
+    with_staged: bool,
+) -> Resp {
+    match profiles_tab_main(state, selected, flash) {
+        Ok((markup, armed)) => {
+            if armed {
+                state.lock().unwrap().onboarding_active = true;
+            }
+            let mut html = markup.into_string();
+            if with_staged {
+                html.push_str(&views::staged_indicator_loader());
+            }
+            Resp::html(html)
+        }
+        Err(e) => Resp::html(views::error_fragment(&e)),
     }
-    Resp::html(html)
 }
 
 /// Render just the selected profile's detail (swapped into `#profile-main`),
@@ -676,15 +692,41 @@ fn handle_quickstart(state: &Arc<Mutex<StudioState>>) -> Resp {
     }
 }
 
-/// Stage `pack` into the session, then render the Profiles tab with its profile
-/// selected, a flash, and a staged-indicator refresh. Shared by the gallery's
-/// per-pack Apply and the recommended-pack quick start.
+/// `GET /onboarding/welcome` — (re)show the first-launch welcome on demand (the
+/// "?" tour button). Arms the guided flow so applying a pack from here runs the
+/// review → you're-set beats, just like a fresh config.
+fn handle_onboarding_welcome(state: &Arc<Mutex<StudioState>>) -> Resp {
+    state.lock().unwrap().onboarding_active = true;
+    let snap = state.lock().unwrap().snapshot();
+    let onboarding = state::onboarding(&snap.base_context);
+    let packs = state::pack_views(&snap).unwrap_or_default();
+    Resp::html(views::welcome_fragment(&onboarding, &packs))
+}
+
+/// Stage `pack` into the session, then either run the guided "review" beat (when
+/// the onboarding flow is armed) or drop into the Profiles tab with the new
+/// profile selected. Shared by the gallery's per-pack Apply and the
+/// recommended-pack quick start.
 fn apply_pack_and_show(state: &Arc<Mutex<StudioState>>, pack: &Pack) -> Resp {
-    {
+    let armed = {
         let mut s = state.lock().unwrap();
         if let Err(e) = state::apply_pack(&mut s.session, pack) {
             return Resp::html(views::error_fragment(&e.to_string()));
         }
+        s.onboarding_active
+    };
+    // Guided first-run: show the friendly "review what will change" beat instead
+    // of dumping into the Profiles tab. Refresh the staged count and close the
+    // preview modal if the pack was applied from it.
+    if armed {
+        let summary = {
+            let s = state.lock().unwrap();
+            state::staged_summary(&s.session)
+        };
+        let mut html = views::onboarding_review(&summary);
+        html.push_str(&views::staged_indicator_loader());
+        html.push_str(&views::modal_close_loader());
+        return Resp::html(html);
     }
     let flash = format!("staged the “{}” pack — review and Apply", pack.name);
     let mut resp = profiles_tab_resp(state, Some(pack.profile_name), Some(&flash), true);
@@ -951,11 +993,32 @@ fn handle_discard(state: &Arc<Mutex<StudioState>>) -> Resp {
 }
 
 fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
+    // Capture the guided-onboarding summary *before* applying (apply clears the
+    // staged ops), so the "you're set" beat can name what just landed.
+    let onboarding = {
+        let s = state.lock().unwrap();
+        s.onboarding_active
+            .then(|| state::staged_summary(&s.session))
+    };
     // Apply mutates + writes atomically; it's the one serialized operation, so
     // holding the lock across its (brief, small-file) I/O is correct here.
     let result = state.lock().unwrap().session.apply();
     match result {
         Ok(written) => {
+            // Guided first-run: a profile actually landed → show the "you're set"
+            // finish card (names `rosita run <agent>`), then disarm the flow. If
+            // nothing composed a profile, fall through to the normal flash.
+            if let Some(summary) = onboarding {
+                state.lock().unwrap().onboarding_active = false;
+                if !summary.profiles.is_empty() {
+                    let agent = config::Config::load(&state.lock().unwrap().repo_base)
+                        .map(|c| c.default_agent)
+                        .unwrap_or_else(|_| "claude".to_string());
+                    let mut html = views::onboarding_done(&summary, &agent);
+                    html.push_str(&views::staged_indicator_loader());
+                    return Resp::html(html);
+                }
+            }
             let mut msg = format!("applied {} file change(s)", written.len());
             // Best-effort auto-push of the (now-changed) global config so edits
             // propagate to your other machines. Never blocks the apply.
@@ -1075,6 +1138,7 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
         repo_base,
         token: token.clone(),
         port,
+        onboarding_active: false,
     }));
 
     let url = format!("http://127.0.0.1:{port}{BOOTSTRAP_PATH}?token={token}");
@@ -1204,6 +1268,7 @@ mod tests {
             repo_base: repo.to_path_buf(),
             token: "testtoken".into(),
             port: 7777,
+            onboarding_active: false,
         }))
     }
 

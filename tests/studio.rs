@@ -266,6 +266,105 @@ fn studio_packs_gallery_applies_a_pack_over_socket() {
     );
 }
 
+#[test]
+fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
+    let (mut child, dir, port, token) = spawn_studio();
+
+    let _ = http(
+        port,
+        &format!(
+            "GET /__studio/bootstrap?token={token} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+
+    // 1. A fresh config lands on the Profiles tab (Profiles before Fragments in
+    //    the nav) and shows the first-launch welcome — which arms the flow.
+    let shell = http(
+        port,
+        &format!(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+
+    // 2. Applying a starter pack runs the guided "review what will change" beat
+    //    (not the bare Profiles tab), summarizing what will be added.
+    let review = http(
+        port,
+        &format!(
+            "POST /packs/everyday/apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ),
+    );
+
+    // 3. Apply commits to disk and lands on the "you're set" finish card, which
+    //    names the command that actually uses the guidance.
+    let done = http(
+        port,
+        &format!(
+            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ),
+    );
+
+    // 4. The "?" tour button re-opens the welcome on demand, even post-setup.
+    let reopened = http(
+        port,
+        &format!(
+            "GET /onboarding/welcome HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+
+    let written =
+        std::fs::read_to_string(dir.path().join("empty-global/config.toml")).unwrap_or_default();
+
+    child.kill().ok();
+    child.wait().ok();
+
+    // Landed on Profiles with the welcome; nav lists Profiles before Fragments.
+    assert!(
+        shell.starts_with("HTTP/1.1 200"),
+        "shell → 200; got:\n{}",
+        head(&shell)
+    );
+    assert!(
+        shell.contains("Welcome to Rosita studio"),
+        "fresh config lands on the Profiles welcome; got head:\n{}",
+        head(&shell)
+    );
+    let (pi, fi) = (
+        shell.find("data-tab=\"profiles\"").unwrap_or(usize::MAX),
+        shell.find("data-tab=\"fragments\"").unwrap_or(0),
+    );
+    assert!(pi < fi, "Profiles tab comes before Fragments in the nav");
+
+    // Beat 2: the friendly review, not the normal "staged the … pack" flash.
+    assert!(
+        review.contains("Review what will change"),
+        "pack apply runs the guided review beat; got:\n{review}"
+    );
+    assert!(
+        review.contains("profile") && review.contains("everyday"),
+        "review summarizes the staged profile; got:\n{review}"
+    );
+
+    // Beat 3: the finish card with the run command.
+    assert!(
+        done.contains("You're set") && done.contains("rosita run"),
+        "apply lands on the you're-set finish card; got:\n{done}"
+    );
+
+    // The apply actually wrote the pack to disk.
+    assert!(
+        written.contains("name = \"everyday\""),
+        "apply wrote the everyday profile; got:\n{written}"
+    );
+
+    // The tour button brings the welcome back.
+    assert!(
+        reopened.contains("Welcome to Rosita studio"),
+        "the ? button re-opens the welcome; got head:\n{}",
+        head(&reopened)
+    );
+}
+
 fn head(resp: &str) -> String {
     resp.lines().take(3).collect::<Vec<_>>().join("\n")
 }
