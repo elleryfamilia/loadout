@@ -81,11 +81,26 @@ pub trait ProfileChooser {
 pub enum Choice {
     /// Use this profile (by name) and remember the choice.
     Profile(String),
-    /// Apply no profile here and remember the opt-out.
-    None,
-    /// Don't decide now (e.g. non-interactive): no profile, nothing persisted.
+    /// Don't decide now (e.g. non-interactive can't prompt): no profile applies,
+    /// nothing persisted. The caller renders the empty overlay + warns.
     Skip,
+    /// The user cancelled the interactive prompt — abort the command (don't
+    /// apply a profile, don't launch). Surfaced as [`Aborted`].
+    Abort,
 }
+
+/// Marker error for a user-cancelled interactive prompt (the profile chooser).
+/// `rosita run` catches it and exits cleanly (`Ok(())`) without launching.
+#[derive(Debug)]
+pub struct Aborted;
+
+impl std::fmt::Display for Aborted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "cancelled by user")
+    }
+}
+
+impl std::error::Error for Aborted {}
 
 /// What [`prepare_with`] does with fragment ids a profile references but that
 /// aren't in the library (they would otherwise be silently dropped). Most
@@ -224,13 +239,10 @@ fn resolve_selection(
             }
             Ok(Selection::Use(chosen))
         }
-        Choice::None => {
-            if !rt.dry_run {
-                binding::write(context, &Binding::None).context("remembering profile opt-out")?;
-            }
-            Ok(Selection::None)
-        }
+        // Non-interactive can't pick → no profile applies (nothing persisted).
         Choice::Skip => Ok(Selection::None),
+        // Interactive cancel → abort the command cleanly (no profile, no launch).
+        Choice::Abort => Err(Aborted.into()),
     }
 }
 

@@ -23,7 +23,9 @@ use anyhow::anyhow;
 
 use std::time::Duration;
 
-use super::{now_rfc3339, prepare_with_live, Choice, MissingPolicy, ProfileChooser, Runtime};
+use super::{
+    now_rfc3339, prepare_with_live, Aborted, Choice, MissingPolicy, ProfileChooser, Runtime,
+};
 use crate::adapters::{self, AgentDescriptor, ApplyOptions, ApplyResult};
 use crate::cli::{RunArgs, StudioArgs};
 use crate::context::Context;
@@ -55,31 +57,21 @@ impl ProfileChooser for StdinChooser {
             ctx.stacks.join("/")
         };
         println!(
-            "rosita › this {langs} project matches {} profiles:",
+            "rosita › this {langs} project matches {} profiles — pick one:",
             candidates.len()
         );
-        println!("  ↑/↓ to move · Enter to select · or press a number");
+        println!("  ↑/↓ to move · Enter to select · or press a number · Esc/Ctrl-C to cancel");
 
-        // The navigable list: each candidate, then a final "none" row.
-        let none_idx = candidates.len();
-        let mut items: Vec<String> = candidates.iter().map(|p| p.name.clone()).collect();
-        items.push("none (don't apply rosita here)".to_string());
-
+        let items: Vec<String> = candidates.iter().map(|p| p.name.clone()).collect();
         match crate::tui::select(&items)? {
-            Some(i) if i == none_idx => {
-                println!("rosita › remembered: no rosita profile here.");
-                Ok(Choice::None)
-            }
             Some(i) => {
                 let name = candidates[i].name.clone();
                 println!("rosita › bound \"{name}\" → remembered for this project; launching…");
                 Ok(Choice::Profile(name))
             }
-            // Cancelled (Ctrl-C / q / Esc / EOF) — don't decide, don't remember.
-            None => {
-                println!("rosita › no choice made — applying none for now.");
-                Ok(Choice::Skip)
-            }
+            // Cancelled (Esc / Ctrl-C / q / EOF): the user invoked rosita but
+            // didn't pick — abort the run rather than launch with no profile.
+            None => Ok(Choice::Abort),
         }
     }
 }
@@ -168,7 +160,19 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     let sync_status = sync_before_render(rt);
     print_sync_step(&p, &sync_status);
 
-    let prep = prepare_with_live(rt, &StdinChooser, MissingPolicy::Defer, true)?;
+    let prep = match prepare_with_live(rt, &StdinChooser, MissingPolicy::Defer, true) {
+        Ok(prep) => prep,
+        // The user cancelled the profile chooser — exit cleanly, launch nothing.
+        Err(e) if e.downcast_ref::<Aborted>().is_some() => {
+            println!(
+                "  {} {}",
+                p.yellow("✗"),
+                p.dim("cancelled — no profile picked, nothing launched")
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
 
     // A profile that references a fragment id not in the library would silently
     // drop it from the overlay. Interrupt here — before any render/launch work —
