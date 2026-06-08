@@ -1433,8 +1433,8 @@ mod tests {
             ),
         );
         assert_eq!(r.status, 200);
-        // The 7 everyday caps are duplicated and the "everyday" profile is created.
-        assert_eq!(st.lock().unwrap().session.ops().len(), 8);
+        // The 14 everyday caps are duplicated and the "everyday" profile is created.
+        assert_eq!(st.lock().unwrap().session.ops().len(), 15);
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("staged the"), "pack flash missing");
         assert!(body.contains("Terse communication"));
@@ -1462,8 +1462,8 @@ mod tests {
         let after_second = st.lock().unwrap().session.ops().len();
         // The second apply owns every cap already, so it re-stages only the
         // profile (EditProfile) — exactly one new op, no re-duplication.
-        assert_eq!(after_first, 8);
-        assert_eq!(after_second, 9);
+        assert_eq!(after_first, 15);
+        assert_eq!(after_second, 16);
     }
 
     #[test]

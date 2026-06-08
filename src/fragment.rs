@@ -174,6 +174,21 @@ pub fn palette() -> Vec<Fragment> {
         }
     }
 
+    // Build a dynamic (script-backed) palette fragment: an owned bash script
+    // whose redacted stdout is embedded at render time. Guidance is empty so it
+    // falls back to the raw output and studio treats it as a "pure script"
+    // (opened for view/edit, with a "runs at render" placeholder in preview).
+    // Every script below is strictly read-only — it probes, never mutates, and
+    // degrades to nothing (exit 0, empty output) when a tool or daemon is absent.
+    fn script_frag(id: &str, description: &str, cache: &str, command: &str) -> Fragment {
+        Fragment {
+            command: Some(command.trim_start_matches('\n').to_string()),
+            script_lang: Some("bash".to_string()),
+            cache: Some(cache.to_string()),
+            ..frag(id, description, "Local Environment", "")
+        }
+    }
+
     vec![
         // --- baseline awareness --------------------------------------------
         frag(
@@ -314,6 +329,217 @@ pub fn palette() -> Vec<Fragment> {
             "Never print, log, or commit secrets, credentials, tokens, or `.env` \
              files. Keep sensitive values out of code and out of command output.",
         ),
+        // --- local environment (live probes) -------------------------------
+        // A static framing fragment plus owned bash scripts that probe this
+        // machine at render time. The framing tells the agent how to treat the
+        // sections that follow; the scripts embed their redacted stdout.
+        frag(
+            "environment",
+            "Environment ground truth",
+            "Local Environment",
+            "Environment is ground truth, not assumption. The sections below are \
+             probed live from this machine at render time — treat them as \
+             authoritative for identity, network posture, running containers, \
+             secret stores, and installed tooling. Before reasoning about \
+             deployment, networking, or host targets, consult them. A missing \
+             section means the probe found nothing (tool absent, daemon down, or \
+             logged out), so ask rather than guess.",
+        ),
+        script_frag(
+            "host",
+            "Machine detection",
+            "5m",
+            r#"
+detect_os() {
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    Darwin) echo "macOS" ;;
+    Linux)  echo "Linux" ;;
+    *)      uname -s 2>/dev/null || echo unknown ;;
+  esac
+}
+distro_info() {
+  if [ -r /etc/os-release ]; then
+    . /etc/os-release
+    printf '%s %s' "${NAME:-Linux}" "${VERSION_ID:-}"
+  elif command -v sw_vers >/dev/null 2>&1; then
+    printf 'macOS %s (build %s)' "$(sw_vers -productVersion 2>/dev/null)" "$(sw_vers -buildVersion 2>/dev/null)"
+  else
+    echo unknown
+  fi
+}
+printf 'hostname:  %s\n' "$(hostname 2>/dev/null || echo unknown)"
+printf 'user:      %s\n' "${USER:-$(id -un 2>/dev/null || echo unknown)}"
+printf 'os:        %s\n' "$(detect_os)"
+printf 'distro:    %s\n' "$(distro_info)"
+printf 'arch:      %s\n' "$(uname -m 2>/dev/null || echo unknown)"
+printf 'kernel:    %s\n' "$(uname -r 2>/dev/null || echo unknown)"
+printf 'shell:     %s\n' "${SHELL:-unknown}"
+if command -v uptime >/dev/null 2>&1; then
+  up=$(uptime | sed -E 's/^[^,]*up //; s/,[[:space:]]+[0-9]+ users?.*$//; s/,[[:space:]]+load[[:space:]]+average.*$//')
+  [ -n "$up" ] && printf 'uptime:    %s\n' "$up"
+fi
+"#,
+        ),
+        script_frag(
+            "toolchain",
+            "Toolchain detection",
+            "5m",
+            r#"
+for tool in git node pnpm npm bun deno python3 uv ruby go cargo rustc rg fd gh docker; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    v=$("$tool" --version 2>&1 | head -n1)
+    printf '%-10s %s\n' "$tool" "$v"
+  fi
+done
+"#,
+        ),
+        script_frag(
+            "containers",
+            "Container runtime",
+            "5m",
+            r#"
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null
+fi
+if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
+  podman ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null
+fi
+"#,
+        ),
+        script_frag(
+            "ai-tools",
+            "AI tooling",
+            "5m",
+            r#"
+for tool in claude codex gemini opencode cursor-agent aider droid amp q goose; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    v=$("$tool" --version 2>/dev/null | head -n1)
+    printf '%-15s %s\n' "$tool" "$v"
+  fi
+done
+if command -v gh >/dev/null 2>&1 && gh extension list 2>/dev/null | grep -qi copilot; then
+  printf '%-15s %s\n' "gh copilot" "(gh extension)"
+fi
+"#,
+        ),
+        script_frag(
+            "tailnet",
+            "Tailnet discovery",
+            "5m",
+            r#"
+ts=""
+if command -v tailscale >/dev/null 2>&1; then
+  ts=$(command -v tailscale)
+else
+  for p in \
+    /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+    /opt/homebrew/bin/tailscale \
+    /usr/local/bin/tailscale; do
+    [ -x "$p" ] && { ts="$p"; break; }
+  done
+fi
+[ -n "$ts" ] || exit 0
+"$ts" status 2>/dev/null || true
+"#,
+        ),
+        script_frag(
+            "vpn-posture",
+            "VPN & egress posture",
+            "5m",
+            r#"
+found=0
+# Tailscale: connection state + exit node in use (not just offered).
+ts=""
+if command -v tailscale >/dev/null 2>&1; then
+  ts=$(command -v tailscale)
+else
+  for p in /Applications/Tailscale.app/Contents/MacOS/Tailscale /opt/homebrew/bin/tailscale /usr/local/bin/tailscale; do
+    [ -x "$p" ] && { ts="$p"; break; }
+  done
+fi
+if [ -n "$ts" ]; then
+  if "$ts" status >/dev/null 2>&1; then
+    exitnode=$("$ts" status 2>/dev/null | awk '/^[0-9]/ && /exit node/ && !/offers exit node/ {print $2; exit}')
+    if [ -n "$exitnode" ]; then
+      printf 'tailscale: up (exit node: %s)\n' "$exitnode"
+    else
+      printf 'tailscale: up\n'
+    fi
+  else
+    printf 'tailscale: installed, not connected\n'
+  fi
+  found=1
+fi
+# Mullvad
+if command -v mullvad >/dev/null 2>&1; then
+  st=$(mullvad status 2>/dev/null | head -n1)
+  [ -n "$st" ] && { printf 'mullvad:   %s\n' "$st"; found=1; }
+fi
+# WireGuard interfaces (Linux, no root needed)
+if command -v ip >/dev/null 2>&1; then
+  wg=$(ip -o link show type wireguard 2>/dev/null | awk -F': ' '{print $2}' | paste -sd, -)
+  [ -n "$wg" ] && { printf 'wireguard: %s\n' "$wg"; found=1; }
+fi
+# OpenVPN process
+if command -v pgrep >/dev/null 2>&1 && pgrep -x openvpn >/dev/null 2>&1; then
+  printf 'openvpn:   running\n'; found=1
+fi
+# Generic tunnel interfaces (tun/tap/wg). macOS utun* is deliberately excluded:
+# the OS spawns many (iCloud Private Relay, Tailscale, …) so it is noise, not a
+# VPN signal — Tailscale/WireGuard are detected specifically above.
+tuns=""
+if command -v ip >/dev/null 2>&1; then
+  tuns=$(ip -o link 2>/dev/null | awk -F': ' '{print $2}' | grep -E '^(tun|tap|wg)' | paste -sd, -)
+elif command -v ifconfig >/dev/null 2>&1; then
+  tuns=$(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep -E '^(tun|tap|wg)' | paste -sd, -)
+fi
+[ -n "$tuns" ] && printf 'tunnels:   %s\n' "$tuns"
+# No VPN/tunnel found leaves output empty; always succeed.
+exit 0
+"#,
+        ),
+        script_frag(
+            "secrets-posture",
+            "Secret stores present (no values)",
+            "5m",
+            r#"
+# Posture only: reports which secret stores and secret-management tools EXIST.
+# It never reads, prints, or embeds any secret value — presence checks and a
+# private-key count are the only things it does.
+out=""
+add() { out="${out}  ${1}\n"; }
+[ -e "$HOME/.aws/credentials" ]     && add "aws credentials (~/.aws/credentials)"
+[ -e "$HOME/.config/gh/hosts.yml" ] && add "github cli (~/.config/gh/hosts.yml)"
+[ -e "$HOME/.netrc" ]               && add "netrc (~/.netrc)"
+[ -e "$HOME/.docker/config.json" ]  && add "docker auth (~/.docker/config.json)"
+[ -e "$HOME/.npmrc" ]               && add "npm (~/.npmrc)"
+[ -e "$HOME/.pypirc" ]              && add "pypi (~/.pypirc)"
+[ -e "$HOME/.kube/config" ]         && add "kubeconfig (~/.kube/config)"
+{ [ -e "$HOME/.cargo/credentials.toml" ] || [ -e "$HOME/.cargo/credentials" ]; } && add "cargo (~/.cargo/credentials*)"
+[ -d "$HOME/.gnupg" ]               && add "gnupg (~/.gnupg/)"
+[ -d "$HOME/.config/gcloud" ]       && add "gcloud (~/.config/gcloud/)"
+if [ -d "$HOME/.ssh" ]; then
+  n=$(find "$HOME/.ssh" -maxdepth 1 -type f ! -name '*.pub' ! -name 'known_hosts*' ! -name 'config' ! -name 'authorized_keys' 2>/dev/null | wc -l | tr -d ' ')
+  [ "${n:-0}" -gt 0 ] && add "ssh (~/.ssh/: ${n} private key file(s))"
+fi
+# Repo-local env files: names only, and only when the cwd is a git repo.
+if [ -d .git ]; then
+  envs=$(find . -maxdepth 2 -type f -name '.env*' ! -name '.env.example' ! -name '.env.sample' 2>/dev/null | sed 's|^\./||' | paste -sd, -)
+  [ -n "$envs" ] && add "repo env files: ${envs}"
+fi
+tools=""
+for t in op pass gpg vault sops age doppler bw aws gcloud; do
+  command -v "$t" >/dev/null 2>&1 && tools="${tools}${t} "
+done
+if [ -n "$out" ]; then
+  printf 'Secret stores present (presence only — no values are read):\n'
+  printf '%b' "$out"
+fi
+[ -n "$tools" ] && printf 'Secret-management CLIs on PATH: %s\n' "$tools"
+# Nothing found leaves output empty; always succeed.
+exit 0
+"#,
+        ),
     ]
 }
 
@@ -327,7 +553,13 @@ mod tests {
         let mut ids = std::collections::HashSet::new();
         for c in &frags {
             assert!(ids.insert(c.id.clone()), "duplicate fragment id {}", c.id);
-            assert!(!c.guidance.trim().is_empty(), "{} has empty guidance", c.id);
+            // Static fragments need guidance; dynamic ones legitimately leave it
+            // empty (the redacted script/provider output is embedded instead).
+            assert!(
+                c.is_dynamic() || !c.guidance.trim().is_empty(),
+                "{} has empty guidance and is not dynamic",
+                c.id
+            );
             // Every shipped fragment carries a category so the studio tree groups it.
             assert!(
                 c.category.as_deref().is_some_and(|i| !i.is_empty()),
@@ -343,8 +575,67 @@ mod tests {
             "branch-discipline",
             "secrets-hygiene",
             "validate-before-done",
+            // dynamic environment probes
+            "host",
+            "toolchain",
+            "vpn-posture",
+            "secrets-posture",
         ] {
             assert!(ids.contains(needed), "missing palette fragment {needed}");
+        }
+    }
+
+    #[test]
+    fn dynamic_palette_fragments_are_bash_scripts() {
+        // The shipped environment probes are command-backed bash scripts (not
+        // provider-backed), so studio opens them for view/edit.
+        for id in ["host", "toolchain", "containers", "ai-tools", "tailnet"] {
+            let c = palette().into_iter().find(|c| c.id == id).unwrap();
+            assert!(c.is_dynamic(), "{id} should be dynamic");
+            assert!(c.command.is_some(), "{id} should be command-backed");
+            assert_eq!(c.script_lang.as_deref(), Some("bash"), "{id} is bash");
+            assert!(c.guidance.is_empty(), "{id} is a pure script (no guidance)");
+        }
+    }
+
+    #[test]
+    fn dynamic_palette_scripts_are_valid_bash() {
+        // Validate the Rust-raw-string → bash round-trip for every shipped
+        // script: `bash -n` parses without executing (no probes run, no side
+        // effects), so this catches escaping breakage (e.g. a mangled `\t` in a
+        // docker --format, or an unterminated quote) without touching the system.
+        for c in palette().into_iter().filter(|c| c.command.is_some()) {
+            let cmd = c.command.unwrap();
+            let out = std::process::Command::new("bash")
+                .arg("-n")
+                .arg("-c")
+                .arg(&cmd)
+                .output()
+                .expect("bash should be available to syntax-check scripts");
+            assert!(
+                out.status.success(),
+                "{} is not valid bash:\n{}",
+                c.id,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn secrets_posture_never_reads_secret_values() {
+        // Posture, not values: the secrets probe must only test for presence and
+        // count keys — never read a store's contents. Guard against a future edit
+        // that pipes a credential file into the output.
+        let c = palette()
+            .into_iter()
+            .find(|c| c.id == "secrets-posture")
+            .unwrap();
+        let cmd = c.command.unwrap();
+        for forbidden in ["cat ", "head ", "tail ", "less ", "< \"$HOME", "xxd", "od "] {
+            assert!(
+                !cmd.contains(forbidden),
+                "secrets-posture must not read file contents (found {forbidden:?})"
+            );
         }
     }
 

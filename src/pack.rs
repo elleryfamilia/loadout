@@ -65,6 +65,7 @@ impl Pack {
 // "everyday" essentials) so each profile is self-contained; the integrity tests
 // keep the shared tail consistent across the stack packs.
 const EVERYDAY: &[&str] = &[
+    // Static guidance essentials.
     "terse-comms",
     "conventional-commits",
     "baseline",
@@ -72,6 +73,18 @@ const EVERYDAY: &[&str] = &[
     "secrets-hygiene",
     "validate-before-done",
     "infra-caution",
+    // Live machine grounding (dynamic probes). `environment` frames the probed
+    // sections that follow; each script embeds its redacted stdout at render
+    // and degrades to nothing when its tool/daemon is absent. `tailnet` (full
+    // Tailscale peer dump) is left out of the default — it ships in the palette
+    // for those who want to pick it.
+    "environment",
+    "host",
+    "toolchain",
+    "containers",
+    "ai-tools",
+    "vpn-posture",
+    "secrets-posture",
 ];
 
 const RUST: &[&str] = &[
@@ -137,9 +150,11 @@ pub fn packs() -> Vec<Pack> {
         Pack {
             id: "everyday",
             name: "Everyday essentials",
-            description: "Safe, sensible defaults for general or no-repo work: terse \
+            description: "Safe, sensible defaults for general or no-repo work — terse \
                           communication, conventional commits, secrets discipline, ask \
-                          before risky actions, and validate-before-done.",
+                          before risky actions, validate-before-done — plus live machine \
+                          grounding (host, toolchain, containers, AI tools, VPN/egress, \
+                          and secret-store posture) probed fresh at render.",
             icon: "shield",
             recommended_for: &["machine"],
             profile_name: "everyday",
