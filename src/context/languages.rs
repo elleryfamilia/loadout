@@ -136,6 +136,12 @@ pub fn detect_stacks_and_pms(base: &Path) -> (Vec<String>, Vec<String>) {
         pms.push(detect_python_pm(base));
     }
 
+    // Java / JVM (Maven or Gradle)
+    if has("pom.xml") || has("build.gradle") || has("build.gradle.kts") {
+        stacks.push("java".into());
+        pms.push(if has("pom.xml") { "maven" } else { "gradle" }.into());
+    }
+
     dedup(&mut stacks);
     dedup(&mut pms);
     (stacks, pms)
@@ -264,6 +270,21 @@ mod tests {
         assert!(stacks.contains(&"node".to_string()));
         assert!(stacks.contains(&"nextjs".to_string()));
         assert_eq!(pms, vec!["pnpm".to_string()]);
+    }
+
+    #[test]
+    fn detects_java_maven_and_gradle() {
+        let m = tmp();
+        fs::write(m.path().join("pom.xml"), "<project/>").unwrap();
+        let (stacks, pms) = detect_stacks_and_pms(m.path());
+        assert!(stacks.contains(&"java".to_string()));
+        assert!(pms.contains(&"maven".to_string()));
+
+        let g = tmp();
+        fs::write(g.path().join("build.gradle.kts"), "plugins {}").unwrap();
+        let (stacks, pms) = detect_stacks_and_pms(g.path());
+        assert!(stacks.contains(&"java".to_string()));
+        assert!(pms.contains(&"gradle".to_string()));
     }
 
     #[test]

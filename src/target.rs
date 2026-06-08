@@ -212,6 +212,17 @@ pub fn builtin_targets() -> Vec<TargetDef> {
                 ],
             },
         ),
+        t(
+            "java",
+            "a Maven or Gradle build file at the repo root",
+            TargetRule::AnyOf {
+                rules: vec![
+                    file("pom.xml"),
+                    file("build.gradle"),
+                    file("build.gradle.kts"),
+                ],
+            },
+        ),
     ]
 }
 
@@ -339,7 +350,7 @@ mod tests {
     #[test]
     fn builtin_catalog_is_well_formed() {
         let ids: Vec<String> = builtin_targets().into_iter().map(|t| t.id).collect();
-        for needed in ["rust", "node", "nextjs", "go", "python"] {
+        for needed in ["rust", "node", "nextjs", "go", "python", "java"] {
             assert!(
                 ids.contains(&needed.to_string()),
                 "missing built-in {needed}"
