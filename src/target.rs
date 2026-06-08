@@ -4,10 +4,10 @@
 //! Profiles match a detected context through their `targets` list (see
 //! [`crate::profile`]).
 //!
-//! The built-in targets (`rust`/`node`/`nextjs`/`go`/`python`) are detected in
-//! Rust by [`crate::context::languages`]; here they are exposed only as
-//! read-only **descriptors** ([`builtin_targets`]) so the studio can show how
-//! each one works. **Custom** targets, authored in the global config as
+//! The built-in targets (rust/node/nextjs/go/python/java/ruby/php/swift/dotnet)
+//! are detected in Rust by [`crate::context::languages`]; here they are exposed
+//! only as read-only **descriptors** ([`builtin_targets`]) so the studio can
+//! show how each one works. **Custom** targets, authored in the global config as
 //! `[[targets]]`, carry an *evaluable* rule — declarative (filesystem probes,
 //! evaluated before stacks exist, so they never test the context they help
 //! produce) or a script predicate (the escape hatch, run in the repo).
@@ -60,7 +60,8 @@ pub struct TargetDef {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TargetRule {
-    /// A repo-relative file or directory exists (matched literally, no glob).
+    /// A repo-relative file or directory exists. A `*` in the final path
+    /// component is a glob over that directory's children (e.g. `*.csproj`).
     FileExists { path: String },
     /// A repo-relative file exists and its contents satisfy `op`/`value`.
     FileContains { path: String, op: Op, value: String },
@@ -100,9 +101,7 @@ impl TargetRule {
     /// composite containing a script still evaluates its declarative siblings.
     pub fn declarative_match(&self, repo_base: &Path) -> bool {
         match self {
-            TargetRule::FileExists { path } => {
-                safe_join(repo_base, path).is_some_and(|p| p.exists())
-            }
+            TargetRule::FileExists { path } => file_exists_match(repo_base, path),
             TargetRule::FileContains { path, op, value } => safe_join(repo_base, path)
                 .and_then(|p| read_capped(&p))
                 .is_some_and(|text| op_matches(*op, &text, value)),
@@ -111,6 +110,56 @@ impl TargetRule {
             TargetRule::Script { .. } => false,
         }
     }
+}
+
+/// Whether `path` exists under `repo_base`. A `*` in the final component makes
+/// it a glob over that directory's direct children (e.g. `*.csproj`,
+/// `src/*.tf`); otherwise it's a literal existence check.
+fn file_exists_match(repo_base: &Path, path: &str) -> bool {
+    if path.contains('*') {
+        glob_exists(repo_base, path)
+    } else {
+        safe_join(repo_base, path).is_some_and(|p| p.exists())
+    }
+}
+
+/// Match a glob whose wildcard is confined to the final path component: the
+/// directory prefix is literal (and `..`/absolute-guarded), the final component
+/// is matched against the directory's direct children.
+fn glob_exists(repo_base: &Path, pattern: &str) -> bool {
+    let (dir_rel, name_pat) = pattern.rsplit_once('/').unwrap_or(("", pattern));
+    let Some(dir) = safe_join(repo_base, dir_rel) else {
+        return false;
+    };
+    std::fs::read_dir(&dir)
+        .ok()
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|e| wildcard_match(&e.file_name().to_string_lossy(), name_pat))
+        })
+        .unwrap_or(false)
+}
+
+/// A minimal `*`-glob match: literal segments (split on `*`) must appear in
+/// order, the first anchored to the start and the last to the end.
+fn wildcard_match(name: &str, pattern: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return name == pattern; // no wildcard
+    }
+    if !name.starts_with(parts[0]) {
+        return false;
+    }
+    let mut pos = parts[0].len();
+    for seg in &parts[1..parts.len() - 1] {
+        match name[pos..].find(*seg) {
+            Some(i) => pos += i + seg.len(),
+            None => return false,
+        }
+    }
+    let last = parts[parts.len() - 1];
+    name.len() - pos >= last.len() && name[pos..].ends_with(last)
 }
 
 /// Resolve `rel` under `repo_base`, rejecting absolute paths and any `..`
@@ -221,6 +270,31 @@ pub fn builtin_targets() -> Vec<TargetDef> {
                     file("build.gradle"),
                     file("build.gradle.kts"),
                 ],
+            },
+        ),
+        t("ruby", "a Gemfile at the repo root", file("Gemfile")),
+        t(
+            "php",
+            "a composer.json at the repo root",
+            file("composer.json"),
+        ),
+        t(
+            "swift",
+            "a Swift package, Xcode project, or Podfile",
+            TargetRule::AnyOf {
+                rules: vec![
+                    file("Package.swift"),
+                    file("*.xcodeproj"),
+                    file("*.xcworkspace"),
+                    file("Podfile"),
+                ],
+            },
+        ),
+        t(
+            "dotnet",
+            "a .NET solution or project at the repo root",
+            TargetRule::AnyOf {
+                rules: vec![file("*.sln"), file("*.csproj"), file("global.json")],
             },
         ),
     ]
@@ -350,7 +424,9 @@ mod tests {
     #[test]
     fn builtin_catalog_is_well_formed() {
         let ids: Vec<String> = builtin_targets().into_iter().map(|t| t.id).collect();
-        for needed in ["rust", "node", "nextjs", "go", "python", "java"] {
+        for needed in [
+            "rust", "node", "nextjs", "go", "python", "java", "ruby", "php", "swift", "dotnet",
+        ] {
             assert!(
                 ids.contains(&needed.to_string()),
                 "missing built-in {needed}"
@@ -410,6 +486,31 @@ mod tests {
             !python.rule.declarative_match(d.path()),
             "empty dir matches nothing"
         );
+    }
+
+    #[test]
+    fn file_exists_supports_globs() {
+        let d = tmp();
+        fs::write(d.path().join("App.csproj"), "<Project/>").unwrap();
+        let glob = TargetRule::FileExists {
+            path: "*.csproj".into(),
+        };
+        assert!(glob.declarative_match(d.path()));
+        let miss = TargetRule::FileExists {
+            path: "*.sln".into(),
+        };
+        assert!(!miss.declarative_match(d.path()));
+        // The dotnet built-in matches via the .csproj glob.
+        let dotnet = builtin_targets()
+            .into_iter()
+            .find(|t| t.id == "dotnet")
+            .unwrap();
+        assert!(dotnet.rule.declarative_match(d.path()));
+        // A glob can't escape the repo base.
+        let escape = TargetRule::FileExists {
+            path: "../*.csproj".into(),
+        };
+        assert!(!escape.declarative_match(d.path()));
     }
 
     #[test]

@@ -142,6 +142,38 @@ pub fn detect_stacks_and_pms(base: &Path) -> (Vec<String>, Vec<String>) {
         pms.push(if has("pom.xml") { "maven" } else { "gradle" }.into());
     }
 
+    // Ruby
+    if has("Gemfile") {
+        stacks.push("ruby".into());
+        pms.push("bundler".into());
+    }
+
+    // PHP
+    if has("composer.json") {
+        stacks.push("php".into());
+        pms.push("composer".into());
+    }
+
+    // Swift / Apple (SwiftPM, CocoaPods, or an Xcode project)
+    if has("Package.swift")
+        || has("Podfile")
+        || has_glob_suffix(base, ".xcodeproj")
+        || has_glob_suffix(base, ".xcworkspace")
+    {
+        stacks.push("swift".into());
+        if has("Package.swift") {
+            pms.push("swiftpm".into());
+        } else if has("Podfile") {
+            pms.push("cocoapods".into());
+        }
+    }
+
+    // .NET / C#
+    if has("global.json") || has_glob_suffix(base, ".sln") || has_glob_suffix(base, ".csproj") {
+        stacks.push("dotnet".into());
+        pms.push("nuget".into());
+    }
+
     dedup(&mut stacks);
     dedup(&mut pms);
     (stacks, pms)
@@ -205,6 +237,19 @@ fn pyproject_has_poetry(base: &Path) -> bool {
 fn dedup(v: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
     v.retain(|x| seen.insert(x.clone()));
+}
+
+/// Whether any direct child of `base` has the given filename suffix (e.g.
+/// `.xcodeproj`). A cheap, non-recursive scan for glob-ish project markers.
+fn has_glob_suffix(base: &Path, suffix: &str) -> bool {
+    std::fs::read_dir(base)
+        .ok()
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().ends_with(suffix))
+        })
+        .unwrap_or(false)
 }
 
 /// Depth-bounded, ignore-aware recursive walk invoking `f` for each file.
@@ -285,6 +330,34 @@ mod tests {
         let (stacks, pms) = detect_stacks_and_pms(g.path());
         assert!(stacks.contains(&"java".to_string()));
         assert!(pms.contains(&"gradle".to_string()));
+    }
+
+    #[test]
+    fn detects_ruby_php_swift_dotnet() {
+        let rb = tmp();
+        fs::write(rb.path().join("Gemfile"), "source 'x'").unwrap();
+        assert!(detect_stacks_and_pms(rb.path())
+            .0
+            .contains(&"ruby".to_string()));
+
+        let php = tmp();
+        fs::write(php.path().join("composer.json"), "{}").unwrap();
+        assert!(detect_stacks_and_pms(php.path())
+            .0
+            .contains(&"php".to_string()));
+
+        // Swift via an Xcode project directory (glob suffix).
+        let sw = tmp();
+        fs::create_dir(sw.path().join("App.xcodeproj")).unwrap();
+        let (stacks, _) = detect_stacks_and_pms(sw.path());
+        assert!(stacks.contains(&"swift".to_string()));
+
+        // .NET via a .csproj file (glob suffix).
+        let net = tmp();
+        fs::write(net.path().join("App.csproj"), "<Project/>").unwrap();
+        let (stacks, pms) = detect_stacks_and_pms(net.path());
+        assert!(stacks.contains(&"dotnet".to_string()));
+        assert!(pms.contains(&"nuget".to_string()));
     }
 
     #[test]
