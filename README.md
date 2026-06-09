@@ -455,30 +455,6 @@ Every render appends a JSON line to `.rosita/logs/events.jsonl`: selected agent 
 profile, detected stacks, files written, the rule-match reasons, the context
 hash, and whether it was a dry-run.
 
-## Documentation
-
-Full docs live in [`docs/`](docs/):
-
-- [Concepts](docs/concepts.md) · [Configuration](docs/configuration.md) ·
-  [Security & trust](docs/security.md) — for consumers.
-- [Architecture](docs/architecture.md) · [Extending](docs/extending.md) ·
-  [Testing](docs/testing.md) — for devs.
-
-## Architecture
-
-A small library (`rosita`) with trait seams; the binary (`rosita`) is a thin
-shell over it (see [docs/architecture.md](docs/architecture.md)).
-
-- `ContextDetector` — `git`, `languages`, `commands`, `system`, `env` detectors.
-- profile **selection** — match `targets` → none / one / pick-and-remember.
-- `TemplateRenderer` — minijinja-backed; pluggable.
-- agent **delivery** — one descriptor-driven engine (`claude`/`codex`/`gemini`/
-  `opencode`/`copilot`/`generic`), extensible via `[[agents]]`.
-- `studio` — the `tiny_http` + `maud` + htmx web UI; a `toml_edit` write engine
-  that stages, diffs, and applies comment-preserving edits.
-- `Writer` — atomic FS writer with dry-run; pure marker-block helpers.
-- redaction, audit, hashing, trust as focused modules.
-
 ## Testing
 
 ```bash
@@ -487,23 +463,14 @@ cargo clippy --all-targets
 cargo fmt --check
 ```
 
-Unit tests cover detection, pick-one selection + binding, the comment-preserving
-studio write engine (stage/diff/apply), the git-backed sync engine, fragment-
-params merge, the providers' parsers, the cache TTL, rendering, atomic writes, and
-redaction;
-`tests/cli.rs` drives the real binary against temp repos, and `tests/studio.rs`
-drives the studio handlers. For a hands-on, sandboxed walkthrough of every
-feature, see **[docs/testing.md](docs/testing.md)**.
+## Documentation
 
-## Non-goals / future work
+Full docs live in [`docs/`](docs/):
 
-- **No FUSE in the MVP.** This uses the simple preflight/wrapper approach (render
-  then launch). A FUSE-backed virtual file (live, per-process overlays) is a
-  possible future extension, intentionally out of scope here.
-- **Machine scope is emit-only** today — outside a repo, rosita renders to a
-  namespaced global path and tells you how to wire it, rather than auto-editing
-  `~/.claude/CLAUDE.md` (commonly a symlink into a git repo).
-- Generated files are guidance; `rosita` does not enforce policy.
+- [Concepts](docs/concepts.md) · [Configuration](docs/configuration.md) ·
+  [Security & trust](docs/security.md) — for consumers.
+- [Architecture](docs/architecture.md) · [Extending](docs/extending.md) ·
+  [Testing](docs/testing.md) — for devs.
 
 ## License
 
