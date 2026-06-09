@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 516" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" role="img" aria-label="Where rosita fits: one global CLAUDE.md or AGENTS.md has the same content for every project. rosita is the reusable layer in between — your context written once as fragments, and each project receives only the right slice as a gitignored overlay next to the team's committed file.">
+  <style>
+    .bg{fill:#ffffff}
+    .card{fill:#f6f8fa;stroke:#d0d7de;stroke-width:1.5}
+    .card-accent{fill:#ddf4ff;stroke:#54aeff;stroke-width:2}
+    .t{fill:#1f2328}
+    .t-muted{fill:#656d76}
+    .t-accent{fill:#0969da}
+    .s-line{stroke:#8c959f;stroke-width:2.5;fill:none}
+    .arrow{fill:#8c959f}
+    .f-rust{fill:#bc4c00}
+    .f-node{fill:#1a7f37}
+    .f-py{fill:#0969da}
+    .f-shared{fill:#8250df}
+    .f-misc{fill:#d0d7de}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#0d1117}
+      .card{fill:#161b22;stroke:#30363d}
+      .card-accent{fill:#121d2f;stroke:#1f6feb}
+      .t{fill:#e6edf3}
+      .t-muted{fill:#8b949e}
+      .t-accent{fill:#58a6ff}
+      .s-line{stroke:#6e7681}
+      .arrow{fill:#6e7681}
+      .f-rust{fill:#f0883e}
+      .f-node{fill:#3fb950}
+      .f-py{fill:#58a6ff}
+      .f-shared{fill:#a371f7}
+      .f-misc{fill:#30363d}
+    }
+    .title{font-size:26px;font-weight:700}
+    .sub{font-size:13.5px}
+    .h1{font-size:17px;font-weight:700}
+    .brand{font-size:24px;font-weight:800}
+    .h2{font-size:15px;font-weight:700}
+    .small{font-size:12.5px}
+    .tiny{font-size:11.5px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+    .monoa{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:700}
+  </style>
+  <marker id="ahf" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0 0 L10 5 L0 10 z" class="arrow"/>
+  </marker>
+
+  <rect class="bg" x="0" y="0" width="960" height="516"/>
+
+  <text class="title t" x="480" y="36" text-anchor="middle">Where rosita fits</text>
+  <text class="sub t-muted" x="480" y="60" text-anchor="middle">write your context once — each project gets the right slice</text>
+
+  <!-- one global file -->
+  <rect class="card" x="250" y="82" width="460" height="72" rx="12"/>
+  <rect class="bg" x="282" y="96" width="32" height="44" rx="4" stroke="#8c959f" stroke-width="1.5"/>
+  <rect class="f-rust"   x="290" y="104" width="16" height="4" rx="2"/>
+  <rect class="f-node"   x="290" y="111" width="12" height="4" rx="2"/>
+  <rect class="f-shared" x="290" y="118" width="18" height="4" rx="2"/>
+  <rect class="f-py"     x="290" y="125" width="10" height="4" rx="2"/>
+  <rect class="f-misc"   x="290" y="132" width="14" height="4" rx="2"/>
+  <text class="h1 t" x="334" y="114">one global CLAUDE.md / AGENTS.md</text>
+  <text class="small t-muted" x="334" y="138">same content in every project</text>
+
+  <!-- rosita -->
+  <rect class="card-accent" x="80" y="192" width="800" height="120" rx="14"/>
+  <text class="brand t-accent" x="116" y="242">rosita</text>
+  <text class="sub t-muted" x="116" y="268">your reusable context — written once</text>
+
+  <rect class="f-rust"   x="500" y="222" width="36" height="36" rx="9"/>
+  <rect class="f-node"   x="590" y="222" width="36" height="36" rx="9"/>
+  <rect class="f-py"     x="680" y="222" width="36" height="36" rx="9"/>
+  <rect class="f-shared" x="770" y="222" width="36" height="36" rx="9"/>
+  <text class="tiny t-muted" x="518" y="278" text-anchor="middle">rust</text>
+  <text class="tiny t-muted" x="608" y="278" text-anchor="middle">node</text>
+  <text class="tiny t-muted" x="698" y="278" text-anchor="middle">python</text>
+  <text class="tiny t-muted" x="788" y="278" text-anchor="middle">shared</text>
+
+  <!-- fan-out: the right blocks per project -->
+  <line class="s-line" x1="205" y1="312" x2="205" y2="356" marker-end="url(#ahf)"/>
+  <line class="s-line" x1="480" y1="312" x2="480" y2="356" marker-end="url(#ahf)"/>
+  <line class="s-line" x1="755" y1="312" x2="755" y2="356" marker-end="url(#ahf)"/>
+
+  <rect class="f-rust"   x="217" y="324" width="16" height="16" rx="4"/>
+  <rect class="f-shared" x="237" y="324" width="16" height="16" rx="4"/>
+  <rect class="f-node"   x="492" y="324" width="16" height="16" rx="4"/>
+  <rect class="f-shared" x="512" y="324" width="16" height="16" rx="4"/>
+  <rect class="f-py"     x="767" y="324" width="16" height="16" rx="4"/>
+  <rect class="f-shared" x="787" y="324" width="16" height="16" rx="4"/>
+
+  <!-- projects -->
+  <rect class="card" x="80" y="366" width="250" height="122" rx="12"/>
+  <text x="100" y="395"><tspan class="h2 t">a rust repo</tspan><tspan class="tiny t-muted">  · Claude</tspan></text>
+  <text x="100" y="426"><tspan class="mono t">CLAUDE.md</tspan><tspan class="tiny t-muted"> — the team's</tspan></text>
+  <rect class="f-rust"   x="100" y="440" width="14" height="14" rx="4"/>
+  <rect class="f-shared" x="118" y="440" width="14" height="14" rx="4"/>
+  <text class="monoa t-accent" x="140" y="452">CLAUDE.local.md</text>
+  <text class="tiny t-muted" x="100" y="474">your overlay · gitignored</text>
+
+  <rect class="card" x="355" y="366" width="250" height="122" rx="12"/>
+  <text x="375" y="395"><tspan class="h2 t">a node repo</tspan><tspan class="tiny t-muted">  · Codex</tspan></text>
+  <text x="375" y="426"><tspan class="mono t">AGENTS.md</tspan><tspan class="tiny t-muted"> — the team's</tspan></text>
+  <rect class="f-node"   x="375" y="440" width="14" height="14" rx="4"/>
+  <rect class="f-shared" x="393" y="440" width="14" height="14" rx="4"/>
+  <text class="monoa t-accent" x="415" y="452">AGENTS.override.md</text>
+  <text class="tiny t-muted" x="375" y="474">your overlay · gitignored</text>
+
+  <rect class="card" x="630" y="366" width="250" height="122" rx="12"/>
+  <text x="650" y="395"><tspan class="h2 t">a python repo</tspan><tspan class="tiny t-muted">  · Gemini</tspan></text>
+  <text x="650" y="426"><tspan class="mono t">GEMINI.md</tspan><tspan class="tiny t-muted"> — the team's</tspan></text>
+  <rect class="f-py"     x="650" y="440" width="14" height="14" rx="4"/>
+  <rect class="f-shared" x="668" y="440" width="14" height="14" rx="4"/>
+  <text class="monoa t-accent" x="690" y="452">GEMINI.local.md</text>
+  <text class="tiny t-muted" x="650" y="474">your overlay · gitignored</text>
+</svg>
