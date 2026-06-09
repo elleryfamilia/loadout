@@ -14,7 +14,7 @@ A fragment is one reusable unit of context. The parser is strict
 |-----|----------|-------|
 | `id` | yes | kebab-case, unique. How profiles reference it. |
 | `description` | no | short title shown in listings. |
-| `guidance` | no¹ | the instructions. A minijinja template — may reference `{{ params.x }}` and (for dynamic caps) `{{ provider.data.x }}`. |
+| `guidance` | no¹ | the instructions. A minijinja template — may reference `{{ params.x }}` and (for dynamic fragments) `{{ provider.data.x }}`. |
 | `category` | no | human-friendly group label shown in studio's tree, e.g. `"Safety"`. |
 | `agents` | no | restrict to certain agents, e.g. `["claude", "codex"]`. Empty/absent = all. |
 | `when` | no | conditions that gate the fragment (advanced; usually omit). |
@@ -23,10 +23,10 @@ A fragment is one reusable unit of context. The parser is strict
 | `provider` | no² | a built-in live probe: `host`, `toolchain`, `ai-tools`, `tailnet`, `docker`. Output is exposed as `{{ provider.data.* }}` / `{{ provider.output }}`. Always trusted. |
 | `command` | no² | a shell script whose stdout becomes the rendered body. Set `script_lang = "bash"`. |
 | `script_lang` | no | language for `command` (use `"bash"`). |
-| `cache` | no | for dynamic caps: how long to cache output, e.g. `"5m"`. |
+| `cache` | no | for dynamic fragments: how long to cache output, e.g. `"5m"`. |
 
 ¹ A fragment needs *either* `guidance` (static) *or* `command`/`provider` (dynamic).
-² `provider` and `command` are mutually exclusive; either makes the cap "dynamic".
+² `provider` and `command` are mutually exclusive; either makes the fragment "dynamic".
 
 ## `[[profiles]]`
 
@@ -35,17 +35,18 @@ A profile composes fragments and is selected by detected context.
 | key | required | notes |
 |-----|----------|-------|
 | `name` | yes | unique. Also the binding key and template name. |
-| `targets` | no | stacks this profile applies to: `["rust"]`, `["node"]`, `["python"]`, `["go"]`, … or `["machine"]` for the no-repo context. The profile binds where **any** target matches the repo's detected stacks. Empty `targets` ⇒ never auto-selected (still bindable by name). |
+| `targets` | no | stacks this profile applies to: `["rust"]`, `["node"]`, `["python"]`, `["go"]`, … or `["machine"]` for the no-repo context. The profile binds where **any** target matches the repo's detected stacks. Empty `targets` ⇒ the **catch-all default** (selected when no targeted profile matches; still bindable by name). |
 | `fragments` | no | ordered list of fragment ids (or `{ id = "x", params = { … } }` for per-profile param overrides). A saved profile needs ≥1. |
 | `guidance` | no | inline guidance appended as a synthetic fragment. |
 | `disabled` | no | `true` keeps the definition but never selects it. |
 
-Only **one** profile binds per repo: 0 matches → no overlay; exactly 1 → it's
-used; 2+ → rosita asks once and remembers the choice.
+Only **one** profile binds per repo: 0 matches → a no-targets default if you have
+one, else no overlay; exactly 1 → it's used; 2+ → rosita asks once and remembers
+the choice.
 
 ## Worked example
 
-A typical decomposition of a personal `CLAUDE.md` into global caps + a `machine`
+A typical decomposition of a personal `CLAUDE.md` into global fragments + a `machine`
 profile (the universal rules) plus a `rust` profile (stack-specific):
 
 ```toml

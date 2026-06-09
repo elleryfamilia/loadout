@@ -1,7 +1,7 @@
 # Concepts
 
-The mental model behind rosita. Status markers: **(implemented)** ships today;
-**(planned)** is specified in the [implementation plan](implementation-plan.md).
+The mental model behind rosita. Sections marked **(implemented)** ship today;
+everything described here is in the current binary.
 
 ## Context **(implemented)**
 
@@ -37,17 +37,22 @@ dependencies (`requires`), can be restricted to specific `agents`, and carry a
 
 A **profile** is a named bundle of fragments tied to one or more **targets** —
 the coarse thing rosita detects: `rust`, `node`, `nextjs`, `go`, `python`,
-`android`, `java`, or `machine` (the no-repo context). Inline `guidance` is still
-supported for back-compat (it becomes a `<profile>:inline` fragment, rendered
-after the explicit ones).
+`java`, `ruby`, `php`, `swift`, `dotnet`, or `machine` (the no-repo context).
+Inline `guidance` is still supported for back-compat (it becomes a
+`<profile>:inline` fragment, rendered after the explicit ones).
 
 **One profile per context — not a union.** rosita gathers the profiles whose
 `targets` match the detected context and selects **exactly one**:
 
-- **0 match** → no profile applies (the overlay is empty).
+- **0 match** → fall back to a **no-targets "default" profile** if you have one;
+  otherwise no profile applies (the overlay is empty).
 - **1 matches** → use it, no prompt.
 - **2+ match** → you pick once, and the choice is remembered for that project
   (the **binding**, below).
+
+A profile that declares **no `targets`** is the implicit catch-all default — it
+applies wherever nothing more specific matches. Two such profiles is just another
+tie you resolve once.
 
 Composition then happens *within* the chosen profile, over its fragment list:
 deduped by id, `requires`-resolved (dependencies first, cycle-protected), each
@@ -65,10 +70,11 @@ and which one is bound); no LLM is involved.
 When more than one profile matches a project, rosita asks once which to use and
 remembers the answer so it never asks again. In a repo the choice lives in the
 gitignored `.rosita/local.toml` `[binding]` (per-checkout); outside a repo it
-lives in a global, path-keyed store. **"None" is a valid, remembered choice** —
-you can opt a project out of rosita entirely. A binding also fingerprints the
-profile's `targets`, so if you later retarget that profile the stale binding is
-dropped and selection re-runs.
+lives in a global, path-keyed store. A binding records only *which* profile to
+use — there is no "opt out" choice (invoking rosita means you want a profile, so
+when 2+ match the chooser always offers the matching ones). A binding also
+fingerprints the profile's `targets`, so if you later retarget that profile the
+stale binding is dropped and selection re-runs.
 
 ## Providers (native environment discovery) **(implemented)**
 

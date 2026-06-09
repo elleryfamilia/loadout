@@ -30,9 +30,10 @@ pub struct ProfileConfig {
     /// Profile name (also used to find `profiles/<name>.md.j2` templates).
     pub name: String,
     /// Detected language/platform tags this profile is for (`rust`, `node`,
-    /// `nextjs`, `go`, `python`, `android`, `java`, `machine`, …). The profile is
-    /// a selection candidate when **any** of its targets matches the detected
-    /// context. Empty `targets` ⇒ never auto-selected (still bindable by name).
+    /// `nextjs`, `go`, `python`, `java`, `ruby`, `php`, `swift`, `dotnet`,
+    /// `machine`, …). The profile is a selection candidate when **any** of its
+    /// targets matches the detected context. Empty `targets` ⇒ the catch-all
+    /// default: selected when no targeted profile matches (still bindable by name).
     #[serde(default)]
     pub targets: Vec<String>,
     /// Fragments this profile composes (in declaration order). Each entry is

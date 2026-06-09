@@ -1,7 +1,7 @@
 # Configuration
 
-rosita is configured by layered TOML. **(implemented)** unless marked
-**(planned)**.
+rosita is configured by layered TOML. Everything below ships in the current
+binary (sections are marked **(implemented)**).
 
 ## Layers (precedence: later wins)
 
@@ -77,13 +77,16 @@ fragments = [
 ```
 
 - **`targets`:** the coarse detected tags — `stack` values `rust`, `node`,
-  `nextjs`, `go`, `python`, `android`, `java`, plus `machine` (the no-repo
-  context). A profile is a selection candidate when **any** of its targets
-  matches. Empty `targets` ⇒ never auto-selected (still bindable by name).
+  `nextjs`, `go`, `python`, `java`, `ruby`, `php`, `swift`, `dotnet`, plus
+  `machine` (the no-repo context). A profile is a selection candidate when
+  **any** of its targets matches. Empty `targets` ⇒ the profile is the **catch-all
+  default**: selected whenever no targeted profile matches (and still bindable by
+  name).
 - **Selection is pick-one:** of the profiles whose targets match, exactly one is
-  used — 0 → none (empty overlay), 1 → auto, 2+ → you pick once and it's
-  remembered (the [`[binding]`](#binding-implemented)). Profiles do **not** merge;
-  there is no `priority`, `exclude`, or `exclusive`, and no built-in profiles.
+  used — 0 → fall back to a no-targets default if you have one, else none (empty
+  overlay), 1 → auto, 2+ → you pick once and it's remembered (the
+  [`[binding]`](#binding-implemented)). Profiles do **not** merge; there is no
+  `priority`, `exclude`, or `exclusive`, and no built-in profiles.
 - A saved profile needs **≥1 fragment** (studio enforces it; the parser accepts
   zero for hand-edits).
 
@@ -98,9 +101,13 @@ is used outside a repo); rosita manages it, so you rarely hand-edit it.
 
 ```toml
 [binding]
-profile = "rust — web"      # the chosen profile … or:  none = true  to opt this project out
+profile = "rust — web"      # the chosen profile (the only remembered choice)
 # targets_hash = "…"        # fingerprint of the profile's targets at bind time (freshness)
 ```
+
+There is no opt-out binding — invoking rosita means you want a profile. A legacy
+`none = true` from an older rosita still parses but is ignored, so a project
+stuck on it re-prompts the next time 2+ profiles match.
 
 ## `[sync]` (implemented)
 

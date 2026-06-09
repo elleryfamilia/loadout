@@ -1,7 +1,6 @@
 # Architecture
 
-Reflects the current code. Forward-looking pieces are in the
-[implementation plan](implementation-plan.md).
+Reflects the current code.
 
 ## Shape
 
@@ -42,7 +41,7 @@ cwd → repo_base → Config::load → detect_context → select (one profile by
 | `context/` | `Context` (+ `Scope` repo/machine, `selection_targets()`) + the `ContextDetector` trait and detectors: `git`, `languages`, `commands`, `system`, `env`. |
 | `fragment` | `Fragment` (reusable guidance atom) + `Risk` + the read-only shipped `palette()` (starters to duplicate from, never auto-composed). |
 | `profile` | `ProfileConfig` (with `targets`), `Rule`/`Field`/`Op` (fragment `when`), `FragmentRef`, pick-one `select()`, and `compose_profile()` → `Composition` of `ResolvedFragment`s. |
-| `binding` | the per-project remembered profile choice: repo `local.toml` `[binding]` (via `toml_edit`) + a global path-keyed store; `None` is an explicit opt-out. |
+| `binding` | the per-project remembered profile choice: repo `local.toml` `[binding]` (via `toml_edit`) + a global path-keyed store; records only *which* profile (no opt-out — a legacy `none = true` is parsed but ignored). |
 | `providers/` | `EnvProvider` trait + built-ins (`host`/`toolchain`/`ai-tools`/`tailnet`/`docker`), `gather()`/`probe_one()`/`run_command()`, TTL cache; output redacted and excluded from the context hash. |
 | `dynamic` | resolves a dynamic fragment's `provider`/`command` output at render time (`DynamicMode` Live/ReadOnly); a `command` runs unless `allow_exec = false`. |
 | `render/` | `TemplateRenderer` trait (minijinja impl) + `header` (the self-healing banner) + the high-level `render()`. |

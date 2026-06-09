@@ -1,7 +1,6 @@
 # Extending rosita
 
-Where to plug in. **(implemented)** can be done today; **(planned)** lands with
-the [implementation plan](implementation-plan.md).
+Where to plug in. Everything below can be done today.
 
 ## Add or change an agent **(implemented — no code)**
 

@@ -77,7 +77,7 @@
   <text class="small t-muted" x="760" y="190" font-style="italic">local.toml · gitignored</text>
   <text class="lbl t" x="760" y="220">generated overlay</text>
   <text class="small t-muted" x="760" y="238" font-style="italic">gitignored</text>
-  <text class="small t-muted" x="760" y="262">no caps or profiles here</text>
+  <text class="small t-muted" x="760" y="262">no fragments or profiles here</text>
 
   <!-- arrows -->
   <line x1="200" y1="184" x2="296" y2="184" class="s-line" marker-end="url(#ah2)"/>

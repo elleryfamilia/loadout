@@ -66,7 +66,8 @@ rosita has **three** things you author, and one rule for putting them together.
   there's a shipped read-only **palette** to duplicate starters from.
 - **Profiles** — a named bundle of fragments, tied to one or more **targets**
   (the coarse thing rosita detects: `rust`, `node`, `nextjs`, `go`, `python`,
-  `android`, `java`, or `machine` when you're not in a repo).
+  `java`, `ruby`, `php`, `swift`, `dotnet`, or `machine` when you're not in a
+  repo).
 - **The binding** — when more than one profile could apply, rosita asks **once**
   which to use and remembers your answer for that project.
 
@@ -78,10 +79,14 @@ half-a-dozen matching rules — just *this repo looks like rust → use the rust
 profile → render its fragments.*
 
 ```
-0 profiles match  →  empty overlay (nothing applies here)
-1 matches         →  use it, no prompt
-2+ match          →  you pick once; the choice is remembered (the binding)
+no profile's targets match  →  a no-targets "default" profile applies, else empty
+exactly one matches          →  use it, no prompt
+two or more match            →  you pick once; the choice is remembered (the binding)
 ```
+
+A profile that declares **no `targets`** is the catch-all **default** — it
+applies wherever nothing more specific matches (keep two and you pick between
+them, like any other tie).
 
 Selection is fully deterministic and inspectable (`rosita explain` shows what was
 detected, which profiles matched, and which one is bound). **No LLM is involved
@@ -181,10 +186,9 @@ curl -LsSf https://github.com/elleryfamilia/rosita/releases/latest/download/rosi
 ```
 
 Builds are published for macOS (Apple Silicon + Intel) and Linux (x86_64 +
-ARM64). The installer drops `rosita` on your `PATH` and supports `rosita`
-self-update via the same script. *(The link resolves once the first release is
-tagged — until then, use the from-source path below.)* Windows isn't built yet
-(rosita is unix-only today); use WSL there.
+ARM64). The installer drops `rosita` on your `PATH`; from then on `rosita update`
+self-updates in place. Windows isn't built yet (rosita is unix-only today); use
+WSL there.
 
 **From source** — requires a stable Rust toolchain (1.85+) and the `git` CLI
 (used for repo detection; no libgit2 build dependency):
@@ -268,14 +272,15 @@ ln -s "$PWD/skills/rosita-migrate" ~/.claude/skills/rosita-migrate
 | `rosita sync [init [url] \| clone <url>]` | Sync your global config across machines (git-backed); bare `sync` pulls + pushes. See [Sync across machines](#sync-across-machines). |
 | `rosita detect [--json] [--probes]` | Detect and print the current context; `--probes` also runs environment providers (host/toolchain/ai-tools/tailnet/docker). |
 | `rosita explain [--agent <id>\|all] [--json]` | Show what was detected, which profiles matched their `targets`, the selected one, and the write plan. |
-| `rosita render [--agent <id>\|all] [--no-override] [--force]` | Render the overlay(s) for the selected profile and wire them up. |
-| `rosita run <id> [args…] [--skip-render] [--no-override]` | Render for a launchable agent, then exec it (args passed through). |
-| `rosita refresh [--agent <id>\|all] [--force]` | Re-render already-initialized overlays (no-op if context unchanged). |
+| `rosita render [--agent <id>\|all] [--override\|--no-override] [--force]` | Render the overlay(s) for the selected profile and wire them up. |
+| `rosita run <id> [args…] [--skip-render] [--override\|--no-override]` | Render for a launchable agent, then exec it (args passed through). |
+| `rosita refresh [--agent <id>\|all] [--override\|--no-override] [--force]` | Re-render already-initialized overlays (no-op if context unchanged). |
 | `rosita clean [--agent <id>\|all]` | Remove rosita-generated overlays + managed blocks (never touches committed files). |
-| `rosita doctor` | Diagnose environment, config, agents, templates, overlay freshness, public-config leaks, and repo-declared caps/profiles. |
+| `rosita doctor` | Diagnose environment, config, agents, templates, overlay freshness, public-config leaks, and repo-declared fragments/profiles. |
 | `rosita fragments [list\|show <id>] [--json]` | List your fragment library (active ones marked), or show one in detail. |
 | `rosita profiles [--json]` | List your profiles with their `targets`, marking which match and which is selected. |
 | `rosita agents [--json]` | List configured agents and how each delivers the overlay. |
+| `rosita update [--check]` | Self-update to the latest release (installer-based installs); `--check` only reports availability. |
 
 `<id>` is an agent id — built-ins are `claude`, `codex`, `gemini`, `opencode`,
 `copilot`, `generic` (plus any you add via `[[agents]]`). `--agent` defaults to
@@ -338,9 +343,9 @@ fragments = ["rust-conventions", "terse-comms"]
 ```
 
 - **Targets:** the coarse detected tags — `rust`, `node`, `nextjs`, `go`,
-  `python`, `android`, `java`, and `machine` (the no-repo context). A profile is
-  a candidate when **any** of its targets matches; rosita then picks one (see
-  [the model](#the-model-in-60-seconds)).
+  `python`, `java`, `ruby`, `php`, `swift`, `dotnet`, and `machine` (the no-repo
+  context). A profile is a candidate when **any** of its targets matches; rosita
+  then picks one (see [the model](#the-model-in-60-seconds)).
 - **Fragment `when` self-gate:** a fragment may carry `when` rules (fields
   `stack`, `language`, `package_manager`, `path`, `branch`, `repo`, `host_class`,
   `os`, `arch`; ops `equals`, `starts_with`, `contains`, `matches`) so it only
@@ -456,10 +461,8 @@ Full docs live in [`docs/`](docs/):
 
 - [Concepts](docs/concepts.md) · [Configuration](docs/configuration.md) ·
   [Security & trust](docs/security.md) — for consumers.
-- [Studio design](docs/studio-design.md) ·
-  [Architecture](docs/architecture.md) · [Extending](docs/extending.md) ·
+- [Architecture](docs/architecture.md) · [Extending](docs/extending.md) ·
   [Testing](docs/testing.md) — for devs.
-- [Implementation plan](docs/implementation-plan.md) — the roadmap.
 
 ## Architecture
 
@@ -479,7 +482,7 @@ shell over it (see [docs/architecture.md](docs/architecture.md)).
 ## Testing
 
 ```bash
-cargo test       # 210 unit + end-to-end + studio tests
+cargo test       # 263 unit + end-to-end + studio tests
 cargo clippy --all-targets
 cargo fmt --check
 ```

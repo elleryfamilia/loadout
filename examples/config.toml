@@ -118,10 +118,11 @@ a PR over pushing to shared branches.
 # cache = "30s"
 
 # A repo uses ONE profile, chosen by language/platform. Each profile is tied to
-# coarse `targets` (rust | node | nextjs | go | python | android | java |
-# machine). On `rosita run`/`render`: 0 targets match → no profile (empty
-# overlay); exactly 1 → auto-used; 2+ → you're asked once and the choice is
-# remembered per-project in the gitignored local.toml `[binding]`.
+# coarse `targets` (rust | node | nextjs | go | python | java | ruby | php |
+# swift | dotnet | machine). On `rosita run`/`render`: 0 targets match → a
+# no-targets "default" profile if you have one, else no profile (empty overlay);
+# exactly 1 → auto-used; 2+ → you're asked once and the choice is remembered
+# per-project in the gitignored local.toml `[binding]`.
 # A profile renders its `fragments` in order (deduped, `requires`-resolved,
 # per-fragment `when`-filtered). Profiles are self-contained — there is no
 # always-on base layered underneath — so each one composes the shared essentials

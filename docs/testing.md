@@ -9,7 +9,7 @@ walkthrough** that drives the real CLI in a sandbox. The output below is real
 ```bash
 git clone https://github.com/elleryfamilia/rosita
 cd rosita
-cargo test                      # → 210 tests passing
+cargo test                      # → 263 tests passing
 cargo clippy --all-targets      # → no warnings
 cargo fmt --check               # → clean
 ```
@@ -18,17 +18,16 @@ cargo fmt --check               # → clean
 drives the studio HTTP handlers; the lib tests cover detection, **pick-one
 selection + the per-project binding**, the comment-preserving **studio
 `toml_edit` write engine** (stage/diff/apply), fragment-params merge, the
-providers' pure parsers, the cache TTL, trust, rendering, atomic writes, and
+providers' pure parsers, the cache TTL, rendering, atomic writes, and
 redaction. All three green ⇒ the build is sound.
 
 ## Level 2 — Hands-on walkthrough (sandboxed)
 
 **Why a sandbox:** fragments and profiles are **global-only**, so rosita
-writes them into your global config dir (`~/.config/rosita`, where the trust
-store also lives); in a repo it writes only the gitignored overlay, the binding,
-and `.gitignore`. To kick the tires without touching your real config or any real
-project, use a throwaway git repo plus an isolated config dir via
-`ROSITA_CONFIG_DIR`.
+writes them into your global config dir (`~/.config/rosita`); in a repo it writes
+only the gitignored overlay, the binding, and `.gitignore`. To kick the tires
+without touching your real config or any real project, use a throwaway git repo
+plus an isolated config dir via `ROSITA_CONFIG_DIR`.
 
 ### Setup
 
@@ -191,7 +190,7 @@ rosita doctor | grep "global-only"
 rm .rosita/config.toml
 ```
 
-### 8. Dynamic fragments, providers & trust
+### 8. Dynamic fragments & providers
 
 `host-info` above is a built-in **provider** — always safe, no trust needed.
 Providers (`host`/`toolchain`/`ai-tools`/`tailnet`/`docker`) probe the live
@@ -233,7 +232,7 @@ throwaway one.
 
 ## What "passing" looks like
 
-- **Level 1:** green tests / clippy / fmt (210 tests).
+- **Level 1:** green tests / clippy / fmt (263 tests).
 - **Level 2:** `rust` auto-selected as the **one** profile; `infra-caution`
   gated in only under `infra/`; the dynamic `host-info` output rendered into the
   overlay; a repo-declared fragment flagged as **ignored** (global-only); and

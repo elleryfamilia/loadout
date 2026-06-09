@@ -14,10 +14,6 @@ keeping it fresh and never leaking secrets.
 - [Architecture](architecture.md) — modules, trait seams, and the render pipeline (reflects the current code).
 - [Extending](extending.md) — add an agent, a fragment, a provider, a detector, or a rule.
 
-## Roadmap / execution
-- [Implementation plan](implementation-plan.md) — the detailed, phased plan to build fragments, the public/private layer, native environment providers, and dynamic fragments on top of the current MVP.
-
 ## Status legend
-Throughout these docs:
-- **(implemented)** — shipped in the current binary.
-- **(planned)** — designed and specified in the [implementation plan](implementation-plan.md), not yet built.
+Sections are marked **(implemented)** — shipped in the current binary. Everything
+documented here ships today.

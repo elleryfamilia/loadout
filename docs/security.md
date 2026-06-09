@@ -63,7 +63,7 @@ Dynamic fragments can run code at render time, so the surface is kept small:
 - **Fragments are global-only** (see [configuration](configuration.md)).
   They're honored only from your built-in / global / global-local config — *you*
   author them. A cloned repo cannot contribute a fragment at all: repo-declared
-  caps are dropped by the loader and `doctor` flags them. So there's no
+  fragments are dropped by the loader and `doctor` flags them. So there's no
   "untrusted command from a cloned repo" to gate — the global-only model removes
   that surface rather than prompting for it (there is no `rosita allow`).
 - Provider/command output is treated as sensitive (see the split above):

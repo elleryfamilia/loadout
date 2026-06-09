@@ -11,11 +11,10 @@
 //! - [`assets`] — CSS + the htmx-shim JS, embedded via `rust-embed`.
 //!
 //! The full read+write UI is shipped: the library and ReadOnly live preview,
-//! the fragment editor (static + script caps, run-on-demand), the profile
+//! the fragment editor (static + script fragments, run-on-demand), the profile
 //! composer (targets + fragment picker), stage → diff → apply, the leak
 //! banner, the starter-pack gallery (`GET /packs`, `POST /packs/<id>/apply`),
 //! and the fresh-config onboarding (`GET /onboarding/quickstart`).
-//! See `docs/studio-design.md`.
 
 pub mod assets;
 pub mod edit;
