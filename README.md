@@ -7,6 +7,12 @@ that fits each project, so you're not pasting the same `CLAUDE.md` into every re
 and every tool.
 
 <p align="center">
+  <img src="docs/screenshots/profiles.png" alt="rosita studio — the Profiles tab: composing a machine profile from fragments, with live script re-runs" width="49%">
+  <img src="docs/screenshots/fragments.png" alt="rosita studio — the Fragments tab: the reusable guidance library, grouped by category" width="49%">
+</p>
+<p align="center"><sub><i><code>rosita studio</code> — composing a profile (left) and the fragment library (right).</i></sub></p>
+
+<p align="center">
   <img src="docs/diagrams/journey.svg" alt="How you use rosita: run rosita studio to author fragments and reusable profiles; run rosita run to detect your stack, select the right profile, and inject the global context into the agent — wired per agent through each one's native gitignored hook." width="900">
 </p>
 
