@@ -24,7 +24,6 @@ fn main() -> ExitCode {
 
     let result = match &cli.command {
         Command::Detect(args) => commands::detect::run(&rt, args),
-        Command::Render(args) => commands::render::run(&rt, args),
         Command::Run(args) => commands::run::run(&rt, args),
         Command::Explain(args) => commands::explain::run(&rt, args),
         Command::Refresh(args) => commands::refresh::run(&rt, args),

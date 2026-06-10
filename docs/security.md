@@ -69,7 +69,7 @@ Dynamic fragments can run code at render time, so the surface is kept small:
 - Provider/command output is treated as sensitive (see the split above):
   local/gitignored only, redacted, never committed.
 
-So `rosita render` in a cloned repo composes only *your* global library — it
+So `rosita refresh` in a cloned repo composes only *your* global library — it
 never reads or runs what the repo itself declares.
 
 ## Threat model summary

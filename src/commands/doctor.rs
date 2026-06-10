@@ -467,7 +467,7 @@ fn check_overlays(c: &mut Checks, prep: &super::Prepared) {
     if !found {
         c.line(
             Status::Warn,
-            "no overlays generated yet (run `rosita render`)",
+            "no overlays generated yet (run `rosita refresh`)",
         );
     }
 }

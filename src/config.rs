@@ -65,7 +65,7 @@ pub struct Config {
 /// (`rosita sync init`), so they never act on a machine that opted out.
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncConfig {
-    /// Pull the latest config before `run`/`render`/`refresh` (throttled by
+    /// Pull the latest config before `run`/`refresh` (throttled by
     /// `pull_max_age`, bounded by `timeout`, best-effort).
     pub auto_pull: bool,
     /// Commit + push after an apply (studio / future CLI edits). Best-effort.
@@ -232,7 +232,7 @@ fn strip_global_only(layer: crate::fragment::Layer, parsed: &mut RawConfig) {
         // the project. Agents are global-only, exactly like fragments and targets.
         parsed.agents.clear();
         // The remaining global-only operational tables:
-        //   - `[defaults]` (`agent`) selects which agent `run`/`render` uses.
+        //   - `[defaults]` (`agent`) selects which agent `run`/`refresh` uses.
         //   - `[sync]` drives git pull/push against your GLOBAL config dir.
         //   - `[codex]` toggles writing an override file and output limits.
         //   - `[env]` widens which environment variables are surfaced into the

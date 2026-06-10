@@ -122,7 +122,7 @@ Write plan
     updated  CLAUDE.local.md       # managed @import block → the overlay
 
 # 3. Render the overlay and wire it into the agent's file:
-$ rosita render --agent claude
+$ rosita refresh --agent claude
 claude  ·  profile rust  ·  sha256:a1fb087e1a81…
   created       .rosita/generated/claude.md
   created       CLAUDE.local.md        (@import block → the overlay)
@@ -294,9 +294,8 @@ rosita stops touching them.
 | `rosita sync [init [url] \| clone <url>]` | Sync your global config across machines (git-backed); bare `sync` pulls + pushes. See [Sync across machines](#sync-across-machines). |
 | `rosita detect [--json] [--probes]` | Detect and print the current context; `--probes` also runs environment providers (host/toolchain/ai-tools/tailnet/docker). |
 | `rosita explain [--agent <id>\|all] [--json]` | Show what was detected, which profiles matched their `targets`, the selected one, and the write plan. |
-| `rosita render [--agent <id>\|all] [--override\|--no-override] [--force]` | Render the overlay(s) for the selected profile and wire them up. |
-| `rosita run <id> [args…] [--skip-render] [--override\|--no-override]` | Render for a launchable agent, then exec it (args passed through). |
-| `rosita refresh [--agent <id>\|all] [--override\|--no-override] [--force]` | Re-render already-initialized overlays (no-op if context unchanged). |
+| `rosita run <id> [args…] [--skip-render] [--override\|--no-override]` | Pull latest config, render for a launchable agent, then exec it (args passed through). |
+| `rosita refresh [--agent <id>\|all] [--override\|--no-override] [--force]` | Pull latest config, then (re-)render overlays — already-initialized ones by default, or the named agent (which also first-adopts it). No-op if context unchanged. |
 | `rosita clean [--agent <id>\|all]` | Remove rosita-generated overlays + managed blocks (never touches committed files). |
 | `rosita doctor` | Diagnose environment, config, agents, templates, overlay freshness, public-config leaks, and repo-declared fragments/profiles. |
 | `rosita fragments [list\|show <id>] [--json]` | List your fragment library (active ones marked), or show one in detail. |

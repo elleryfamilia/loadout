@@ -4,13 +4,13 @@
 //! loading config, detecting context, selecting a profile, and resolving the
 //! target agent set — lives here.
 
+pub mod apply;
 pub mod clean;
 pub mod detect;
 pub mod doctor;
 pub mod explain;
 pub mod introspect;
 pub mod refresh;
-pub mod render;
 pub mod run;
 pub mod skill;
 pub mod sync;

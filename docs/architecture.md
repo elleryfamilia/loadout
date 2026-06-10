@@ -36,7 +36,7 @@ cwd → repo_base → Config::load → detect_context → select (one profile by
 | Module | Responsibility |
 | --- | --- |
 | `cli` | clap definitions; agents selected by id string, validated at runtime. |
-| `commands/` | one file per subcommand (`detect`/`render`/`run`/`explain`/`refresh`/`clean`/`doctor`/`introspect` (`fragments`/`profiles`/`agents`)) + shared `prepare()`/`resolve_agents()`. (`studio` lives in `studio/`.) |
+| `commands/` | one file per subcommand (`detect`/`run`/`explain`/`refresh`/`clean`/`doctor`/`introspect` (`fragments`/`profiles`/`agents`)) + shared `prepare()`/`resolve_agents()` and the render/sync plumbing in `apply`. (`studio` lives in `studio/`.) |
 | `config` | layered TOML model; per-layer `RawConfig` (all-optional) merged then finalized. Built-in **agents** are defaults (merged by id); **fragments and profiles are global-only** and never injected from built-ins. `Config::from_layer_strs` assembles staged docs in-memory (origin-tagged) for studio. |
 | `context/` | `Context` (+ `Scope` repo/machine, `selection_targets()`) + the `ContextDetector` trait and detectors: `git`, `languages`, `commands`, `system`, `env`. |
 | `fragment` | `Fragment` (reusable guidance atom) + `Risk` + the read-only shipped `palette()` (starters to duplicate from, never auto-composed). |

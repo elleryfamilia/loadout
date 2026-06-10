@@ -1,16 +1,28 @@
-//! `rosita refresh` — re-render overlays for already-initialized agents.
+//! `rosita refresh` — pull the latest config, then (re-)render overlays.
 //!
 //! Without `--agent`, refreshes every agent whose generated overlay already
-//! exists; if none do, falls back to the default agent. Hash-skipping means a
+//! exists; if none do, falls back to the default agent. With `--agent` it
+//! renders and wires that agent even if it was never initialized here — this
+//! is also how an agent is first adopted in a repo. Hash-skipping means a
 //! refresh with no context change is a cheap no-op (unless `--force`).
 
+use super::apply::{self, print_sync_step, sync_before_render};
 use super::{prepare_live, resolve_agents, Prepared, Runtime};
 use crate::adapters::ApplyOptions;
 use crate::cli::RefreshArgs;
 use crate::config;
+use crate::style::Painter;
 
 /// Entry point for `rosita refresh`.
 pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
+    let p = Painter::auto();
+
+    // Pull the latest config first — best-effort, throttled, timeout-bounded;
+    // it never blocks the refresh. Done before `prepare_live` so the render
+    // below composes freshly-pulled fragments/profiles.
+    let sync_status = sync_before_render(rt);
+    print_sync_step(&p, &sync_status);
+
     let prep = prepare_live(rt)?;
 
     let agents: Vec<String> = match &args.agent {
@@ -37,9 +49,9 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
     if rt.dry_run {
         println!("dry run — no files will be written\n");
     }
-    let results = super::render::apply_for_agents(rt, &prep, &agents, &opts)?;
+    let results = apply::apply_for_agents(rt, &prep, &agents, &opts)?;
     for (agent, result) in &results {
-        super::render::print_result(agent, prep.profile_label(), result);
+        apply::print_result(agent, prep.profile_label(), result);
     }
     Ok(())
 }

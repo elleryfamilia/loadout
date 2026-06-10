@@ -84,7 +84,7 @@ for f in ~/.claude/CLAUDE.md ~/.codex/AGENTS.md ~/.config/AGENTS.md ./CLAUDE.md 
 
 7. **Wrap up.** Tell the user their original `CLAUDE.md`/`AGENTS.md` are
    untouched (rosita is additive). To wire an agent inside a repo:
-   `rosita run claude` (or `rosita render --agent claude`) — repo setup is
+   `rosita run claude` (or `rosita refresh --agent claude`) — repo setup is
    automatic, no `init` needed.
 
 ## Rules

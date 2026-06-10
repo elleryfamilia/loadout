@@ -136,7 +136,7 @@ Same profile, but now `infra-caution` contributes — its `when` matches the
 ### 5. Render the overlay and inspect it
 
 ```bash
-rosita render --agent claude
+rosita refresh --agent claude
 cat .rosita/generated/claude.md
 ```
 ```

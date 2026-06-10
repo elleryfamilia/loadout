@@ -7,7 +7,7 @@
 //! and non-fatal**: a slow/offline remote degrades to "use the local config",
 //! never a hang and never a failed `rosita run`.
 //!
-//! Auto-pull (before run/render) is throttled by `[sync] pull_max_age`; auto-push
+//! Auto-pull (before run/refresh) is throttled by `[sync] pull_max_age`; auto-push
 //! (after an apply) is best-effort. `rosita sync` is the manual force.
 
 use std::path::{Path, PathBuf};

@@ -139,14 +139,14 @@ fn detect_emits_json_with_rust_stack() {
 }
 
 #[test]
-fn render_claude_creates_overlay_marker_and_gitignore() {
+fn refresh_claude_creates_overlay_marker_and_gitignore() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.rust_profile();
     fx.git_init(); // gitignore management only applies inside a repo
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("claude"))
@@ -175,7 +175,7 @@ fn render_claude_creates_overlay_marker_and_gitignore() {
 }
 
 #[test]
-fn render_in_non_repo_writes_overlay_but_no_gitignore() {
+fn refresh_in_non_repo_writes_overlay_but_no_gitignore() {
     // First-class non-repo use case (e.g. running in $HOME): the overlay and
     // the CLAUDE.local.md import are written, but no stray .gitignore is made.
     let fx = Fixture::new(); // deliberately NOT a git repo
@@ -183,7 +183,7 @@ fn render_in_non_repo_writes_overlay_but_no_gitignore() {
     fx.rust_profile();
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("profile rust"));
@@ -203,7 +203,7 @@ fn render_in_non_repo_writes_overlay_but_no_gitignore() {
 }
 
 #[test]
-fn render_at_home_withholds_the_bleeding_importer() {
+fn refresh_at_home_withholds_the_bleeding_importer() {
     // When repo_base is $HOME, a managed CLAUDE.local.md there would be inherited
     // by every repo underneath it (agents walk the tree upward) — the "bleed".
     // rosita must still write the gitignored overlay, but NOT wire the importer.
@@ -213,7 +213,7 @@ fn render_at_home_withholds_the_bleeding_importer() {
 
     fx.cmd()
         .env("HOME", fx.repo_path()) // make repo_base look like $HOME
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("$HOME"));
@@ -229,17 +229,17 @@ fn render_at_home_withholds_the_bleeding_importer() {
 }
 
 #[test]
-fn render_is_idempotent() {
+fn refresh_is_idempotent() {
     let fx = Fixture::new();
     fx.rust_project();
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
     // Second render: nothing changed → reported unchanged.
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("unchanged"));
@@ -258,7 +258,7 @@ fn editing_the_global_library_re_renders_a_repo_with_unchanged_context() {
          \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
     );
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
     assert!(fx
@@ -267,7 +267,7 @@ fn editing_the_global_library_re_renders_a_repo_with_unchanged_context() {
 
     // No change → still idempotent.
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("unchanged"));
@@ -279,7 +279,7 @@ fn editing_the_global_library_re_renders_a_repo_with_unchanged_context() {
          \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
     );
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
 
@@ -293,13 +293,13 @@ fn editing_the_global_library_re_renders_a_repo_with_unchanged_context() {
 }
 
 #[test]
-fn render_preserves_user_content_in_claude_local() {
+fn refresh_preserves_user_content_in_claude_local() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.write("CLAUDE.local.md", "# My personal notes\n\nKeep this.\n");
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
 
@@ -318,7 +318,7 @@ fn codex_writes_override_by_default() {
 
     // No flag: codex now wires up out of the box (parity with claude).
     fx.cmd()
-        .args(["render", "--agent", "codex"])
+        .args(["refresh", "--agent", "codex"])
         .assert()
         .success();
 
@@ -337,7 +337,7 @@ fn codex_no_override_is_emit_only() {
     fx.write("AGENTS.md", "# Hand-written AGENTS\n\nDo not clobber.\n");
 
     fx.cmd()
-        .args(["render", "--agent", "codex", "--no-override"])
+        .args(["refresh", "--agent", "codex", "--no-override"])
         .assert()
         .success()
         .stdout(predicate::str::contains("override writing is OFF"));
@@ -358,7 +358,7 @@ fn codex_override_reseeds_base_when_agents_md_changes() {
     fx.write("AGENTS.md", "# Base\n\nfirst marker.\n");
 
     fx.cmd()
-        .args(["render", "--agent", "codex"])
+        .args(["refresh", "--agent", "codex"])
         .assert()
         .success();
     assert!(fx.read("AGENTS.override.md").contains("first marker."));
@@ -367,7 +367,7 @@ fn codex_override_reseeds_base_when_agents_md_changes() {
     // still re-seed from the new AGENTS.md (no --force needed).
     fx.write("AGENTS.md", "# Base\n\nsecond marker.\n");
     fx.cmd()
-        .args(["render", "--agent", "codex"])
+        .args(["refresh", "--agent", "codex"])
         .assert()
         .success();
 
@@ -383,7 +383,7 @@ fn codex_override_merges_existing_agents_md() {
     fx.write("AGENTS.md", "# Hand-written AGENTS\n\nPreserve me.\n");
 
     fx.cmd()
-        .args(["render", "--agent", "codex", "--override"])
+        .args(["refresh", "--agent", "codex", "--override"])
         .assert()
         .success();
 
@@ -405,7 +405,7 @@ fn dry_run_writes_nothing() {
     fx.rust_project();
 
     fx.cmd()
-        .args(["--dry-run", "render", "--agent", "claude"])
+        .args(["--dry-run", "refresh", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("dry run"))
@@ -433,7 +433,7 @@ fn explain_reports_selection_and_plan() {
 }
 
 #[test]
-fn render_auto_manages_gitignore_and_init_is_gone() {
+fn refresh_auto_manages_gitignore_and_init_is_gone() {
     // There is no `rosita init` — a repo needs no scaffolding. Rendering an
     // agent gitignores everything rosita manages, automatically.
     let fx = Fixture::new();
@@ -448,7 +448,7 @@ fn render_auto_manages_gitignore_and_init_is_gone() {
         .stderr(predicate::str::contains("unrecognized subcommand"));
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
     let gi = fx.read(".gitignore");
@@ -484,7 +484,7 @@ fn local_toml_supplies_private_params_to_fragments() {
     );
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
 
@@ -636,12 +636,12 @@ fn doctor_runs_and_reports() {
 }
 
 #[test]
-fn render_all_six_agents_emit_gitignored_overlays() {
+fn refresh_all_six_agents_emit_gitignored_overlays() {
     let fx = Fixture::new();
     fx.rust_project();
 
     fx.cmd()
-        .args(["render", "--agent", "all"])
+        .args(["refresh", "--agent", "all"])
         .assert()
         .success();
 
@@ -676,7 +676,7 @@ fn gemini_auto_wires_local_import_and_registers_settings() {
     fx.write("GEMINI.md", "# Team GEMINI\n\nKeep me.\n");
 
     fx.cmd()
-        .args(["render", "--agent", "gemini"])
+        .args(["refresh", "--agent", "gemini"])
         .assert()
         .success();
 
@@ -700,7 +700,7 @@ fn gemini_auto_wires_local_import_and_registers_settings() {
     // Idempotent: a second render leaves settings byte-identical.
     let before = fx.read_home(".gemini/settings.json");
     fx.cmd()
-        .args(["render", "--agent", "gemini"])
+        .args(["refresh", "--agent", "gemini"])
         .assert()
         .success();
     assert_eq!(fx.read_home(".gemini/settings.json"), before);
@@ -718,7 +718,7 @@ fn gemini_warns_when_workspace_settings_would_mask_registration() {
     );
 
     fx.cmd()
-        .args(["render", "--agent", "gemini"])
+        .args(["refresh", "--agent", "gemini"])
         .assert()
         .success()
         .stdout(predicate::str::contains("overrides the home registration"));
@@ -732,7 +732,7 @@ fn opencode_registers_overlay_path_in_global_config() {
     fx.write("opencode.json", "{\"$schema\":\"x\"}\n");
 
     fx.cmd()
-        .args(["render", "--agent", "opencode"])
+        .args(["refresh", "--agent", "opencode"])
         .assert()
         .success();
 
@@ -750,7 +750,7 @@ fn opencode_registers_overlay_path_in_global_config() {
     // Idempotent: a second render leaves the global config byte-identical.
     let before = fx.read_home(".config/opencode/opencode.json");
     fx.cmd()
-        .args(["render", "--agent", "opencode"])
+        .args(["refresh", "--agent", "opencode"])
         .assert()
         .success();
     assert_eq!(fx.read_home(".config/opencode/opencode.json"), before);
@@ -784,7 +784,7 @@ fn copilot_render_writes_nested_overlay_without_touching_committed_files() {
     fx.rust_project();
 
     fx.cmd()
-        .args(["render", "--agent", "copilot"])
+        .args(["refresh", "--agent", "copilot"])
         .assert()
         .success()
         .stdout(predicate::str::contains("COPILOT_CUSTOM_INSTRUCTIONS_DIRS"));
@@ -824,7 +824,7 @@ fn overlay_has_self_healing_banner() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
     let overlay = fx.read(".rosita/generated/claude.md");
@@ -834,12 +834,12 @@ fn overlay_has_self_healing_banner() {
 }
 
 #[test]
-fn render_in_repo_gitignores_the_importer() {
+fn refresh_in_repo_gitignores_the_importer() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.git_init();
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
     // We created CLAUDE.local.md, so it must be gitignored (it's a derived,
@@ -855,7 +855,7 @@ fn clean_removes_rosita_artifacts() {
     fx.rust_project();
     fx.git_init();
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
     assert!(fx.exists(".rosita/generated/claude.md"));
@@ -876,7 +876,7 @@ fn clean_preserves_user_content_in_importer() {
     fx.rust_project();
     fx.write("CLAUDE.local.md", "# my notes\n\nkeep this\n");
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
 
@@ -897,7 +897,7 @@ fn unknown_agent_is_an_error() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.cmd()
-        .args(["render", "--agent", "nope"])
+        .args(["refresh", "--agent", "nope"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unknown agent 'nope'"));
@@ -916,7 +916,7 @@ fn custom_agent_via_config_is_first_class() {
     );
 
     fx.cmd()
-        .args(["render", "--agent", "myagent"])
+        .args(["refresh", "--agent", "myagent"])
         .assert()
         .success();
     assert!(fx.exists(".rosita/generated/myagent.md"));
@@ -954,7 +954,7 @@ fn profile_composes_its_fragment_set_with_no_baseline() {
     );
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("profile rust"));
@@ -998,7 +998,7 @@ fn user_fragment_via_config_is_composed() {
     );
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
 
@@ -1062,7 +1062,7 @@ fn dynamic_provider_fragment_renders_live_output() {
     );
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
     let overlay = fx.read(".rosita/generated/claude.md");
@@ -1088,7 +1088,7 @@ fn global_layer_command_runs() {
     );
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
     let overlay = fx.read(".rosita/generated/claude.md");
@@ -1116,7 +1116,7 @@ fn repo_command_fragment_is_ignored() {
     );
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success();
     let overlay = fx.read(".rosita/generated/claude.md");
@@ -1255,7 +1255,7 @@ fn ambiguous_profiles_render_empty_and_warn() {
     fx.author(TWO_RUST_PROFILES);
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
         .stderr(predicate::str::contains("profiles match this project"))
@@ -1277,7 +1277,7 @@ fn binding_in_local_toml_selects_profile_without_prompt() {
     fx.write(".rosita/local.toml", "[binding]\nprofile = \"rust-b\"\n");
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
         .stdout(predicate::str::contains("profile rust-b"))
@@ -1304,7 +1304,7 @@ fn stale_binding_targets_hash_redetects() {
     );
 
     fx.cmd()
-        .args(["render", "--agent", "claude"])
+        .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
         .stderr(predicate::str::contains("profiles match this project"))
@@ -1472,4 +1472,90 @@ fn dry_run_skill_install_writes_nothing() {
         .success()
         .stdout(predicate::str::contains("would install"));
     assert!(!fx.home_exists(".agents"));
+}
+
+/// `refresh` pulls the latest global config before rendering when the config
+/// dir is synced (a git repo with a remote): a fragment edit pushed from
+/// another machine must land in the overlay without a manual `rosita sync`.
+#[test]
+fn refresh_auto_pulls_synced_global_config() {
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            // Isolate from the developer's ~/.gitconfig (gpgsign, hooks,
+            // init.defaultBranch) so the test behaves the same everywhere.
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "git {args:?} failed in {}", dir.display());
+    }
+    fn identify(dir: &std::path::Path) {
+        git(dir, &["config", "user.email", "test@example.com"]);
+        git(dir, &["config", "user.name", "Test"]);
+    }
+    fn config_v(guidance: &str) -> String {
+        format!(
+            "[sync]\npull_max_age = \"0s\"\n\n\
+             [[fragments]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"{guidance}\"\n\
+             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n"
+        )
+    }
+
+    let fx = Fixture::new();
+    fx.rust_project();
+
+    // The machine's config dir, committed and wired to a bare remote.
+    fx.author(&config_v("SYNC-ONE guidance."));
+    let cfg = fx.global.path().join("empty");
+    let remote = fx.global.path().join("remote.git");
+    // `-b main` on the bare repo too: without it, HEAD points at the host
+    // git's default branch and the writer clone below checks out nothing.
+    git(
+        fx.global.path(),
+        &["init", "-q", "--bare", "-b", "main", "remote.git"],
+    );
+    git(&cfg, &["init", "-q", "-b", "main"]);
+    identify(&cfg);
+    git(&cfg, &["add", "-A"]);
+    git(&cfg, &["commit", "-q", "-m", "v1"]);
+    git(&cfg, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    git(&cfg, &["push", "-q", "-u", "origin", "main"]);
+
+    // "Another machine" pushes a fragment edit.
+    let writer = fx.global.path().join("writer");
+    git(
+        fx.global.path(),
+        &["clone", "-q", remote.to_str().unwrap(), "writer"],
+    );
+    identify(&writer);
+    fs::write(writer.join("config.toml"), config_v("SYNC-TWO guidance.")).unwrap();
+    git(&writer, &["commit", "-aqm", "v2"]);
+    git(&writer, &["push", "-q"]);
+
+    // `refresh` must auto-pull (throttle window is 0s) and render v2.
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pulled"));
+    let overlay = fx.read(".rosita/generated/claude.md");
+    assert!(
+        overlay.contains("SYNC-TWO"),
+        "refresh must compose the freshly-pulled config; got:\n{overlay}"
+    );
+}
+
+/// `render` was consolidated into `refresh` in 0.5.0 — the subcommand must be
+/// gone, not silently aliased.
+#[test]
+fn render_subcommand_is_gone() {
+    let fx = Fixture::new();
+    fx.cmd()
+        .args(["render", "--agent", "claude"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
 }

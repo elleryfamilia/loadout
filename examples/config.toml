@@ -15,7 +15,7 @@
 # you to review and Apply. What follows is the same idea written by hand.
 
 [defaults]
-# Agent used when `rosita render` / `rosita run` omit --agent.
+# Default agent when `rosita refresh` finds no overlays and --agent is omitted.
 agent = "claude"
 
 [env]
@@ -119,7 +119,7 @@ a PR over pushing to shared branches.
 
 # A repo uses ONE profile, chosen by language/platform. Each profile is tied to
 # coarse `targets` (rust | node | nextjs | go | python | java | ruby | php |
-# swift | dotnet | machine). On `rosita run`/`render`: 0 targets match → a
+# swift | dotnet | machine). On `rosita run`/`refresh`: 0 targets match → a
 # no-targets "default" profile if you have one, else no profile (empty overlay);
 # exactly 1 → auto-used; 2+ → you're asked once and the choice is remembered
 # per-project in the gitignored local.toml `[binding]`.

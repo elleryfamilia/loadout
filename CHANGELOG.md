@@ -8,6 +8,25 @@ All notable changes to rosita are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Changed
+
+- `rosita refresh` now auto-pulls the synced global config before rendering
+  (same best-effort, throttled, timeout-bounded pull `rosita run` does), so a
+  refresh from inside a running agent session also picks up edits pushed from
+  other machines.
+- `--dry-run` no longer performs the auto-pull on `run` (or `refresh`): dry
+  runs touch neither disk nor network.
+
+### Removed
+
+- **Breaking:** the `rosita render` subcommand. `rosita refresh` is the single
+  no-launch render verb — bare `refresh` re-renders already-initialized
+  overlays, and `refresh --agent <id>` renders (and first-adopts) that agent
+  exactly as `render --agent <id>` did. Replace `rosita render` with
+  `rosita refresh` in scripts.
+
 ## 0.4.0 — 2026-06-10
 
 ### Added

@@ -46,13 +46,13 @@ pub struct GlobalArgs {
 pub enum Command {
     /// Detect and print the current context.
     Detect(DetectArgs),
-    /// Render the overlay for an agent and wire it up.
-    Render(RenderArgs),
-    /// Render then launch an agent (claude/codex), passing through args.
+    /// Pull the latest config, render, then launch an agent (claude/codex),
+    /// passing through args.
     Run(RunArgs),
     /// Explain what would be selected and written, and why.
     Explain(ExplainArgs),
-    /// Re-render overlays for already-initialized agents.
+    /// Pull the latest config, then (re-)render overlays (`--agent` to target
+    /// or first-adopt one).
     Refresh(RefreshArgs),
     /// Remove rosita-generated overlays and managed blocks for an agent.
     Clean(CleanArgs),
@@ -207,23 +207,6 @@ pub struct DetectArgs {
     pub probes: bool,
 }
 
-/// `render` options.
-#[derive(Debug, Args)]
-pub struct RenderArgs {
-    /// Agent id to render for, or `all` (defaults to the config default agent).
-    #[arg(long)]
-    pub agent: Option<String>,
-    /// Force-write Codex's `AGENTS.override.md` even if disabled in config.
-    #[arg(long = "override")]
-    pub codex_override: bool,
-    /// Skip Codex's `AGENTS.override.md` (emit-only; leaves `AGENTS.md` untouched).
-    #[arg(long = "no-override", conflicts_with = "codex_override")]
-    pub codex_no_override: bool,
-    /// Re-render even if the context hash is unchanged.
-    #[arg(long)]
-    pub force: bool,
-}
-
 /// `run` options.
 #[derive(Debug, Args)]
 pub struct RunArgs {
@@ -257,7 +240,8 @@ pub struct ExplainArgs {
 /// `refresh` options.
 #[derive(Debug, Args)]
 pub struct RefreshArgs {
-    /// Restrict to an agent id, or `all` (defaults to already-initialized overlays).
+    /// Agent id to render, or `all` (defaults to already-initialized overlays;
+    /// naming an agent renders it even if it was never initialized here).
     #[arg(long)]
     pub agent: Option<String>,
     /// Force-write Codex's `AGENTS.override.md` even if disabled in config.
