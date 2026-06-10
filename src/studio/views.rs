@@ -460,7 +460,7 @@ pub fn skill_card(ids: &[&str], state: &SkillCardState) -> String {
                     span class="muted small" { "remove with " code { "rosita skill remove" } }
                 }
                 SkillCardState::UpgradeAvailable => {
-                    span class="muted small" { "The rosita skills are installed but a newer version ships with this rosita." }
+                    span class="muted small" { "The rosita skills (" strong { (id_list) } ") are installed but a newer version ships with this rosita." }
                     button class="btn btn-ghost"
                         hx-post="/skills/install" hx-target="#skill-card"
                         hx-confirm="Upgrade the rosita skills in ~/.agents/skills? This rewrites the skill files immediately." {
@@ -469,7 +469,7 @@ pub fn skill_card(ids: &[&str], state: &SkillCardState) -> String {
                 }
                 SkillCardState::HandsOff => {
                     span class="muted small" {
-                        "Skills exist in ~/.agents/skills with local edits — rosita leaves them alone."
+                        "Skills (" strong { (id_list) } ") exist in ~/.agents/skills with local edits — rosita leaves them alone."
                     }
                 }
             }

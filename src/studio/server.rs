@@ -2574,8 +2574,9 @@ mod tests {
 
     #[test]
     fn skill_card_route_serves_a_card() {
-        // Read-only against the real $HOME: whatever the install state, the
-        // card names the skill and never errors.
+        // Read-only against the real $HOME, so the install state varies by
+        // machine — every card state must name the skills (the assertion below
+        // is what keeps this test environment-independent).
         let d = rust_repo();
         let st = state_for(d.path(), None);
         let r = route(&st, &req("GET", "/skills/card", "", &[HOST, COOKIE], ""));
