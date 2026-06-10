@@ -228,7 +228,11 @@ fn check_skills(c: &mut Checks) {
                             "{}: link {} is {} — `rosita skill install` repairs it",
                             skill.id,
                             link.path.display(),
-                            if link.state == LinkState::Missing { "missing" } else { "dangling" },
+                            if link.state == LinkState::Missing {
+                                "missing"
+                            } else {
+                                "dangling"
+                            },
                         ),
                     ),
                     LinkState::Foreign => c.line(

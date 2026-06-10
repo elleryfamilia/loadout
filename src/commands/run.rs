@@ -335,7 +335,8 @@ fn maintain_skill(home: &std::path::Path, skill: &skills::Skill, p: &Painter) ->
                 )
             );
         }
-        SkillState::Unmanaged | SkillState::Managed {
+        SkillState::Unmanaged
+        | SkillState::Managed {
             user_modified: true,
             ..
         } => {} // hands off; `rosita doctor` reports the divergence
@@ -393,11 +394,7 @@ fn offer_skills(
         p.dim("(work in Claude Code, Codex, Gemini CLI, opencode)")
     );
     for skill in offerable {
-        println!(
-            "    {} — {}",
-            p.bold(skill.id),
-            skill_blurb(skill.id)
-        );
+        println!("    {} — {}", p.bold(skill.id), skill_blurb(skill.id));
     }
     println!("  install to {}?", p.bold("~/.agents/skills"));
     println!(

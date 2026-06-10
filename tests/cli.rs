@@ -1392,10 +1392,14 @@ fn skill_install_writes_canonical_links_existing_agents_and_records_accepted() {
     // the deny_unknown_fields layer).
     let store = fx.read_global("bindings.toml");
     assert!(store.contains("rosita-migrate = \"accepted\""));
-    fx.cmd().args(["skill", "status"]).assert().success().stdout(
-        predicate::str::contains("installed, current")
-            .and(predicate::str::contains("decision: accepted")),
-    );
+    fx.cmd()
+        .args(["skill", "status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("installed, current")
+                .and(predicate::str::contains("decision: accepted")),
+        );
 }
 
 #[test]
@@ -1434,7 +1438,9 @@ fn skill_install_never_overwrites_user_edits() {
         .assert()
         .success()
         .stdout(predicate::str::contains("left untouched"));
-    assert!(fs::read_to_string(&refpath).unwrap().contains("my own notes"));
+    assert!(fs::read_to_string(&refpath)
+        .unwrap()
+        .contains("my own notes"));
 
     fx.cmd()
         .args(["skill", "status"])

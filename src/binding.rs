@@ -270,7 +270,9 @@ pub fn read_skill_decision_at(store_path: &Path, skill_id: &str) -> Option<Skill
 /// [`write_skill_decision`] against an explicit store path (testable core).
 pub fn write_skill_decision_at(store_path: &Path, skill_id: &str, d: SkillDecision) -> Result<()> {
     let mut store = load(store_path);
-    store.skills.insert(skill_id.to_string(), d.as_str().to_string());
+    store
+        .skills
+        .insert(skill_id.to_string(), d.as_str().to_string());
     save(store_path, &store)
 }
 

@@ -914,7 +914,10 @@ mod tests {
     "#;
 
     fn assert_operational_tables_stripped(c: &Config) {
-        assert_eq!(c.default_agent, "claude", "repo must not change [defaults].agent");
+        assert_eq!(
+            c.default_agent, "claude",
+            "repo must not change [defaults].agent"
+        );
         assert!(c.sync.auto_pull, "repo must not change [sync].auto_pull");
         assert!(c.sync.auto_push, "repo must not change [sync].auto_push");
         assert!(

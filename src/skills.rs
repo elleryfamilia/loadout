@@ -348,7 +348,8 @@ pub fn install(home: &Path, skill: &Skill) -> Result<Vec<InstallAction>> {
             actions.push(InstallAction::UpgradedCanonical(dir.clone()));
         }
         SkillState::Managed {
-            user_modified: true, ..
+            user_modified: true,
+            ..
         } => actions.push(InstallAction::SkippedModified(dir.clone())),
         SkillState::Unmanaged => actions.push(InstallAction::SkippedModified(dir.clone())),
         SkillState::Managed { .. } => actions.push(InstallAction::CanonicalCurrent(dir.clone())),
@@ -503,12 +504,19 @@ mod tests {
         assert!(actions.contains(&InstallAction::Linked(
             h.path().join(".claude/skills").join(MIGRATE.id)
         )));
-        assert!(!h.path().join(".codex").exists(), "codex dir must not be created");
+        assert!(
+            !h.path().join(".codex").exists(),
+            "codex dir must not be created"
+        );
 
         let st = status(h.path(), &MIGRATE);
         assert!(matches!(
             st.state,
-            SkillState::Managed { user_modified: false, upgrade_available: false, .. }
+            SkillState::Managed {
+                user_modified: false,
+                upgrade_available: false,
+                ..
+            }
         ));
         assert!(st
             .links
@@ -552,11 +560,19 @@ mod tests {
         std::fs::write(&refpath, &text).unwrap();
 
         let st = status(h.path(), &MIGRATE);
-        assert!(matches!(st.state, SkillState::Managed { user_modified: true, .. }));
+        assert!(matches!(
+            st.state,
+            SkillState::Managed {
+                user_modified: true,
+                ..
+            }
+        ));
 
         let actions = install(h.path(), &MIGRATE).unwrap();
         assert!(actions.contains(&InstallAction::SkippedModified(dir)));
-        assert!(std::fs::read_to_string(&refpath).unwrap().contains("user note"));
+        assert!(std::fs::read_to_string(&refpath)
+            .unwrap()
+            .contains("user note"));
     }
 
     #[test]
@@ -611,7 +627,11 @@ mod tests {
         let st = status(h.path(), &MIGRATE);
         assert!(matches!(
             st.state,
-            SkillState::Managed { user_modified: false, upgrade_available: true, .. }
+            SkillState::Managed {
+                user_modified: false,
+                upgrade_available: true,
+                ..
+            }
         ));
 
         let actions = install(h.path(), &MIGRATE).unwrap();
@@ -619,7 +639,11 @@ mod tests {
         let st = status(h.path(), &MIGRATE);
         assert!(matches!(
             st.state,
-            SkillState::Managed { user_modified: false, upgrade_available: false, .. }
+            SkillState::Managed {
+                user_modified: false,
+                upgrade_available: false,
+                ..
+            }
         ));
     }
 }

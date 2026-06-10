@@ -2591,7 +2591,10 @@ mod tests {
         // the CSRF guard covers the new immediate-side-effect route too.
         let d = rust_repo();
         let st = state_for(d.path(), None);
-        let r = route(&st, &req("POST", "/skills/install", "", &[HOST, COOKIE], ""));
+        let r = route(
+            &st,
+            &req("POST", "/skills/install", "", &[HOST, COOKIE], ""),
+        );
         assert_eq!(r.status, 403);
     }
 }

@@ -169,7 +169,12 @@ fn report_actions(p: &Painter, skill: &Skill, actions: &[InstallAction]) {
     for a in actions {
         match a {
             InstallAction::WroteCanonical(path) => {
-                println!("  {} installed {} → {}", p.green("✓"), p.bold(skill.id), path.display());
+                println!(
+                    "  {} installed {} → {}",
+                    p.green("✓"),
+                    p.bold(skill.id),
+                    path.display()
+                );
             }
             InstallAction::UpgradedCanonical(path) => {
                 println!(
@@ -201,7 +206,10 @@ fn report_actions(p: &Painter, skill: &Skill, actions: &[InstallAction]) {
             InstallAction::Copied(path) => {
                 println!(
                     "    {}",
-                    p.dim(&format!("copied to {} (symlink unavailable)", path.display()))
+                    p.dim(&format!(
+                        "copied to {} (symlink unavailable)",
+                        path.display()
+                    ))
                 );
             }
             InstallAction::SkippedForeign(path) => {
