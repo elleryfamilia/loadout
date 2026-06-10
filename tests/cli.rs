@@ -907,9 +907,11 @@ fn unknown_agent_is_an_error() {
 fn custom_agent_via_config_is_first_class() {
     let fx = Fixture::new();
     fx.rust_project();
-    // A user-defined agent in repo config — no code change required.
-    fx.write(
-        ".rosita/config.toml",
+    // A user-defined agent in the GLOBAL config — no code change required.
+    // Agents carry an executable `launch`, so they are global-only: a repo-layer
+    // `[[agents]]` is stripped by the loader (see config::strip_global_only) to
+    // stop a cloned repo from hijacking `rosita run`.
+    fx.author(
         "[[agents]]\nid = \"myagent\"\ngenerated_filename = \"myagent.md\"\nlaunch = \"echo\"\nwire_hint = \"include myagent.md\"\n",
     );
 

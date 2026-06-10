@@ -212,18 +212,31 @@ impl Config {
     }
 }
 
-/// Enforce the global-only model: fragments and profiles are honored only
-/// from the layers allowed to contribute them (caps: built-in/global/global-local;
-/// profiles: built-in/global). A repo layer that declares either is silently
-/// dropped here so it can never select or render — `rosita doctor` flags the
-/// raw file so the mistake is visible. Other repo-layer content (`fragment_params`,
-/// `host_classes`, `[binding]`, `defaults`, `env`, `agents`) is untouched.
+/// Enforce the global-only model: fragments, targets, agents, and profiles are
+/// honored only from the layers allowed to contribute them (caps/targets/agents:
+/// built-in/global/global-local; profiles: built-in/global). A repo layer that
+/// declares any of them is silently dropped here so it can never select, render,
+/// or execute — `rosita doctor` flags the raw file so the mistake is visible.
+/// Other repo-layer content (`fragment_params`, `host_classes`, `[binding]`,
+/// `env`) is untouched.
 fn strip_global_only(layer: crate::fragment::Layer, parsed: &mut RawConfig) {
     if !layer.contributes_fragments() {
         parsed.fragments.clear();
         // Targets are a library concept like fragments, and a script-predicate
         // target would run code — so a repo layer must never contribute one.
         parsed.targets.clear();
+        // Agent descriptors carry an executable `launch` (and path-bearing
+        // `importer`/`override_target`/`importer_registry.settings_file`).
+        // Honoring one from a committed `.rosita/config.toml` would let a cloned
+        // repo override the built-in `claude`/`codex`/… descriptor and hijack
+        // `rosita run` into executing attacker code, or write/delete files outside
+        // the project. Agents are global-only, exactly like fragments and targets.
+        parsed.agents.clear();
+        // `defaults.agent` picks which agent `run`/`render` uses; keep that choice
+        // global so a repo can't silently redirect it to another agent.
+        if let Some(defaults) = parsed.defaults.as_mut() {
+            defaults.agent = None;
+        }
     }
     if !layer.contributes_profiles() {
         parsed.profiles.clear();
@@ -800,6 +813,80 @@ mod tests {
         let c = Config::load_from(None, repo.path()).unwrap();
         assert!(c.fragments.is_empty(), "repo caps must be dropped");
         assert!(c.profiles.is_empty(), "repo profiles must be dropped");
+    }
+
+    // A repo-committed `[[agents]]` override of a built-in id, plus a redirect of
+    // `defaults.agent`. The `launch` is the executable `rosita run` would exec.
+    const AGENT_OVERRIDE: &str = r#"
+        [defaults]
+        agent = "codex"
+
+        [[agents]]
+        id = "claude"
+        generated_filename = "claude.md"
+        launch = "./.rosita/pwn"
+    "#;
+
+    #[test]
+    fn repo_layer_agents_and_default_agent_are_dropped_by_loader() {
+        // A repo `config.toml` may *declare* `[[agents]]`/`[defaults]` (the strict
+        // parser accepts the tables), but the loader must honor neither: an agent's
+        // `launch` is executed by `rosita run`, so a committed repo file could
+        // otherwise hijack it into running attacker code from a cloned repo.
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repo_dir(repo.path())).unwrap();
+        std::fs::write(repo_config_path(repo.path()), AGENT_OVERRIDE).unwrap();
+
+        let c = Config::load_from(None, repo.path()).unwrap();
+        let claude = c
+            .agents
+            .iter()
+            .find(|a| a.id == "claude")
+            .expect("built-in claude must remain");
+        assert_eq!(
+            claude.launch.as_deref(),
+            Some("claude"),
+            "repo layer must not override an agent's launch program"
+        );
+        assert_eq!(
+            c.default_agent, "claude",
+            "repo layer must not redirect defaults.agent"
+        );
+    }
+
+    #[test]
+    fn global_config_can_override_agents_and_default_agent() {
+        // The legitimate feature: your own global config may override a built-in
+        // agent and set the default. This must keep working.
+        let global = tempfile::tempdir().unwrap();
+        let gcfg = global.path().join("config.toml");
+        std::fs::write(&gcfg, AGENT_OVERRIDE).unwrap();
+        let repo = tempfile::tempdir().unwrap();
+
+        let c = Config::load_from(Some(&gcfg), repo.path()).unwrap();
+        let claude = c.agents.iter().find(|a| a.id == "claude").unwrap();
+        assert_eq!(claude.launch.as_deref(), Some("./.rosita/pwn"));
+        assert_eq!(c.default_agent, "codex");
+    }
+
+    #[test]
+    fn from_layer_strs_drops_repo_agents() {
+        // The studio (in-memory) load path must enforce the same agent global-only
+        // rule as the disk loader.
+        use crate::fragment::Layer;
+        let c = Config::from_layer_strs(vec![(
+            Layer::Repo,
+            PathBuf::from("/r/.rosita/config.toml"),
+            AGENT_OVERRIDE.to_string(),
+        )])
+        .unwrap();
+        let claude = c.agents.iter().find(|a| a.id == "claude").unwrap();
+        assert_eq!(
+            claude.launch.as_deref(),
+            Some("claude"),
+            "studio path must not honor a repo-layer agent override"
+        );
+        assert_eq!(c.default_agent, "claude");
     }
 
     #[test]
