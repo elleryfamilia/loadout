@@ -58,7 +58,11 @@ fragment descriptions, which tells you *which* fragment the user is correcting.
 
 3. **Propose the edit before writing.** Show: the fragment id, the exact new
    or changed `guidance` text (condensed, faithful — don't editorialize), and —
-   for a new fragment — which profiles will compose it. Get explicit approval.
+   for a new fragment — which profiles will compose it. If the agreed scope has
+   no profile yet (e.g. the first node-specific rule and no profile targets
+   `node`), propose creating one: a `[[profiles]]` block with the right
+   `targets` composing the new fragment (see reference.md). Get explicit
+   approval.
 
 4. **Write to `~/.config/rosita/config.toml`** (the global config — never a
    repo's `.rosita/`):
