@@ -8,7 +8,7 @@ All notable changes to rosita are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased
+## 0.4.0 — 2026-06-10
 
 ### Added
 
@@ -24,7 +24,7 @@ version and date (see [RELEASING.md](RELEASING.md)).
   fragment (or updates the fragment it contradicts) instead of leaving it in
   one agent's local memory. Deliberately scoped: project- and session-specific
   notes stay in the agent's own memory.
-- `rosita run` offers the skill once (interactive terminals only, and only while
+- `rosita run` offers the skills once, as a single bundled question (interactive terminals only, and only while
   your config has no profiles yet — i.e. before you've migrated); the answer is
   remembered per machine. Accepted installs are kept healthy on later runs:
   deleted symlinks are repaired and new rosita versions refresh the skill files —
