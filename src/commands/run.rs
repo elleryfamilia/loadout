@@ -27,10 +27,12 @@ use super::{
     now_rfc3339, prepare_with_live, Aborted, Choice, MissingPolicy, ProfileChooser, Runtime,
 };
 use crate::adapters::{self, AgentDescriptor, ApplyOptions, ApplyResult};
+use crate::binding::SkillDecision;
 use crate::cli::{RunArgs, StudioArgs};
 use crate::context::Context;
 use crate::hash;
 use crate::profile::ProfileConfig;
+use crate::skills::{self, LinkState, SkillState};
 use crate::style::Painter;
 use crate::sync::{self, SyncStatus};
 use crate::vlog;
@@ -195,6 +197,13 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         }
     }
 
+    // Embedded-skill preflight: keep accepted installs healthy, and — ask-once,
+    // TTY-gated, only while the user looks pre-migration — offer the migrate
+    // skill. Best-effort: a skill hiccup must never block the launch.
+    if !rt.dry_run {
+        skill_preflight(&prep, &p);
+    }
+
     let descriptor = adapters::descriptor(&prep.config, agent)
         .ok_or_else(|| anyhow!("unknown agent '{agent}'"))?
         .clone();
@@ -262,6 +271,155 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     print_launch_step(&p, &program, &args.args);
 
     launch(&program, &launch_args, &rendered_at, &rt.cwd, &extra_env)
+}
+
+// --- embedded-skill preflight --------------------------------------------------
+
+/// Maintain or offer rosita's embedded skills before launch. All branches are
+/// best-effort: errors are logged verbosely and never abort the run.
+fn skill_preflight(prep: &super::Prepared, p: &Painter) {
+    let Some(home) = crate::config::home_dir() else {
+        return;
+    };
+    for skill in skills::all() {
+        let outcome = match crate::binding::read_skill_decision(skill.id) {
+            Some(SkillDecision::Declined) => Ok(()),
+            Some(SkillDecision::Accepted) => maintain_skill(&home, skill, p),
+            None => offer_skill(&home, skill, prep, p),
+        };
+        if let Err(e) = outcome {
+            vlog!("skill preflight for '{}' failed: {e:#}", skill.id);
+        }
+    }
+}
+
+/// The user said yes once — keep the install healthy: repair deleted/dangling
+/// links, refresh a pristine install when this binary ships a newer version.
+/// A user-deleted canonical dir is respected (recorded as declined, one notice);
+/// user-edited files are never touched (`doctor` reports them).
+fn maintain_skill(home: &std::path::Path, skill: &skills::Skill, p: &Painter) -> crate::Result<()> {
+    let st = skills::status(home, skill);
+    match st.state {
+        SkillState::NotInstalled => {
+            // The user deleted it; don't resurrect. Remember the opt-out.
+            crate::binding::write_skill_decision(skill.id, SkillDecision::Declined)?;
+            println!(
+                "{}",
+                step(
+                    p,
+                    p.dim("·"),
+                    "skill",
+                    p.dim(&format!(
+                        "'{}' was removed — leaving it; `rosita skill install` restores it",
+                        skill.id
+                    )),
+                )
+            );
+        }
+        SkillState::Unmanaged | SkillState::Managed {
+            user_modified: true,
+            ..
+        } => {} // hands off; `rosita doctor` reports the divergence
+        SkillState::Managed {
+            upgrade_available, ..
+        } => {
+            let links_broken = st
+                .links
+                .iter()
+                .any(|l| matches!(l.state, LinkState::Missing | LinkState::Dangling));
+            if upgrade_available || links_broken {
+                skills::install(home, skill)?;
+                let what = if upgrade_available {
+                    "refreshed to this rosita's version"
+                } else {
+                    "repaired agent links"
+                };
+                println!(
+                    "{}",
+                    step(p, p.green("✓"), "skill", format!("'{}' {what}", skill.id))
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// No decision recorded: offer the skill once — only on a real terminal, and
+/// only while the user looks pre-migration (no profiles configured yet), which
+/// is exactly when `rosita-migrate` is useful. Configured users are never
+/// interrupted; they get the skill via `rosita skill install` or studio.
+fn offer_skill(
+    home: &std::path::Path,
+    skill: &skills::Skill,
+    prep: &super::Prepared,
+    p: &Painter,
+) -> crate::Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Ok(());
+    }
+    if !prep.config.profiles.is_empty() {
+        return Ok(());
+    }
+    match skills::status(home, skill).state {
+        // Already present (e.g. installed on another rosita version or by hand
+        // with our marker): adopt it silently instead of asking.
+        SkillState::Managed { .. } => {
+            return crate::binding::write_skill_decision(skill.id, SkillDecision::Accepted);
+        }
+        SkillState::Unmanaged => return Ok(()), // the user's own copy; never ours to manage
+        SkillState::NotInstalled => {}
+    }
+
+    println!();
+    println!(
+        "  {} rosita ships {} — an agent skill that imports an existing CLAUDE.md/AGENTS.md",
+        p.cyan("✦"),
+        p.bold(&format!("'{}'", skill.id))
+    );
+    println!(
+        "    into rosita fragments & profiles {}",
+        p.dim("(works in Claude Code, Codex, Gemini CLI, opencode)")
+    );
+    println!(
+        "  install it to {}?",
+        p.bold("~/.agents/skills")
+    );
+    println!("    1) yes — install {}", p.dim("(`rosita skill remove` undoes this)"));
+    println!("    2) no — don't ask again {}", p.dim("(`rosita skill install` re-enables)"));
+
+    loop {
+        print!("  ❯ ");
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line)? == 0 {
+            return Ok(()); // EOF: no answer — stay undecided, never nag mid-launch
+        }
+        match line.trim() {
+            "1" => {
+                skills::install(home, skill)?;
+                crate::binding::write_skill_decision(skill.id, SkillDecision::Accepted)?;
+                println!(
+                    "{}",
+                    step(
+                        p,
+                        p.green("✓"),
+                        "skill",
+                        format!(
+                            "'{}' installed → {}",
+                            skill.id,
+                            skills::canonical_dir(home, skill.id).display()
+                        ),
+                    )
+                );
+                return Ok(());
+            }
+            "2" => {
+                crate::binding::write_skill_decision(skill.id, SkillDecision::Declined)?;
+                return Ok(());
+            }
+            _ => println!("  please enter 1 or 2."),
+        }
+    }
 }
 
 // --- sync + the stepped run summary ------------------------------------------

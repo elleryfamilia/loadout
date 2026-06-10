@@ -8,6 +8,27 @@ All notable changes to rosita are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Added
+
+- The `rosita-migrate` agent skill is now embedded in the binary and managed by
+  the new `rosita skill [install|remove|status]` command — no repo checkout or
+  manual symlink needed. It installs to the cross-agent `~/.agents/skills/`
+  location (read natively by Gemini CLI and opencode) with symlinks into
+  `~/.claude/skills/` and `~/.codex/skills/` when those agents are present, and
+  the skill itself was rewritten to the portable Agent Skills format so it works
+  beyond Claude Code.
+- `rosita run` offers the skill once (interactive terminals only, and only while
+  your config has no profiles yet — i.e. before you've migrated); the answer is
+  remembered per machine. Accepted installs are kept healthy on later runs:
+  deleted symlinks are repaired and new rosita versions refresh the skill files —
+  unless you've edited them, in which case rosita leaves them alone.
+- `rosita doctor` gained an "Agent skills" section reporting install state,
+  staleness, local edits, and broken links; `rosita studio`'s welcome screen
+  gained a card that installs the skill (with confirmation) and shows the
+  one-liner to invoke it.
+
 ## 0.3.0 — 2026-06-09
 
 ### Added

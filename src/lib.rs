@@ -41,6 +41,7 @@ pub mod providers;
 pub mod redact;
 pub mod render;
 pub mod report;
+pub mod skills;
 pub mod studio;
 pub mod style;
 pub mod sync;

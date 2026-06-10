@@ -12,6 +12,7 @@ pub mod introspect;
 pub mod refresh;
 pub mod render;
 pub mod run;
+pub mod skill;
 pub mod sync;
 pub mod update;
 

@@ -145,6 +145,8 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/targets") => handle_target_save(state, req),
         ("POST", "/targets/try") => handle_target_try(state, req),
         ("GET", "/packs") => handle_packs(state),
+        ("GET", "/skills/card") => handle_skill_card(),
+        ("POST", "/skills/install") => handle_skill_install(),
         ("GET", "/onboarding/welcome") => handle_onboarding_welcome(state),
         ("POST", "/onboarding/quickstart") => handle_quickstart(state),
         ("GET", "/profiles/new") => handle_profile_new(state),
@@ -813,6 +815,59 @@ fn handle_quickstart(state: &Arc<Mutex<StudioState>>) -> Resp {
         Some(p) => apply_pack_and_show(state, &p),
         None => handle_packs(state),
     }
+}
+
+// --- agent skill card ----------------------------------------------------------
+
+/// Derive the skill card's state from the real filesystem + decision store.
+/// Deliberately not part of the studio snapshot: skill install is a direct,
+/// immediate action on `~/.agents/skills`, not a staged config edit.
+fn skill_card_state(skill: &crate::skills::Skill) -> views::SkillCardState {
+    use crate::skills::SkillState;
+    let Some(home) = crate::config::home_dir() else {
+        return views::SkillCardState::HandsOff;
+    };
+    match crate::skills::status(&home, skill).state {
+        SkillState::NotInstalled => views::SkillCardState::Offer,
+        SkillState::Unmanaged
+        | SkillState::Managed {
+            user_modified: true,
+            ..
+        } => views::SkillCardState::HandsOff,
+        SkillState::Managed {
+            upgrade_available: true,
+            ..
+        } => views::SkillCardState::UpgradeAvailable,
+        SkillState::Managed { .. } => views::SkillCardState::Installed,
+    }
+}
+
+/// `GET /skills/card` — the lazily-loaded agent-skill card on the welcome screen.
+fn handle_skill_card() -> Resp {
+    let skill = &crate::skills::MIGRATE;
+    Resp::html(views::skill_card(skill.id, &skill_card_state(skill)))
+}
+
+/// `POST /skills/install` — install (or upgrade) the embedded skill NOW and
+/// record the accepted decision, then re-render the card. Gated client-side by
+/// `hx-confirm`; this is studio's one immediate-side-effect action (everything
+/// config-shaped stays in the staged session).
+fn handle_skill_install() -> Resp {
+    let skill = &crate::skills::MIGRATE;
+    let Some(home) = crate::config::home_dir() else {
+        return Resp::html(views::error_fragment("cannot resolve $HOME"));
+    };
+    if let Err(e) = crate::skills::install(&home, skill) {
+        return Resp::html(views::error_fragment(&format!("skill install failed: {e:#}")));
+    }
+    if let Err(e) =
+        crate::binding::write_skill_decision(skill.id, crate::binding::SkillDecision::Accepted)
+    {
+        return Resp::html(views::error_fragment(&format!(
+            "skill installed, but recording the decision failed: {e:#}"
+        )));
+    }
+    Resp::html(views::skill_card(skill.id, &skill_card_state(skill)))
 }
 
 /// `GET /onboarding/welcome` — (re)show the first-launch welcome on demand (the
@@ -2475,5 +2530,41 @@ mod tests {
         assert!(body.contains("fragment-detail"));
         assert!(body.contains("Fresh guidance"));
         assert!(body.contains("/close")); // modal-close loader appended
+    }
+
+    #[test]
+    fn welcome_embeds_the_lazy_skill_card_loader() {
+        // Fresh config → first-launch welcome → the skill card placeholder is
+        // present and wired to load itself from /skills/card.
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let body = body_of(route(
+            &st,
+            &req("GET", "/onboarding/welcome", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(body.contains("id=\"skill-card\""));
+        assert!(body.contains("hx-get=\"/skills/card\""));
+    }
+
+    #[test]
+    fn skill_card_route_serves_a_card() {
+        // Read-only against the real $HOME: whatever the install state, the
+        // card names the skill and never errors.
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/skills/card", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("rosita-migrate"));
+    }
+
+    #[test]
+    fn skill_install_requires_origin_like_all_mutations() {
+        // POST without Origin/Referer is rejected before the handler runs, so
+        // the CSRF guard covers the new immediate-side-effect route too.
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("POST", "/skills/install", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 403);
     }
 }

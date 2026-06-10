@@ -35,6 +35,7 @@ fn main() -> ExitCode {
         Command::Agents(args) => commands::introspect::agents(&rt, args),
         Command::Studio(args) => rosita::studio::serve(&rt, args),
         Command::Sync(args) => commands::sync::run(&rt, args),
+        Command::Skill(args) => commands::skill::run(&rt, args),
         Command::Update(args) => commands::update::run(&rt, args),
     };
 

@@ -1345,3 +1345,118 @@ fn update_check_without_a_receipt_reports_unmanaged() {
         .success()
         .stdout(predicate::str::contains("installer"));
 }
+
+// --- embedded agent skills (`rosita skill`) ------------------------------------
+
+/// Path helpers for the isolated `$HOME`.
+impl Fixture {
+    fn home(&self) -> std::path::PathBuf {
+        self.global.path().join("home")
+    }
+
+    fn mkdir_home(&self, rel: &str) {
+        fs::create_dir_all(self.home().join(rel)).unwrap();
+    }
+}
+
+#[test]
+fn skill_install_writes_canonical_links_existing_agents_and_records_accepted() {
+    let fx = Fixture::new();
+    fx.mkdir_home(".claude"); // claude present; codex absent
+
+    fx.cmd()
+        .args(["skill", "install"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("installed rosita-migrate"));
+
+    // Canonical files under the cross-agent dir, marker in place.
+    let skill_md = fx.read_home(".agents/skills/rosita-migrate/SKILL.md");
+    assert!(skill_md.contains("<!-- rosita:skill content=sha256:"));
+    assert!(fx.home_exists(".agents/skills/rosita-migrate/reference.md"));
+
+    // A symlink only for the agent dir that exists.
+    let link = fx.home().join(".claude/skills/rosita-migrate");
+    assert!(link.join("SKILL.md").exists());
+    assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+    assert!(!fx.home_exists(".codex"));
+
+    // The ask-once decision is remembered in the rosita-owned store — and the
+    // strict config loader still works with it present (regression guard for
+    // the deny_unknown_fields layer).
+    let store = fx.read_global("bindings.toml");
+    assert!(store.contains("rosita-migrate = \"accepted\""));
+    fx.cmd().args(["skill", "status"]).assert().success().stdout(
+        predicate::str::contains("installed, current")
+            .and(predicate::str::contains("decision: accepted")),
+    );
+}
+
+#[test]
+fn skill_remove_deletes_everything_and_records_declined() {
+    let fx = Fixture::new();
+    fx.mkdir_home(".claude");
+    fx.cmd().args(["skill", "install"]).assert().success();
+
+    fx.cmd()
+        .args(["skill", "remove"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed"));
+
+    assert!(!fx.home_exists(".agents/skills/rosita-migrate"));
+    assert!(!fx.home_exists(".claude/skills/rosita-migrate"));
+    assert!(fx
+        .read_global("bindings.toml")
+        .contains("rosita-migrate = \"declined\""));
+}
+
+#[test]
+fn skill_install_never_overwrites_user_edits() {
+    let fx = Fixture::new();
+    fx.cmd().args(["skill", "install"]).assert().success();
+
+    // The user customizes the installed reference.
+    let refpath = fx.home().join(".agents/skills/rosita-migrate/reference.md");
+    let mut text = fs::read_to_string(&refpath).unwrap();
+    text.push_str("\nmy own notes\n");
+    fs::write(&refpath, &text).unwrap();
+
+    fx.cmd()
+        .args(["skill", "install"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("left untouched"));
+    assert!(fs::read_to_string(&refpath).unwrap().contains("my own notes"));
+
+    fx.cmd()
+        .args(["skill", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("edited by you"));
+}
+
+#[test]
+fn doctor_reports_accepted_but_missing_skill() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.cmd().args(["skill", "install"]).assert().success();
+    fs::remove_dir_all(fx.home().join(".agents/skills/rosita-migrate")).unwrap();
+
+    fx.cmd()
+        .args(["doctor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("accepted but missing from disk"));
+}
+
+#[test]
+fn dry_run_skill_install_writes_nothing() {
+    let fx = Fixture::new();
+    fx.cmd()
+        .args(["--dry-run", "skill", "install"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would install"));
+    assert!(!fx.home_exists(".agents"));
+}

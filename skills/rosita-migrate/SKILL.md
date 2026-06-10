@@ -15,11 +15,18 @@ untouched; rosita renders a separate, generated overlay.
 Read [reference.md](reference.md) for the full TOML schema and a worked example
 before writing any config.
 
-## Orientation (gathered for you)
+## Orientation (run these probes first)
 
-- rosita on PATH: !`command -v rosita >/dev/null 2>&1 && rosita --version || echo "NOT INSTALLED — install rosita first"`
-- Existing global config: !`sed -n '1,60p' ~/.config/rosita/config.toml 2>/dev/null || echo "(none yet — this will be a fresh setup)"`
-- Candidate source files: !`for f in ~/.claude/CLAUDE.md ~/.codex/AGENTS.md ~/.config/AGENTS.md ./CLAUDE.md ./AGENTS.md ./.github/copilot-instructions.md; do [ -f "$f" ] && echo "$f"; done; echo "(also ask the user if their global rules live elsewhere)"`
+Before anything else, run these and use their output for the rest of the process:
+
+```bash
+# rosita on PATH?
+command -v rosita >/dev/null 2>&1 && rosita --version || echo "NOT INSTALLED — install rosita first"
+# Existing global config (fresh setup if missing)
+sed -n '1,60p' ~/.config/rosita/config.toml 2>/dev/null || echo "(none yet — this will be a fresh setup)"
+# Candidate source files (also ask the user if their global rules live elsewhere)
+for f in ~/.claude/CLAUDE.md ~/.codex/AGENTS.md ~/.config/AGENTS.md ./CLAUDE.md ./AGENTS.md ./.github/copilot-instructions.md; do [ -f "$f" ] && echo "$f"; done
+```
 
 ## The model (so you decompose well)
 

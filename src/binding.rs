@@ -11,6 +11,11 @@
 //!
 //! The store is rosita-owned, so the global file is written with the plain
 //! `toml` serializer; only the hand-editable `local.toml` needs `toml_edit`.
+//!
+//! The same store also remembers per-machine **skill decisions** (the ask-once
+//! "install the rosita-migrate skill?" answer) in a `[skills]` table — rosita-
+//! owned machine state of the same class as a binding, and deliberately *not*
+//! in `local.toml`, whose strict config parse rejects unknown tables.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -156,11 +161,15 @@ pub fn write_repo(repo_base: &Path, b: &Binding) -> Result<()> {
 
 // --- machine scope: the global path-keyed store ------------------------------
 
-/// The global bindings store: cwd path → remembered choice.
+/// The global bindings store: cwd path → remembered choice, plus per-machine
+/// skill decisions (skill id → `"accepted"`/`"declined"`). Lenient parse: files
+/// written by newer rosita versions with extra tables still load.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct BindingStore {
     #[serde(default)]
     bound: BTreeMap<String, RawBinding>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    skills: BTreeMap<String, String>,
 }
 
 /// Path to the global bindings store, if a global config dir resolves.
@@ -207,6 +216,61 @@ pub fn read_global_at(store_path: &Path, cwd: &Path) -> Option<Binding> {
 pub fn write_global_at(store_path: &Path, cwd: &Path, b: &Binding) -> Result<()> {
     let mut store = load(store_path);
     store.bound.insert(key(cwd), RawBinding::from_binding(b));
+    save(store_path, &store)
+}
+
+// --- skill decisions: the ask-once install answer, per machine ----------------
+
+/// The remembered answer to "install this skill?". There is no "ask again
+/// later" value: an unrecorded decision *is* "ask when appropriate".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillDecision {
+    /// Install and keep current (repair links, refresh on upgrade).
+    Accepted,
+    /// Don't install, don't ask again. Re-enable via `rosita skill install`.
+    Declined,
+}
+
+impl SkillDecision {
+    fn as_str(self) -> &'static str {
+        match self {
+            SkillDecision::Accepted => "accepted",
+            SkillDecision::Declined => "declined",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "accepted" => Some(SkillDecision::Accepted),
+            "declined" => Some(SkillDecision::Declined),
+            _ => None,
+        }
+    }
+}
+
+/// Read the remembered decision for a skill id, if any.
+pub fn read_skill_decision(skill_id: &str) -> Option<SkillDecision> {
+    read_skill_decision_at(&store_path()?, skill_id)
+}
+
+/// Persist the decision for a skill id.
+pub fn write_skill_decision(skill_id: &str, d: SkillDecision) -> Result<()> {
+    let path = store_path().ok_or_else(|| anyhow!("no global config dir to store decisions in"))?;
+    write_skill_decision_at(&path, skill_id, d)
+}
+
+/// [`read_skill_decision`] against an explicit store path (testable core).
+pub fn read_skill_decision_at(store_path: &Path, skill_id: &str) -> Option<SkillDecision> {
+    load(store_path)
+        .skills
+        .get(skill_id)
+        .and_then(|s| SkillDecision::parse(s))
+}
+
+/// [`write_skill_decision`] against an explicit store path (testable core).
+pub fn write_skill_decision_at(store_path: &Path, skill_id: &str, d: SkillDecision) -> Result<()> {
+    let mut store = load(store_path);
+    store.skills.insert(skill_id.to_string(), d.as_str().to_string());
     save(store_path, &store)
 }
 
@@ -281,6 +345,35 @@ mod tests {
         assert_eq!(read_global_at(&store, b), Some(Binding::profile("kernel")));
         // Independent paths don't bleed into each other.
         assert_eq!(read_global_at(&store, Path::new("/elsewhere")), None);
+    }
+
+    #[test]
+    fn skill_decisions_round_trip_and_coexist_with_bindings() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("bindings.toml");
+
+        assert_eq!(read_skill_decision_at(&store, "rosita-migrate"), None);
+        write_skill_decision_at(&store, "rosita-migrate", SkillDecision::Declined).unwrap();
+        assert_eq!(
+            read_skill_decision_at(&store, "rosita-migrate"),
+            Some(SkillDecision::Declined)
+        );
+
+        // Flipping the decision and adding a binding don't clobber each other.
+        write_skill_decision_at(&store, "rosita-migrate", SkillDecision::Accepted).unwrap();
+        write_global_at(&store, Path::new("/work/p"), &Binding::profile("machine")).unwrap();
+        assert_eq!(
+            read_skill_decision_at(&store, "rosita-migrate"),
+            Some(SkillDecision::Accepted)
+        );
+        assert_eq!(
+            read_global_at(&store, Path::new("/work/p")),
+            Some(Binding::profile("machine"))
+        );
+
+        // An unknown value (written by a future rosita) reads as undecided.
+        std::fs::write(&store, "[skills]\nrosita-migrate = \"snoozed\"\n").unwrap();
+        assert_eq!(read_skill_decision_at(&store, "rosita-migrate"), None);
     }
 
     #[test]

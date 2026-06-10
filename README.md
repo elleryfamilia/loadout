@@ -259,15 +259,26 @@ inert until you `sync init`; tune them under `[sync]` (see
 
 ## Already have a `CLAUDE.md` / `AGENTS.md`?
 
-Don't hand-translate it. rosita ships a Claude Code **skill**,
+Don't hand-translate it. rosita ships an **agent skill**,
 [`rosita-migrate`](skills/rosita-migrate/SKILL.md), that reads your existing
 global agent instructions and turns them into rosita fragments plus the few
 profiles you actually need — additively (your originals are left untouched).
+It follows the cross-agent Agent Skills format (`SKILL.md`), so the same
+install works in Claude Code, Codex CLI, Gemini CLI, and opencode.
 
 ```bash
-ln -s "$PWD/skills/rosita-migrate" ~/.claude/skills/rosita-migrate
-# then, in Claude Code:  /rosita-migrate   (or "import my CLAUDE.md into rosita")
+rosita skill install
+# then, in any agent session:  /rosita-migrate   (or "import my CLAUDE.md into rosita")
 ```
+
+The skill is embedded in the binary — no repo checkout needed. It installs to
+`~/.agents/skills/` (read natively by Gemini CLI and opencode) with symlinks
+into `~/.claude/skills/` and `~/.codex/skills/` for agents that scan their own
+dotdir — created only when that agent's directory already exists. The first
+interactive `rosita run` also offers it (once) while your config has no
+profiles yet; `rosita skill remove` uninstalls and stops the offer, and
+`rosita doctor` reports the install's health. If you edit the installed files,
+rosita stops touching them.
 
 ## Commands
 
@@ -285,6 +296,7 @@ ln -s "$PWD/skills/rosita-migrate" ~/.claude/skills/rosita-migrate
 | `rosita fragments [list\|show <id>] [--json]` | List your fragment library (active ones marked), or show one in detail. |
 | `rosita profiles [--json]` | List your profiles with their `targets`, marking which match and which is selected. |
 | `rosita agents [--json]` | List configured agents and how each delivers the overlay. |
+| `rosita skill [install\|remove\|status] [id]` | Manage the embedded agent skills under `~/.agents/skills` (bare `skill` shows status). |
 | `rosita update [--check]` | Self-update to the latest release (installer-based installs); `--check` only reports availability. |
 
 `<id>` is an agent id — built-ins are `claude`, `codex`, `gemini`, `opencode`,

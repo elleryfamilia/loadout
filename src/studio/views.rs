@@ -408,8 +408,73 @@ fn studio_welcome(o: &Onboarding, packs: &[PackView]) -> Markup {
             div class="welcome-actions" {
                 button class="btn btn-ghost" hx-get="/profiles/new" hx-target="#main" { (icon("plus")) "Start from scratch" }
             }
+            // The skill card loads lazily so the welcome render never blocks on
+            // (or threads through) global-filesystem state.
+            div id="skill-card" hx-get="/skills/card" hx-trigger="load" hx-target="#skill-card" {}
         }
     }
+}
+
+// --- agent skill card -------------------------------------------------------
+
+/// What the skill card shows; derived from the real filesystem by the server
+/// (never from session state — installing is a direct action, not a staged op).
+pub enum SkillCardState {
+    /// Not installed: offer the install button.
+    Offer,
+    /// Installed and current: show the handoff command.
+    Installed,
+    /// Installed but this rosita ships a newer version.
+    UpgradeAvailable,
+    /// Present with local edits (or a copy rosita didn't write) — hands off.
+    HandsOff,
+}
+
+/// The agent-skill card (fills `#skill-card`). Unlike packs, the Install button
+/// writes `~/.agents/skills` immediately on confirm — there is nothing staged
+/// to review or discard, so it must not imply staged semantics.
+pub fn skill_card(skill_id: &str, state: &SkillCardState) -> String {
+    html! {
+        div class="cmd-block" {
+            @match state {
+                SkillCardState::Offer => {
+                    span class="muted small" {
+                        "Already have a CLAUDE.md or AGENTS.md? rosita ships the "
+                        strong { (skill_id) }
+                        " agent skill — it imports your existing instructions into fragments & profiles "
+                        "(works in Claude Code, Codex, Gemini CLI, opencode)."
+                    }
+                    button class="btn btn-ghost"
+                        hx-post="/skills/install" hx-target="#skill-card"
+                        hx-confirm=(format!(
+                            "Install the {skill_id} skill into ~/.agents/skills now? \
+                             This writes files immediately (not staged); `rosita skill remove` undoes it."
+                        )) {
+                        (icon("bolt")) "Install the skill"
+                    }
+                }
+                SkillCardState::Installed => {
+                    span class="muted small" { "The " strong { (skill_id) } " skill is installed. Import your existing instructions from any agent session:" }
+                    code { "rosita run claude -- \"/" (skill_id) "\"" }
+                    span class="muted small" { "remove with " code { "rosita skill remove" } }
+                }
+                SkillCardState::UpgradeAvailable => {
+                    span class="muted small" { "The " strong { (skill_id) } " skill is installed but a newer version ships with this rosita." }
+                    button class="btn btn-ghost"
+                        hx-post="/skills/install" hx-target="#skill-card"
+                        hx-confirm=(format!("Upgrade the {skill_id} skill in ~/.agents/skills? This rewrites the skill files immediately.")) {
+                        (icon("refresh")) "Upgrade the skill"
+                    }
+                }
+                SkillCardState::HandsOff => {
+                    span class="muted small" {
+                        "A " strong { (skill_id) } " skill exists in ~/.agents/skills with local edits — rosita leaves it alone."
+                    }
+                }
+            }
+        }
+    }
+    .into_string()
 }
 
 /// The first-launch welcome as a standalone `#main` fragment — used by the "?"

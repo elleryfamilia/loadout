@@ -68,8 +68,36 @@ pub enum Command {
     Studio(StudioArgs),
     /// Sync your global config (fragments & profiles) across machines via git.
     Sync(SyncArgs),
+    /// Manage the agent skills rosita ships (installed under `~/.agents/skills`).
+    Skill(SkillArgs),
     /// Update rosita to the latest release (installer-based installs only).
     Update(UpdateArgs),
+}
+
+/// `skill` options. Bare `rosita skill` shows status.
+#[derive(Debug, Args)]
+pub struct SkillArgs {
+    /// `install`, `remove`, or `status` (the default).
+    #[command(subcommand)]
+    pub action: Option<SkillAction>,
+}
+
+/// `skill` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum SkillAction {
+    /// Install (or repair/upgrade) shipped skills into `~/.agents/skills`,
+    /// with symlinks for agents that need their own skills dir.
+    Install {
+        /// Skill id (defaults to every shipped skill).
+        id: Option<String>,
+    },
+    /// Remove rosita-installed skills (canonical files + agent symlinks).
+    Remove {
+        /// Skill id (defaults to every shipped skill).
+        id: Option<String>,
+    },
+    /// Show each shipped skill's install state, links, and remembered decision.
+    Status,
 }
 
 /// `update` options.

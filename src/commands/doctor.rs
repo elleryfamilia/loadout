@@ -152,8 +152,106 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     );
     check_overlays(&mut c, &prep);
 
+    // Embedded agent skills (global; managed by `rosita skill`).
+    println!("\nAgent skills (~/.agents/skills)");
+    check_skills(&mut c);
+
     print_summary(&c);
     Ok(())
+}
+
+/// Health of rosita's embedded skills: install state, content freshness, the
+/// per-agent links, and the remembered ask-once decision.
+fn check_skills(c: &mut Checks) {
+    let Some(home) = config::home_dir() else {
+        c.line(Status::Warn, "cannot resolve $HOME — skill checks skipped");
+        return;
+    };
+    for skill in crate::skills::all() {
+        let st = crate::skills::status(&home, skill);
+        let decision = crate::binding::read_skill_decision(skill.id);
+        use crate::binding::SkillDecision as D;
+        use crate::skills::{LinkState, SkillState};
+
+        match (&st.state, decision) {
+            (SkillState::NotInstalled, Some(D::Declined)) => c.line(
+                Status::Ok,
+                format!("{}: not installed (declined — `rosita skill install` re-enables)", skill.id),
+            ),
+            (SkillState::NotInstalled, Some(D::Accepted)) => c.line(
+                Status::Warn,
+                format!(
+                    "{}: accepted but missing from disk — `rosita skill install` restores it",
+                    skill.id
+                ),
+            ),
+            (SkillState::NotInstalled, None) => c.line(
+                Status::Ok,
+                format!(
+                    "{}: not installed — `rosita skill install` imports your CLAUDE.md/AGENTS.md into rosita",
+                    skill.id
+                ),
+            ),
+            (SkillState::Unmanaged, _) => c.line(
+                Status::Ok,
+                format!(
+                    "{}: present but not rosita-managed (your own copy; rosita leaves it alone)",
+                    skill.id
+                ),
+            ),
+            (SkillState::Managed { user_modified: true, .. }, _) => c.line(
+                Status::Warn,
+                format!(
+                    "{}: installed with local edits — auto-upgrade is off ('rosita skill install' would not overwrite)",
+                    skill.id
+                ),
+            ),
+            (SkillState::Managed { upgrade_available: true, .. }, _) => c.line(
+                Status::Warn,
+                format!(
+                    "{}: installed but stale — `rosita skill install` upgrades it to this rosita's version",
+                    skill.id
+                ),
+            ),
+            (SkillState::Managed { .. }, _) => c.line(
+                Status::Ok,
+                format!("{}: installed and current", skill.id),
+            ),
+        }
+
+        if matches!(st.state, SkillState::Managed { .. }) {
+            for link in &st.links {
+                match link.state {
+                    LinkState::Missing | LinkState::Dangling => c.line(
+                        Status::Warn,
+                        format!(
+                            "{}: link {} is {} — `rosita skill install` repairs it",
+                            skill.id,
+                            link.path.display(),
+                            if link.state == LinkState::Missing { "missing" } else { "dangling" },
+                        ),
+                    ),
+                    LinkState::Foreign => c.line(
+                        Status::Warn,
+                        format!(
+                            "{}: {} exists but isn't rosita's — left alone",
+                            skill.id,
+                            link.path.display()
+                        ),
+                    ),
+                    LinkState::CopyManaged => c.line(
+                        Status::Ok,
+                        format!(
+                            "{}: {} is a copy (symlink fallback) — upgrades re-copy it",
+                            skill.id,
+                            link.path.display()
+                        ),
+                    ),
+                    LinkState::Linked | LinkState::AgentAbsent => {}
+                }
+            }
+        }
+    }
 }
 
 fn print_summary(c: &Checks) {
