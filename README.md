@@ -54,12 +54,6 @@ Open the local UI and create your first fragments and profiles:
 rosita studio
 ```
 
-See what Rosita detects in the current project:
-
-```bash
-rosita explain
-```
-
 Run your agent with the matching context injected:
 
 ```bash
