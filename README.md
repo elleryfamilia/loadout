@@ -8,13 +8,14 @@
 [![CI](https://github.com/elleryfamilia/rosita/actions/workflows/ci.yml/badge.svg)](https://github.com/elleryfamilia/rosita/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Stop using the same global `AGENTS.md` for every task.
+**Stop using the same global `AGENTS.md` for every task.**
 
-Rosita is an adaptive context layer for AI coding agents. Define reusable context once, then apply the right profile based on the stack, language, task, or environment you're working in.
+Rosita is an **adaptive context layer** for AI coding agents. Define reusable context once, then apply the right profile based on the stack, language, task, or environment you're working in.
 
-Your project's `AGENTS.md` describes the repo. Rosita describes the context you want to bring with you across projects, machines, and agent tools.
+- Your project's `AGENTS.md` describes **the repo**.
+- Rosita describes **the context you bring with you** — across projects, machines, and agent tools.
 
-Rosita works with Claude, Codex, Gemini, opencode, Copilot, and generic Markdown-based agent flows. It renders gitignored overlays and wires them into each agent without touching committed project instruction files.
+Works with **Claude, Codex, Gemini, opencode, and Copilot**, plus generic Markdown-based agent flows. Rosita renders gitignored overlays and wires them into each agent — without touching committed project instruction files.
 
 <p align="center">
   <img src="docs/screenshots/profiles.png" alt="rosita studio — the Profiles tab: composing a machine profile from fragments, with live script re-runs" width="900">
