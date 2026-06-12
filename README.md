@@ -4,6 +4,10 @@
 
 # Rosita
 
+[![Release](https://img.shields.io/github/v/release/elleryfamilia/rosita)](https://github.com/elleryfamilia/rosita/releases)
+[![CI](https://github.com/elleryfamilia/rosita/actions/workflows/ci.yml/badge.svg)](https://github.com/elleryfamilia/rosita/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Stop using the same global `AGENTS.md` for every task.
 
 Rosita is an adaptive context layer for AI coding agents. Define reusable context once, then apply the right profile based on the stack, language, task, or environment you're working in.
@@ -21,13 +25,7 @@ Rosita works with Claude, Codex, Gemini, opencode, Copilot, and generic Markdown
 
 ## Why Rosita?
 
-Most AI tools give you either one global context file or repo-specific instruction files.
-
-Rosita adds the missing layer in between: reusable context that adapts to the stack, language, task, or environment you're working in.
-
-<p align="center">
-  <img src="docs/diagrams/slots-in.svg" alt="Where rosita fits: instead of one global CLAUDE.md or AGENTS.md carrying the same content into every project, rosita holds your reusable context once and gives each repo the right slice through a gitignored overlay, alongside the team's committed instruction file." width="900">
-</p>
+Most AI tools give you either one global context file or repo-specific instruction files. Rosita adds the missing layer in between: reusable context that adapts to the stack, language, task, or environment you're working in.
 
 Use it when you want to:
 
