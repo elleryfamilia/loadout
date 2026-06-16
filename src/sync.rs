@@ -58,6 +58,15 @@ pub enum PushOutcome {
     Diverged,
 }
 
+/// Outcome of reconciling a diverged branch by rebasing local onto the remote.
+pub enum ReconcileOutcome {
+    /// Rebased `n` local commits cleanly onto the remote tip (ready to push).
+    Rebased(usize),
+    /// The rebase hit a content conflict; it was aborted and the working tree
+    /// restored to its pre-rebase state — the user must reconcile by hand.
+    Conflicted,
+}
+
 /// The global config dir we sync (the directory holding `config.toml`).
 pub fn config_dir() -> Result<PathBuf> {
     crate::config::global_config_dir()
@@ -178,6 +187,49 @@ pub fn pull(dir: &Path, timeout: Duration) -> Result<PullOutcome> {
     Ok(PullOutcome::Pulled(n))
 }
 
+/// Reconcile a diverged branch by rebasing the local commits onto the upstream.
+///
+/// Used **only** by the manual `rosita sync` (the user is waiting): unlike the
+/// fast-forward-only auto-pull on the `run`/`refresh` hot path, this is allowed to
+/// rewrite local history, because the common divergence — two machines editing
+/// different fragments — rebases cleanly. On a real content conflict the rebase is
+/// aborted (restoring the working tree) and `Conflicted` is returned so the caller
+/// can punt to hand-reconciliation. Timeout-bounded; assumes an upstream is set
+/// (the caller only reaches here after a `pull` reported `Diverged`).
+pub fn reconcile_rebase(dir: &Path, timeout: Duration) -> Result<ReconcileOutcome> {
+    // `--autostash` lets this reconcile even with uncommitted edits in the working
+    // tree (a hand-edited config.toml not yet committed): git stashes them, rebases,
+    // then reapplies — without it, git refuses to rebase a dirty tree.
+    let pulled = git(
+        dir,
+        &["pull", "--rebase", "--autostash", "--quiet"],
+        Some(timeout),
+    );
+    if !matches!(&pulled, Ok(o) if o.ok) {
+        // The pull didn't finish cleanly — a content conflict, or a timeout / other
+        // failure. Abort any in-progress rebase so the repo is never stranded
+        // mid-rebase: `git rebase --abort` succeeds *iff* a rebase was actually
+        // underway, which is exactly the content-conflict case. (Reading its exit
+        // code also avoids coupling to git's private `.git/rebase-*` layout, and
+        // covers the timeout path where the rebase started before git was killed.)
+        let was_rebasing = git(dir, &["rebase", "--abort"], None)
+            .map(|o| o.ok)
+            .unwrap_or(false);
+        if was_rebasing {
+            return Ok(ReconcileOutcome::Conflicted);
+        }
+        return match pulled {
+            Ok(o) => bail!("git pull --rebase failed: {}", first_line(&o.stderr)),
+            Err(e) => Err(e.context("git pull --rebase")),
+        };
+    }
+    touch_stamp(dir);
+    // After a clean rebase, HEAD = remote tip + our replayed commits, so
+    // `@{u}..HEAD` counts exactly the local work now waiting to be pushed.
+    let n = count_commits(dir, "@{u}", "HEAD");
+    Ok(ReconcileOutcome::Rebased(n))
+}
+
 /// Stage tracked changes (the `.gitignore` keeps `local.toml` out), commit if
 /// anything changed, and push. Timeout-bounded; returns what happened. Pushes
 /// with `-u` so it also establishes tracking on a first publish, and recovers
@@ -284,6 +336,7 @@ pub fn init(dir: &Path, remote: Option<&str>, timeout: Duration) -> Result<()> {
             "generated",
             "cache",
             "logs",
+            "update-check",
         ],
         None,
     );
@@ -360,15 +413,19 @@ pub fn ensure_gitignore(dir: &Path) -> Result<()> {
                 bindings.toml\n\
                 generated/\n\
                 cache/\n\
-                logs/\n";
+                logs/\n\
+                update-check\n";
     let current = std::fs::read_to_string(&path).unwrap_or_default();
-    // Only (re)write if our managed lines aren't all present.
+    // Only (re)write if our managed lines aren't all present. `update-check` is the
+    // once-a-day self-update timestamp (see update.rs) — machine-specific, so it
+    // must never sync, or two boxes diverge on it every day.
     let missing = [
         "local.toml",
         "bindings.toml",
         "generated/",
         "cache/",
         "logs/",
+        "update-check",
     ]
     .iter()
     .any(|l| !current.lines().any(|c| c.trim() == *l));
@@ -780,6 +837,7 @@ mod tests {
             "generated/",
             "cache/",
             "logs/",
+            "update-check",
         ] {
             assert!(gi.contains(line), "missing ignore: {line}");
         }
@@ -787,6 +845,175 @@ mod tests {
         ensure_gitignore(tmp.path()).unwrap();
         let gi2 = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
         assert_eq!(gi, gi2);
+    }
+
+    #[test]
+    fn reconcile_rebase_replays_nonoverlapping_divergence() {
+        // The everyday case: two machines edit *different* lines. A manual sync
+        // must rebase the local commit onto the remote and end up with both edits.
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(a.join("config.toml"), "a = 1\n\nb = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        init(&a, Some(url), timeout()).unwrap();
+
+        let b = tmp.path().join("b");
+        clone(url, &b, timeout()).unwrap();
+        identify(&b);
+
+        // A edits one line and publishes.
+        fs::write(a.join("config.toml"), "a = 2\n\nb = 1\n").unwrap();
+        assert!(matches!(
+            commit_push(&a, "edit a", timeout()).unwrap(),
+            PushOutcome::Pushed
+        ));
+
+        // B edits a *different* line; its push is rejected (it committed locally).
+        fs::write(b.join("config.toml"), "a = 1\n\nb = 2\n").unwrap();
+        assert!(matches!(
+            commit_push(&b, "edit b", timeout()).unwrap(),
+            PushOutcome::Diverged
+        ));
+        // A plain ff pull confirms the divergence.
+        assert!(matches!(
+            pull(&b, timeout()).unwrap(),
+            PullOutcome::Diverged
+        ));
+
+        // Reconcile: B's one commit replays cleanly onto A's, yielding both edits.
+        assert!(matches!(
+            reconcile_rebase(&b, timeout()).unwrap(),
+            ReconcileOutcome::Rebased(1)
+        ));
+        assert_eq!(
+            fs::read_to_string(b.join("config.toml")).unwrap(),
+            "a = 2\n\nb = 2\n"
+        );
+        // Now B can publish, and A pulls the union.
+        assert!(matches!(
+            commit_push(&b, "noop", timeout()).unwrap(),
+            PushOutcome::Pushed
+        ));
+        assert!(matches!(
+            pull(&a, timeout()).unwrap(),
+            PullOutcome::Pulled(1)
+        ));
+        assert_eq!(
+            fs::read_to_string(a.join("config.toml")).unwrap(),
+            "a = 2\n\nb = 2\n"
+        );
+    }
+
+    #[test]
+    fn reconcile_rebase_autostashes_uncommitted_edits() {
+        // `rosita sync` runs reconcile *before* committing, so a hand-edited (still
+        // uncommitted) config.toml must not block the rebase — `--autostash` stashes
+        // it, rebases onto the remote, and reapplies it.
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(a.join("config.toml"), "a = 1\n\nb = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        init(&a, Some(url), timeout()).unwrap();
+
+        let b = tmp.path().join("b");
+        clone(url, &b, timeout()).unwrap();
+        identify(&b);
+
+        // A publishes a committed edit; B has an *uncommitted* edit to a different
+        // line and a committed one too, so its branch both diverges and is dirty.
+        fs::write(a.join("config.toml"), "a = 2\n\nb = 1\n").unwrap();
+        commit_push(&a, "edit a", timeout()).unwrap();
+        fs::write(b.join("config.toml"), "a = 1\n\nb = 2\n").unwrap();
+        commit_push(&b, "commit b", timeout()).unwrap(); // commits b=2, push rejected
+        fs::write(b.join("config.toml"), "a = 1\n\nb = 3\n").unwrap(); // now dirty
+        assert!(matches!(
+            pull(&b, timeout()).unwrap(),
+            PullOutcome::Diverged
+        ));
+
+        // Reconcile succeeds despite the dirty tree, and the uncommitted edit survives.
+        assert!(matches!(
+            reconcile_rebase(&b, timeout()).unwrap(),
+            ReconcileOutcome::Rebased(1)
+        ));
+        assert_eq!(
+            fs::read_to_string(b.join("config.toml")).unwrap(),
+            "a = 2\n\nb = 3\n"
+        );
+    }
+
+    #[test]
+    fn reconcile_rebase_aborts_cleanly_on_conflict() {
+        // Both machines change the *same* line: the rebase must abort and restore
+        // the local state, reporting Conflicted (no half-finished rebase left).
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(a.join("config.toml"), "x = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        init(&a, Some(url), timeout()).unwrap();
+
+        let b = tmp.path().join("b");
+        clone(url, &b, timeout()).unwrap();
+        identify(&b);
+
+        fs::write(a.join("config.toml"), "x = 2\n").unwrap();
+        commit_push(&a, "a", timeout()).unwrap();
+
+        fs::write(b.join("config.toml"), "x = 3\n").unwrap();
+        assert!(matches!(
+            commit_push(&b, "b", timeout()).unwrap(),
+            PushOutcome::Diverged
+        ));
+        // B's local commit — the state an aborted rebase must restore to.
+        let b_head_before = head(&b);
+
+        assert!(matches!(
+            reconcile_rebase(&b, timeout()).unwrap(),
+            ReconcileOutcome::Conflicted
+        ));
+        // No rebase left in progress; HEAD and the file are exactly as before.
+        let git_dir = b.join(".git");
+        assert!(
+            !git_dir.join("rebase-merge").exists() && !git_dir.join("rebase-apply").exists(),
+            "rebase left in progress after abort"
+        );
+        assert_eq!(head(&b), b_head_before);
+        assert_eq!(
+            fs::read_to_string(b.join("config.toml")).unwrap(),
+            "x = 3\n"
+        );
+        let porcelain = git(&b, &["status", "--porcelain"], None).unwrap();
+        assert!(
+            porcelain.stdout.trim().is_empty(),
+            "tree not clean after abort"
+        );
     }
 
     #[test]
