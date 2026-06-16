@@ -659,6 +659,47 @@ fn doctor_flags_a_script_fragment_that_drops_output() {
 }
 
 #[test]
+fn doctor_skips_disabled_script_fragments() {
+    // `allow_exec = false` is the off-switch: render never runs the script, so
+    // doctor must not either. A disabled dropper is neither executed nor flagged;
+    // only the enabled probe is counted ("1 probed").
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\nid = \"disabled-dropper\"\nscript_lang = \"bash\"\nallow_exec = false\ncommand = \"echo hi; exit 1\"\n\
+         \n[[fragments]]\nid = \"cleanprobe\"\nscript_lang = \"bash\"\ncommand = \"echo ok\"\n",
+    );
+
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Script fragments (1 probed)"))
+        .stdout(predicate::str::contains("renders nothing").not())
+        .stdout(predicate::str::contains("disabled-dropper").not());
+}
+
+#[test]
+fn doctor_does_not_flag_stderr_only_failures() {
+    // A probe that exits non-zero with NO stdout (a tool absent / logged-out
+    // daemon, e.g. tailnet) renders nothing legitimately — that's the normal
+    // "found nothing" case, not the footgun, so it must not be flagged.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\nid = \"failloud\"\nscript_lang = \"bash\"\ncommand = \"echo boom >&2; exit 1\"\n",
+    );
+
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Script fragments (1 probed)"))
+        .stdout(predicate::str::contains("renders nothing").not())
+        .stdout(predicate::str::contains("exit cleanly"));
+}
+
+#[test]
 fn refresh_all_six_agents_emit_gitignored_overlays() {
     let fx = Fixture::new();
     fx.rust_project();

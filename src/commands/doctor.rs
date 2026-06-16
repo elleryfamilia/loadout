@@ -268,11 +268,15 @@ fn check_skills(c: &mut Checks) {
 /// are the user's own probes, which already run at render time, so executing
 /// them here adds no new capability — only a diagnosis.
 fn check_script_dropouts(c: &mut Checks, prep: &super::Prepared) {
+    // Honor `allow_exec = false` (the off-switch): render skips such a fragment
+    // without running it, so doctor must not execute it either — doing so would
+    // run an opted-out command and misdiagnose it (it renders a skip note, not
+    // "nothing").
     let scripts: Vec<&crate::fragment::Fragment> = prep
         .config
         .fragments
         .iter()
-        .filter(|f| f.command.is_some())
+        .filter(|f| f.command.is_some() && f.allow_exec)
         .collect();
     if scripts.is_empty() {
         return;
