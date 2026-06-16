@@ -226,6 +226,16 @@ pub fn palette() -> Vec<Fragment> {
              before committing.",
         ),
         frag(
+            "bun-conventions",
+            "Bun conventions",
+            "Stack Conventions",
+            "Bun project. Use Bun as the runtime and package manager (`bun install`, \
+             `bun run`, `bunx`) and don't introduce a second lockfile. Prefer \
+             TypeScript and run sources directly with `bun run`. Keep the \
+             type-checker and linter clean, and use the project's configured test \
+             runner before committing.",
+        ),
+        frag(
             "nextjs-conventions",
             "Next.js conventions",
             "Stack Conventions",
@@ -395,6 +405,9 @@ fi
             "Toolchain detection",
             "5m",
             r#"
+echo "Toolchain installed on this machine (versions resolved at render)."
+echo "Prefer these over assuming a tool exists or guessing its version."
+echo
 for tool in git node pnpm npm bun deno python3 uv ruby go cargo rustc rg fd gh docker; do
   if command -v "$tool" >/dev/null 2>&1; then
     # `go` reports its version via `go version`, not `--version` (the latter errors).
@@ -423,7 +436,7 @@ add() { out="${out}$1
 
 # package.json scripts (node / bun)
 if [ -f package.json ]; then
-  pm="<pm> run"
+  pm="npm run" # fallback when no lockfile pins the manager
   [ -f package-lock.json ] && pm="npm run"
   [ -f yarn.lock ] && pm="yarn"
   [ -f pnpm-lock.yaml ] && pm="pnpm run"
@@ -463,7 +476,7 @@ for jf in justfile Justfile .justfile; do
     if command -v just >/dev/null 2>&1; then
       recipes=$(just --list --unsorted 2>/dev/null | sed '1d')
     else
-      recipes=$(grep -E '^[a-zA-Z0-9][a-zA-Z0-9_-]*( [^:]*)?:' "$jf" 2>/dev/null | sed -E 's/[ :].*//' | sort -u | sed 's/^/  /')
+      recipes=$(grep -E '^[a-zA-Z0-9][a-zA-Z0-9_-]*( [^:]*)?:' "$jf" 2>/dev/null | grep -v ':=' | sed -E 's/[ :].*//' | sort -u | sed 's/^/  /')
     fi
     if [ -n "$recipes" ]; then
       add "justfile recipes (run with \`just <recipe>\`):"
@@ -509,11 +522,18 @@ exit 0
             "Container runtime",
             "5m",
             r#"
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null
-fi
-if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
-  podman ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null
+# Guards live inside `if` (not a bare `&&` chain) so a missing runtime can't
+# leave the script on a non-zero exit, which would drop the whole section.
+have_docker=0
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then have_docker=1; fi
+have_podman=0
+if command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then have_podman=1; fi
+if [ "$have_docker" = 1 ] || [ "$have_podman" = 1 ]; then
+  echo "Containers running on this machine right now (host-wide). Check here before"
+  echo "assuming a database, cache, or queue is or isn't up; PORTS are host->container."
+  echo
+  if [ "$have_docker" = 1 ]; then docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null; fi
+  if [ "$have_podman" = 1 ]; then podman ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null; fi
 fi
 "#,
         ),
@@ -522,14 +542,22 @@ fi
             "AI tooling",
             "5m",
             r#"
+out=""
 for tool in claude codex gemini opencode cursor-agent aider droid amp q goose; do
   if command -v "$tool" >/dev/null 2>&1; then
-    v=$("$tool" --version 2>/dev/null | head -n1)
-    printf '%-15s %s\n' "$tool" "$v"
+    out="$out$(printf '%-15s %s' "$tool" "$("$tool" --version 2>/dev/null | head -n1)")
+"
   fi
 done
 if command -v gh >/dev/null 2>&1 && gh extension list 2>/dev/null | grep -qi copilot; then
-  printf '%-15s %s\n' "gh copilot" "(gh extension)"
+  out="$out$(printf '%-15s %s' 'gh copilot' '(gh extension)')
+"
+fi
+if [ -n "$out" ]; then
+  echo "Peer AI coding CLIs installed here — use one for a cross-model review / second"
+  echo "opinion (a different, comparable-or-stronger model than the one doing the work)."
+  echo
+  printf '%s' "$out"
 fi
 "#,
         ),
@@ -550,10 +578,19 @@ else
   done
 fi
 [ -n "$ts" ] || exit 0
-# No `2>/dev/null || true`: a stopped/logged-out daemon must surface as a
-# non-zero exit + stderr so the run is reported as failed (and retryable),
-# not silently cached as "no peers".
-"$ts" status
+# Capture once. On success, prepend a one-line context; on failure, re-surface
+# stderr and the non-zero exit so a stopped/logged-out daemon is reported as
+# failed (and retryable), not silently cached as "no peers".
+status=$("$ts" status 2>&1); rc=$?
+if [ "$rc" = 0 ]; then
+  echo "Hosts reachable on this machine's tailnet — SSH / deploy targets by name or"
+  echo "100.x address. Lines marked offline aren't reachable right now."
+  echo
+  printf '%s\n' "$status"
+else
+  printf '%s\n' "$status" >&2
+  exit "$rc"
+fi
 "#,
         ),
         script_frag(

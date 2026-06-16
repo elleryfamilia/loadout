@@ -115,11 +115,15 @@ pub fn detect_stacks_and_pms(base: &Path) -> (Vec<String>, Vec<String>) {
         pms.push("cargo".into());
     }
 
-    // Node / Next.js
+    // Node / Next.js / Bun. A bun repo also has a package.json, so `bun` rides
+    // alongside `node` (the way `nextjs` does) — profiles can target either.
     if has("package.json") {
         stacks.push("node".into());
         if package_json_has_next(base) {
             stacks.push("nextjs".into());
+        }
+        if has("bun.lock") || has("bun.lockb") {
+            stacks.push("bun".into());
         }
         pms.push(detect_node_pm(base));
     }
@@ -315,6 +319,17 @@ mod tests {
         assert!(stacks.contains(&"node".to_string()));
         assert!(stacks.contains(&"nextjs".to_string()));
         assert_eq!(pms, vec!["pnpm".to_string()]);
+    }
+
+    #[test]
+    fn detects_bun_alongside_node() {
+        let d = tmp();
+        fs::write(d.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
+        fs::write(d.path().join("bun.lock"), "").unwrap();
+        let (stacks, pms) = detect_stacks_and_pms(d.path());
+        assert!(stacks.contains(&"node".to_string()));
+        assert!(stacks.contains(&"bun".to_string()));
+        assert_eq!(pms, vec!["bun".to_string()]);
     }
 
     #[test]
