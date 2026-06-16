@@ -10,7 +10,7 @@ use anyhow::{bail, Context as _, Result};
 
 use crate::cli::{SyncAction, SyncArgs};
 use crate::style::Painter;
-use crate::sync::{self, GhCreate, PullOutcome, PushOutcome};
+use crate::sync::{self, GhCreate, PullOutcome, PushOutcome, ReconcileOutcome};
 
 /// Manual sync ops are interactive — the user is waiting — so give them a roomy
 /// timeout. (Auto-pull on the `run` hot path uses the short `[sync] timeout`.)
@@ -195,18 +195,39 @@ fn sync_now(dir: &Path, p: &Painter) -> Result<()> {
     let remote = sync::remote_name(dir);
 
     match sync::pull(dir, MANUAL_TIMEOUT).context("pulling from the remote")? {
-        PullOutcome::Pulled(0) => println!("{} already up to date · {}", p.green("✓"), p.dim(&remote)),
+        PullOutcome::Pulled(0) => {
+            println!("{} already up to date · {}", p.green("✓"), p.dim(&remote))
+        }
         PullOutcome::Pulled(n) => println!(
             "{} pulled {} · {}",
             p.green("✓"),
             changes(n),
             p.dim(&remote)
         ),
-        PullOutcome::Diverged => bail!(
-            "local and remote diverged — reconcile by hand in {} (e.g. `git -C {} pull --rebase`), then `rosita sync`",
-            dir.display(),
-            dir.display()
-        ),
+        PullOutcome::Diverged => {
+            // The manual sync can safely reconcile (the hot-path auto-pull can't):
+            // rebase local edits onto the remote, and only punt to a hand-merge if
+            // the two sides actually touched the same lines.
+            match sync::reconcile_rebase(dir, MANUAL_TIMEOUT)
+                .context("reconciling with the remote")?
+            {
+                ReconcileOutcome::Rebased(0) => {
+                    println!("{} reconciled with {}", p.green("✓"), p.dim(&remote))
+                }
+                ReconcileOutcome::Rebased(n) => println!(
+                    "{} reconciled · replayed {} onto {}",
+                    p.green("✓"),
+                    changes(n),
+                    p.dim(&remote)
+                ),
+                ReconcileOutcome::Conflicted => bail!(
+                    "local and remote changed the same lines — reconcile by hand in {} \
+                     (e.g. `git -C {} pull --rebase`, fix the conflicts, then `rosita sync`)",
+                    dir.display(),
+                    dir.display()
+                ),
+            }
+        }
     }
 
     match sync::commit_push(dir, "rosita: sync config", MANUAL_TIMEOUT)
