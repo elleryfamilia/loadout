@@ -1652,9 +1652,9 @@ mod tests {
             ),
         );
         assert_eq!(r.status, 200);
-        // Applied the recommended Rust pack: its 9 fragments are duplicated and
-        // its profile is created (9 + 1 staged ops).
-        assert_eq!(st.lock().unwrap().session.ops().len(), 10);
+        // Applied the recommended Rust pack: its 14 fragments are duplicated and
+        // its profile is created (14 + 1 staged ops).
+        assert_eq!(st.lock().unwrap().session.ops().len(), 15);
         let body = String::from_utf8(r.body).unwrap();
         // The Profiles tab now shows the staged "rust" profile and its caps.
         assert!(body.contains("staged the"), "pack flash missing");
@@ -1700,8 +1700,8 @@ mod tests {
             ),
         );
         assert_eq!(r.status, 200);
-        // The 14 everyday caps are duplicated and the "everyday" profile is created.
-        assert_eq!(st.lock().unwrap().session.ops().len(), 15);
+        // The 15 everyday caps are duplicated and the "everyday" profile is created.
+        assert_eq!(st.lock().unwrap().session.ops().len(), 16);
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("staged the"), "pack flash missing");
         assert!(body.contains("Terse communication"));
@@ -1729,8 +1729,8 @@ mod tests {
         let after_second = st.lock().unwrap().session.ops().len();
         // The second apply owns every cap already, so it re-stages only the
         // profile (EditProfile) — exactly one new op, no re-duplication.
-        assert_eq!(after_first, 15);
-        assert_eq!(after_second, 16);
+        assert_eq!(after_first, 16);
+        assert_eq!(after_second, 17);
     }
 
     #[test]

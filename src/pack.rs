@@ -61,9 +61,13 @@ impl Pack {
     }
 }
 
-// Each pack's fragment set is spelled out below (a stack cap + the shared
-// "everyday" essentials) so each profile is self-contained; the integrity tests
-// keep the shared tail consistent across the stack packs.
+// Each pack's fragment set is spelled out below: a stack cap + the shared
+// "everyday" essentials (incl. work-summary) + a live, repo-relevant grounding
+// tail (the `environment` framing, `toolchain`, `project-scripts`, `containers`).
+// Composition is one-profile-per-repo, so a dev who selects a stack pack never
+// co-applies the machine `everyday` pack — hence each stack pack carries its own
+// grounding. Machine-identity / security probes (`host`, `ai-tools`, VPN & secret
+// posture) stay in `everyday`. Integrity tests keep both tails consistent.
 const EVERYDAY: &[&str] = &[
     // Static guidance essentials.
     "terse-comms",
@@ -72,6 +76,7 @@ const EVERYDAY: &[&str] = &[
     "ask-before-risky",
     "secrets-hygiene",
     "validate-before-done",
+    "work-summary",
     "infra-caution",
     // Live machine grounding (dynamic probes). `environment` frames the probed
     // sections that follow; each script embeds its redacted stdout at render
@@ -97,6 +102,12 @@ const RUST: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
+    "work-summary",
+    // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
+    "environment",
+    "toolchain",
+    "project-scripts",
+    "containers",
 ];
 const NODE: &[&str] = &[
     "node-conventions",
@@ -108,6 +119,12 @@ const NODE: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
+    "work-summary",
+    // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
+    "environment",
+    "toolchain",
+    "project-scripts",
+    "containers",
 ];
 const NEXTJS: &[&str] = &[
     "nextjs-conventions",
@@ -119,6 +136,12 @@ const NEXTJS: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
+    "work-summary",
+    // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
+    "environment",
+    "toolchain",
+    "project-scripts",
+    "containers",
 ];
 const GO: &[&str] = &[
     "go-conventions",
@@ -130,6 +153,12 @@ const GO: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
+    "work-summary",
+    // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
+    "environment",
+    "toolchain",
+    "project-scripts",
+    "containers",
 ];
 const PYTHON: &[&str] = &[
     "python-conventions",
@@ -141,6 +170,12 @@ const PYTHON: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
+    "work-summary",
+    // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
+    "environment",
+    "toolchain",
+    "project-scripts",
+    "containers",
 ];
 
 /// The shipped starter packs, in gallery display order (the stack-agnostic
@@ -152,9 +187,9 @@ pub fn packs() -> Vec<Pack> {
             name: "Everyday essentials",
             description: "Safe, sensible defaults for general or no-repo work — terse \
                           communication, conventional commits, secrets discipline, ask \
-                          before risky actions, validate-before-done — plus live machine \
-                          grounding (host, toolchain, containers, AI tools, VPN/egress, \
-                          and secret-store posture) probed fresh at render.",
+                          before risky actions, validate-before-done, summarize work — plus \
+                          live machine grounding (host, toolchain, containers, AI tools, \
+                          VPN/egress, and secret-store posture) probed fresh at render.",
             icon: "shield",
             recommended_for: &["machine"],
             profile_name: "everyday",
@@ -165,7 +200,8 @@ pub fn packs() -> Vec<Pack> {
             id: "rust",
             name: "Rust",
             description: "Rust conventions (cargo, clippy, rustfmt) on top of the everyday \
-                          safety, commit, and quality essentials.",
+                          safety, commit, and quality essentials, plus live repo grounding \
+                          (toolchain, project commands, containers) probed at render.",
             icon: "code",
             recommended_for: &["rust"],
             profile_name: "rust",
@@ -176,7 +212,8 @@ pub fn packs() -> Vec<Pack> {
             id: "node",
             name: "Node.js / TypeScript",
             description: "Node.js conventions (pnpm, TypeScript) plus the everyday safety, \
-                          commit, and quality essentials.",
+                          commit, and quality essentials, plus live repo grounding \
+                          (toolchain, project commands, containers) probed at render.",
             icon: "code",
             recommended_for: &["node"],
             profile_name: "node",
@@ -187,7 +224,8 @@ pub fn packs() -> Vec<Pack> {
             id: "nextjs",
             name: "Next.js",
             description: "Next.js conventions (router + server/client boundaries, pnpm) plus \
-                          the everyday safety, commit, and quality essentials.",
+                          the everyday safety, commit, and quality essentials, plus live repo \
+                          grounding (toolchain, project commands, containers) probed at render.",
             icon: "code",
             recommended_for: &["nextjs"],
             profile_name: "nextjs",
@@ -198,7 +236,8 @@ pub fn packs() -> Vec<Pack> {
             id: "go",
             name: "Go",
             description: "Go conventions (standard toolchain + golangci-lint) plus the \
-                          everyday safety, commit, and quality essentials.",
+                          everyday safety, commit, and quality essentials, plus live repo \
+                          grounding (toolchain, project commands, containers) probed at render.",
             icon: "code",
             recommended_for: &["go"],
             profile_name: "go",
@@ -209,7 +248,8 @@ pub fn packs() -> Vec<Pack> {
             id: "python",
             name: "Python",
             description: "Python conventions (uv, ruff, pytest) plus the everyday safety, \
-                          commit, and quality essentials.",
+                          commit, and quality essentials, plus live repo grounding \
+                          (toolchain, project commands, containers) probed at render.",
             icon: "code",
             recommended_for: &["python"],
             profile_name: "python",
@@ -236,7 +276,12 @@ mod tests {
         "ask-before-risky",
         "validate-before-done",
         "testing-discipline",
+        "work-summary",
     ];
+
+    /// Live, repo-relevant grounding every stack pack bakes in (one-profile-per-
+    /// repo means the machine `everyday` pack never co-applies in a stack repo).
+    const STACK_GROUNDING: &[&str] = &["environment", "toolchain", "project-scripts", "containers"];
 
     #[test]
     fn pack_ids_and_profile_names_are_unique() {
@@ -305,6 +350,21 @@ mod tests {
                 assert!(
                     p.fragments.contains(essential),
                     "stack pack {} is missing essential {essential}",
+                    p.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stack_packs_include_live_grounding() {
+        // Because composition is one-profile-per-repo, each stack pack must carry
+        // its own live grounding — the machine `everyday` pack never co-applies.
+        for p in packs().into_iter().filter(|p| p.id != "everyday") {
+            for g in STACK_GROUNDING {
+                assert!(
+                    p.fragments.contains(g),
+                    "stack pack {} is missing live grounding {g}",
                     p.id
                 );
             }
