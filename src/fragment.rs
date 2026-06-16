@@ -280,6 +280,16 @@ pub fn palette() -> Vec<Fragment> {
              fine; keep changes scoped to this branch and don't wire them into shared \
              modules yet.",
         ),
+        frag(
+            "work-summary",
+            "Summarize work and next steps",
+            "Dev Workflow",
+            "When you finish a unit of work, close with two short, scannable bullet \
+             lists: **Done** — one bullet per change, in plain language (what changed \
+             and where, not how it was implemented); and **Next steps** — one concrete \
+             action per bullet for what remains, or an explicit note that nothing does. \
+             Keep both tight: no preamble, no restating the request.",
+        ),
         // --- quality -------------------------------------------------------
         frag(
             "validate-before-done",
@@ -337,13 +347,13 @@ pub fn palette() -> Vec<Fragment> {
             "environment",
             "Environment ground truth",
             "Local Environment",
-            "Environment is ground truth, not assumption. The sections below are \
-             probed live from this machine at render time — treat them as \
-             authoritative for identity, network posture, running containers, \
-             secret stores, and installed tooling. Before reasoning about \
-             deployment, networking, or host targets, consult them. A missing \
-             section means the probe found nothing (tool absent, daemon down, or \
-             logged out), so ask rather than guess.",
+            "Environment is ground truth, not assumption. The sections that follow \
+             are probed live at render time — treat them as authoritative for what \
+             is actually installed, running, and reachable here, plus the commands \
+             this repo defines. Consult them before assuming a tool, version, \
+             service, or command exists, and prefer them over guessing. A missing \
+             or empty section means the probe found nothing (tool absent, daemon \
+             down, or logged out), so ask rather than guess.",
         ),
         script_frag(
             "host",
@@ -387,10 +397,111 @@ fi
             r#"
 for tool in git node pnpm npm bun deno python3 uv ruby go cargo rustc rg fd gh docker; do
   if command -v "$tool" >/dev/null 2>&1; then
-    v=$("$tool" --version 2>&1 | head -n1)
+    # `go` reports its version via `go version`, not `--version` (the latter errors).
+    if [ "$tool" = go ]; then
+      v=$(go version 2>&1 | head -n1)
+    else
+      v=$("$tool" --version 2>&1 | head -n1)
+    fi
     printf '%-10s %s\n' "$tool" "$v"
   fi
 done
+"#,
+        ),
+        script_frag(
+            "project-scripts",
+            "Runnable project commands",
+            "5m",
+            r#"
+# Repo-scoped probe: the commands THIS project defines (package.json scripts,
+# Makefile/justfile targets, Cargo, go.mod) so the agent uses real entry points
+# instead of inventing them. Read-only; ends with `exit 0` so a short-circuiting
+# final test can't drop the output.
+out=""
+add() { out="${out}$1
+"; }
+
+# package.json scripts (node / bun)
+if [ -f package.json ]; then
+  pm="<pm> run"
+  [ -f package-lock.json ] && pm="npm run"
+  [ -f yarn.lock ] && pm="yarn"
+  [ -f pnpm-lock.yaml ] && pm="pnpm run"
+  [ -f bun.lock ] && pm="bun run"
+  [ -f bun.lockb ] && pm="bun run"
+  scripts=""
+  if command -v jq >/dev/null 2>&1; then
+    scripts=$(jq -r '.scripts // {} | to_entries[] | "  \(.key) — \(.value | gsub("\\s+";" "))"' package.json 2>/dev/null)
+  elif command -v node >/dev/null 2>&1; then
+    scripts=$(node -e 'try{const s=(require(process.cwd()+"/package.json").scripts)||{};for(const[k,v]of Object.entries(s))console.log("  "+k+" — "+String(v).replace(/\s+/g," ").trim())}catch(e){}' 2>/dev/null)
+  elif command -v bun >/dev/null 2>&1; then
+    scripts=$(bun -e 'try{const s=(require(process.cwd()+"/package.json").scripts)||{};for(const[k,v]of Object.entries(s))console.log("  "+k+" — "+String(v).replace(/\s+/g," ").trim())}catch(e){}' 2>/dev/null)
+  fi
+  if [ -n "$scripts" ]; then
+    add "package.json scripts (run with \`$pm <name>\`):"
+    add "$scripts"
+    add ""
+  fi
+fi
+
+# Makefile targets
+for mk in Makefile makefile GNUmakefile; do
+  if [ -f "$mk" ]; then
+    targets=$(grep -E '^[a-zA-Z0-9][a-zA-Z0-9_.-]*:' "$mk" 2>/dev/null | grep -v ':=' | sed -E 's/:.*//' | sort -u | sed 's/^/  /')
+    if [ -n "$targets" ]; then
+      add "Makefile targets (run with \`make <target>\`):"
+      add "$targets"
+      add ""
+    fi
+    break
+  fi
+done
+
+# justfile recipes
+for jf in justfile Justfile .justfile; do
+  if [ -f "$jf" ]; then
+    if command -v just >/dev/null 2>&1; then
+      recipes=$(just --list --unsorted 2>/dev/null | sed '1d')
+    else
+      recipes=$(grep -E '^[a-zA-Z0-9][a-zA-Z0-9_-]*( [^:]*)?:' "$jf" 2>/dev/null | sed -E 's/[ :].*//' | sort -u | sed 's/^/  /')
+    fi
+    if [ -n "$recipes" ]; then
+      add "justfile recipes (run with \`just <recipe>\`):"
+      add "$recipes"
+      add ""
+    fi
+    break
+  fi
+done
+
+# Cargo (rust)
+if [ -f Cargo.toml ]; then
+  add "Cargo: \`cargo build | test | run | clippy | fmt\` (standard)."
+  for cfg in .cargo/config.toml .cargo/config; do
+    if [ -f "$cfg" ]; then
+      aliases=$(sed -n '/^\[alias\]/,/^\[/p' "$cfg" 2>/dev/null | grep -E '^[a-zA-Z]')
+      if [ -n "$aliases" ]; then
+        add "  cargo aliases:"
+        add "$(printf '%s\n' "$aliases" | sed 's/^/    /')"
+      fi
+      break
+    fi
+  done
+  add ""
+fi
+
+# Go module
+if [ -f go.mod ]; then
+  add "Go module: \`go build ./... | go test ./... | go vet ./... | gofmt\` (standard)."
+  add ""
+fi
+
+if [ -n "$out" ]; then
+  echo "Commands this repo defines — prefer these over inventing build/test/lint/run invocations:"
+  echo
+  printf '%s' "$out"
+fi
+exit 0
 "#,
         ),
         script_frag(
