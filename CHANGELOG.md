@@ -8,6 +8,41 @@ All notable changes to rosita are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.6.0 — 2026-06-16
+
+### Added
+
+- **Bun support.** rosita detects `bun` as a stack (alongside `node`, the way
+  `nextjs` rides along), ships a built-in `bun` target (matched by
+  `bun.lock`/`bun.lockb`), a `bun-conventions` fragment, and a **Bun** starter
+  pack.
+- **`project-scripts` fragment** — a live probe that lists the commands a repo
+  actually defines (package.json scripts, Makefile/justfile targets, Cargo,
+  `go.mod`) so agents use real entry points instead of inventing them.
+- **`work-summary` fragment** — asks agents to close a unit of work with concise
+  Done / Next-steps bullet lists.
+- **Live grounding in the stack packs.** The Rust, Node.js, Next.js, Go, and
+  Python starter packs now bake in the `environment` framing plus `toolchain`,
+  `project-scripts`, and `containers`, so selecting a stack pack alone gives the
+  agent live machine/repo context (composition is one-profile-per-repo, so the
+  machine `everyday` pack never co-applies).
+- `rosita doctor` now flags script-backed fragments that exit non-zero while
+  still printing output — rosita drops a probe's output on a non-zero exit, so
+  such a fragment renders as nothing. The check points at the `exit 0` fix and
+  leaves the normal "tool absent → no output" case alone.
+
+### Changed
+
+- The live environment probes (`toolchain`, `containers`, `ai-tools`,
+  `tailnet`) now lead with a one-line explanation of what each section is and
+  how to use it, instead of emitting a bare data dump.
+
+### Fixed
+
+- The `toolchain` probe now reports `go` via `go version` rather than the
+  invalid `go --version`, which errored and embedded the error string in the
+  rendered output.
+
 ## 0.5.0 — 2026-06-10
 
 ### Changed
