@@ -8,6 +8,24 @@ All notable changes to rosita are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.6.1 — 2026-06-16
+
+### Fixed
+
+- **`rosita sync` now reconciles a diverged config instead of giving up.** When
+  two machines edit the global config (for example, a Studio apply on one box
+  and a push from another), a manual `rosita sync` rebases your local edits onto
+  the remote — the common case, where the two machines touched different
+  fragments, merges cleanly — and only asks you to reconcile by hand on a true
+  same-line conflict. Uncommitted edits are auto-stashed across the rebase, and
+  the rebase is aborted on conflict so the repo is never left half-merged. The
+  `run`/`refresh` auto-pull stays strictly fast-forward.
+- **Stop syncing the machine-specific `update-check` timestamp.** rosita's
+  once-a-day update check writes a timestamp into the config directory; it was
+  tracked by the sync repo, so every machine committed a different value and the
+  config repo diverged on it daily. It is now gitignored (existing synced repos
+  drop it on the next `rosita sync`).
+
 ## 0.6.0 — 2026-06-16
 
 ### Added
