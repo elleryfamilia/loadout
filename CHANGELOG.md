@@ -8,6 +8,19 @@ All notable changes to rosita are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.6.2 — 2026-06-16
+
+### Internal
+
+- **Dead-code cleanup (~250 lines, no user-facing change).** Removed unused
+  public helpers, write-only struct fields, an unconstructed staged-edit
+  variant, and two unreachable Studio HTTP routes (`/fs-status`,
+  `/profiles/<name>/preview`). Also dropped the Studio "context simulator": its
+  only mutator was never wired to a route, so it always rendered the real
+  detected context unchanged — an inert passthrough for a UI control that was
+  never built. Behavior is identical; the build, clippy, and the full test
+  suite are unaffected.
+
 ## 0.6.1 — 2026-06-16
 
 ### Fixed
