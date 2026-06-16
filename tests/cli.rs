@@ -636,6 +636,29 @@ fn doctor_runs_and_reports() {
 }
 
 #[test]
+fn doctor_flags_a_script_fragment_that_drops_output() {
+    // A script that prints then exits non-zero has its output dropped at render
+    // (rosita treats a non-zero exit as a failed probe), so doctor flags it. A
+    // clean script is reported as exiting cleanly.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\nid = \"dropper\"\nscript_lang = \"bash\"\ncommand = \"echo hi; exit 1\"\n\
+         \n[[fragments]]\nid = \"cleanprobe\"\nscript_lang = \"bash\"\ncommand = \"echo ok\"\n",
+    );
+
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Script fragments"))
+        .stdout(
+            predicate::str::contains("dropper").and(predicate::str::contains("renders nothing")),
+        )
+        .stdout(predicate::str::contains("exit cleanly"));
+}
+
+#[test]
 fn refresh_all_six_agents_emit_gitignored_overlays() {
     let fx = Fixture::new();
     fx.rust_project();

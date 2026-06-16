@@ -97,6 +97,8 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     check_env_policy(&mut c, &prep.config);
     // Private-data leak lint over public config layers.
     check_public_leaks(&mut c, &prep);
+    // Script fragments whose output rosita would silently drop (non-zero exit).
+    check_script_dropouts(&mut c, &prep);
 
     // Agents + their launch CLIs.
     println!("\nAgents ({} configured)", prep.config.agents.len());
@@ -255,6 +257,57 @@ fn check_skills(c: &mut Checks) {
                 }
             }
         }
+    }
+}
+
+/// Execute each configured script-backed fragment and flag any that exit
+/// non-zero while still printing to stdout. rosita drops a probe's output when
+/// its script exits non-zero, so such a fragment renders as nothing — usually a
+/// final `[ cond ] && cmd` that short-circuits. (Exit non-zero with *no* stdout
+/// is the normal "tool absent / nothing found" case and is left alone.) These
+/// are the user's own probes, which already run at render time, so executing
+/// them here adds no new capability — only a diagnosis.
+fn check_script_dropouts(c: &mut Checks, prep: &super::Prepared) {
+    let scripts: Vec<&crate::fragment::Fragment> = prep
+        .config
+        .fragments
+        .iter()
+        .filter(|f| f.command.is_some())
+        .collect();
+    if scripts.is_empty() {
+        return;
+    }
+    println!("\nScript fragments ({} probed)", scripts.len());
+    let mut clean = 0usize;
+    for f in scripts {
+        let cmd = f.command.as_deref().unwrap_or_default();
+        let out = crate::providers::run_once_in(cmd, f.script_lang.as_deref(), &prep.repo_base);
+        let status = out.data.get("status").and_then(serde_json::Value::as_i64);
+        let stdout = out
+            .data
+            .get("stdout")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if status != Some(0) && !stdout.trim().is_empty() {
+            let exit = status
+                .map(|s| format!("exits {s}"))
+                .unwrap_or_else(|| "was killed by a signal".to_string());
+            c.line(
+                Status::Warn,
+                format!(
+                    "{}: prints output but {exit} — rosita drops a probe's output on a non-zero exit, so this renders nothing. End the script with `exit 0`.",
+                    f.id
+                ),
+            );
+        } else {
+            clean += 1;
+        }
+    }
+    if clean > 0 {
+        c.line(
+            Status::Ok,
+            format!("{clean} script fragment(s) exit cleanly"),
+        );
     }
 }
 
