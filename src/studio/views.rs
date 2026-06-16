@@ -1740,15 +1740,6 @@ pub fn error_page(msg: &str) -> String {
     html! { (DOCTYPE) html { head { title { "Rosita studio — error" } } body { pre class="error" { (msg) } } } }.into_string()
 }
 
-/// `GET /fs-status` — the light external-edit poll banner.
-pub fn fs_status_fragment(changed: &[std::path::PathBuf]) -> String {
-    if changed.is_empty() {
-        return html! { span class="fs-clean" { "on-disk unchanged since load" } }.into_string();
-    }
-    let names: Vec<String> = changed.iter().map(|p| display_name(p)).collect();
-    html! { div class="banner warn" { span class="banner-icon" { (icon("alert")) } div class="banner-body" { "Config changed on disk: " (names.join(", ")) " — reload before applying." } } }.into_string()
-}
-
 // --- shared bits -------------------------------------------------------------
 
 fn atom_dot(a: &AtomDot) -> Markup {
@@ -1808,7 +1799,6 @@ mod tests {
             category: category.map(str::to_string),
             script_lang: None,
             private: false,
-            active: false,
         }
     }
 

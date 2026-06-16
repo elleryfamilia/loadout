@@ -49,9 +49,6 @@ impl Painter {
     pub fn cyan(&self, s: &str) -> String {
         self.fg(s, AnsiColor::Cyan)
     }
-    pub fn red(&self, s: &str) -> String {
-        self.fg(s, AnsiColor::Red)
-    }
     pub fn dim(&self, s: &str) -> String {
         self.paint(s, Style::new().dimmed())
     }

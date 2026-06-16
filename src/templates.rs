@@ -10,7 +10,7 @@
 //! So an agent's `template` field can name a custom per-agent body (drop a file
 //! at `templates/<id>.md.j2`); otherwise every agent shares the embedded overlay.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::config;
 
@@ -61,11 +61,6 @@ fn read_if_exists(path: &Path) -> crate::Result<Option<ResolvedTemplate>> {
 
 fn display_path(p: &Path) -> String {
     p.display().to_string()
-}
-
-/// Convenience: the global templates dir path (may not exist).
-pub fn global_templates_dir() -> Option<PathBuf> {
-    config::global_templates_dir()
 }
 
 #[cfg(test)]

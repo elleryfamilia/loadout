@@ -32,11 +32,6 @@ pub enum WriteAction {
 }
 
 impl WriteAction {
-    /// True if this represents (or would represent) a real change.
-    pub fn is_change(self) -> bool {
-        !matches!(self, WriteAction::Unchanged)
-    }
-
     /// Short human label.
     pub fn label(self) -> &'static str {
         match self {

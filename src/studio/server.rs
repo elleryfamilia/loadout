@@ -29,7 +29,7 @@ use crate::pack::Pack;
 use crate::profile::ProfileConfig;
 use crate::studio::assets;
 use crate::studio::edit::{Session, StagedOp};
-use crate::studio::state::{self, LibraryView, PreviewOutcome, Simulated, StudioState};
+use crate::studio::state::{self, LibraryView, PreviewOutcome, StudioState};
 use crate::studio::views;
 
 /// The sole route reachable without the session cookie (carries the token).
@@ -132,7 +132,6 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/tab/targets") => handle_tab(state, "targets"),
         ("GET", "/staged") => handle_staged(state),
         ("GET", "/close") => Resp::html(String::new()),
-        ("GET", "/fs-status") => handle_fs_status(state),
         ("GET", "/diff") => handle_diff(state),
         ("POST", "/apply") => handle_apply(state),
         ("POST", "/discard") => handle_discard(state),
@@ -196,11 +195,6 @@ fn handle_profile_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     match (req.method.as_str(), action) {
         ("GET", "edit") => handle_profile_edit(state, &name),
         ("GET", "select") => handle_profile_select(state, &name),
-        ("GET", "preview") => handle_profile_preview(state, &name, ""),
-        ("POST", "preview") => {
-            let agent = field(&req.body, "agent");
-            handle_profile_preview(state, &name, &agent)
-        }
         ("POST", "disable") => handle_profile_disable(state, &name),
         ("POST", "run") => handle_profile_run(state, &name),
         ("DELETE", "") => handle_profile_delete(state, &name),
@@ -280,7 +274,7 @@ fn profiles_tab_main(
             .map(|p| p.disabled)
             .unwrap_or(false);
         let outcome = state::render_profile(&snap, &name, "", DynamicMode::ReadOnly)
-            .unwrap_or_else(|e| empty_preview(&name, format!("preview error: {e}")));
+            .unwrap_or_else(|e| empty_preview(format!("preview error: {e}")));
         (name, outcome, disabled)
     });
     // On a fresh config (no profiles and no own caps), the empty Profiles tab
@@ -404,10 +398,9 @@ fn handle_fragment_run(state: &Arc<Mutex<StudioState>>, id: &str, profile: &str)
 }
 
 /// An empty preview outcome (used when a profile can't be composed/rendered).
-fn empty_preview(name: &str, note: String) -> PreviewOutcome {
+fn empty_preview(note: String) -> PreviewOutcome {
     PreviewOutcome {
         agent: String::new(),
-        profile_label: name.to_string(),
         context_summary: String::new(),
         fragment_count: 0,
         overlay: String::new(),
@@ -973,17 +966,6 @@ fn handle_profile_select(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
     )
 }
 
-fn handle_profile_preview(state: &Arc<Mutex<StudioState>>, name: &str, agent: &str) -> Resp {
-    handle_profile_detail(
-        state,
-        name,
-        agent,
-        DynamicMode::ReadOnly,
-        views::Expand::None,
-        None,
-    )
-}
-
 fn handle_profile_disable(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
     let res = {
         let mut s = state.lock().unwrap();
@@ -1148,7 +1130,6 @@ fn profile_preview_or_empty(
     state::render_profile_config(snap, profile, agent, DynamicMode::ReadOnly).unwrap_or_else(|e| {
         PreviewOutcome {
             agent: agent.to_string(),
-            profile_label: profile.name.clone(),
             context_summary: String::new(),
             fragment_count: 0,
             overlay: String::new(),
@@ -1266,12 +1247,6 @@ fn auto_push_after_apply(state: &Arc<Mutex<StudioState>>) -> Option<String> {
     }
 }
 
-fn handle_fs_status(state: &Arc<Mutex<StudioState>>) -> Resp {
-    // A light read of ≤4 small files; the heavy work (render) is kept off-lock.
-    let changed = state.lock().unwrap().session.external_edits();
-    Resp::html(views::fs_status_fragment(&changed))
-}
-
 // --- security guards ---------------------------------------------------------
 
 fn host_ok(req: &Req, port: u16) -> bool {
@@ -1339,11 +1314,6 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
         .unwrap_or(args.port);
 
     let state = Arc::new(Mutex::new(StudioState {
-        sim: Simulated {
-            agent: config.default_agent.clone(),
-            lang: None,
-            scope: None,
-        },
         session,
         base_context,
         repo_base,
@@ -1525,11 +1495,6 @@ mod tests {
         let base_context = context::detect_context(repo, &config).unwrap();
         let session = Session::open(repo, Some(&gdir)).unwrap();
         Arc::new(Mutex::new(StudioState {
-            sim: Simulated {
-                agent: config.default_agent.clone(),
-                lang: None,
-                scope: None,
-            },
             session,
             base_context,
             repo_base: repo.to_path_buf(),
@@ -1895,16 +1860,10 @@ mod tests {
         // The rendered/raw toggle is gone in the new design.
         assert!(!body.contains("overlay-toggle") && !body.contains("ov-raw"));
 
-        // The agent-change POST is CSRF-guarded (no Origin → rejected).
+        // A state-changing POST is CSRF-guarded (no Origin → rejected).
         let r = route(
             &st,
-            &req(
-                "POST",
-                "/profiles/rust/preview",
-                "",
-                &[HOST, COOKIE],
-                "agent=claude",
-            ),
+            &req("POST", "/profiles/rust/disable", "", &[HOST, COOKIE], ""),
         );
         assert_eq!(r.status, 403);
     }

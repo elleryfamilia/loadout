@@ -73,8 +73,6 @@ pub struct RenderOutput {
     pub content: String,
     /// `sha256:…` of the context that produced it.
     pub context_hash: String,
-    /// Where the base template came from.
-    pub template_source: String,
     /// Concatenated fragment guidance (the `profile_guidance` body; may be
     /// empty, e.g. when every fragment is restricted to other agents).
     pub profile_guidance: String,
@@ -214,7 +212,6 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
     Ok(RenderOutput {
         content: format!("{header}{body}"),
         context_hash,
-        template_source: base.source,
         profile_guidance,
         has_dynamic,
         fragments: rendered_caps,

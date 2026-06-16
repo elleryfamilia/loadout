@@ -566,11 +566,6 @@ pub fn global_config_path() -> Option<PathBuf> {
     global_config_dir().map(|d| d.join("config.toml"))
 }
 
-/// Path to the global private `local.toml` (gitignored), if resolvable.
-pub fn global_local_path() -> Option<PathBuf> {
-    global_config_dir().map(|d| d.join("local.toml"))
-}
-
 /// Repo private `local.toml` path (gitignored): real hostnames, `host_classes`,
 /// fragment `params` — the sensitive layer kept out of the shareable config.
 pub fn repo_local_path(repo_base: &Path) -> PathBuf {

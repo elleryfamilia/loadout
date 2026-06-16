@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crate::adapters;
 use crate::config::Config;
-use crate::context::{Context, GitContext, Scope};
+use crate::context::{Context, Scope};
 use crate::dynamic::DynamicMode;
 use crate::fragment::{palette, Fragment, Layer};
 use crate::pack::{self, Pack};
@@ -18,50 +18,15 @@ use crate::profile::{self, FragmentRef, ProfileConfig, Selection};
 use crate::render::{self, RenderRequest};
 use crate::studio::edit::{Session, StagedOp};
 
-/// The simulated context the preview is rendered for. Each field overrides the
-/// real detected context; `None`/empty means "use what was detected".
-#[derive(Debug, Clone)]
-pub struct Simulated {
-    /// Target agent id to render for.
-    pub agent: String,
-    /// Override the detected stack/language (empty ⇒ no stack).
-    pub lang: Option<String>,
-    /// Override repo-vs-machine scope.
-    pub scope: Option<Scope>,
-}
-
-impl Simulated {
-    /// Update the simulator from a posted urlencoded form (`lang`/`scope`/`agent`).
-    /// Unrecognized/blank values reset to "use detected".
-    pub fn update_from_form(&mut self, body: &str) {
-        for (k, v) in parse_pairs(body) {
-            match k.as_str() {
-                "agent" if !v.is_empty() => self.agent = v,
-                "lang" => self.lang = if v.is_empty() { None } else { Some(v) },
-                "scope" => {
-                    self.scope = match v.as_str() {
-                        "repo" => Some(Scope::Repo),
-                        "machine" => Some(Scope::Machine),
-                        _ => None,
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 /// A studio editing/viewing session: the edit engine + the detected context +
-/// the simulator + the security token/port. Lives behind an `Arc<Mutex<…>>`.
+/// the security token/port. Lives behind an `Arc<Mutex<…>>`.
 pub struct StudioState {
     /// The comment-preserving edit engine over the writable layers.
     pub session: Session,
-    /// The real detected context (the simulator overrides a clone of this).
+    /// The real detected context the preview is rendered for.
     pub base_context: Context,
     /// Repo base (git root or cwd).
     pub repo_base: PathBuf,
-    /// The simulated context the preview reflects.
-    pub sim: Simulated,
     /// Per-session CSRF/session token (also the bootstrap-cookie value).
     pub token: String,
     /// Bound port (for Host/Origin checks).
@@ -79,7 +44,6 @@ impl StudioState {
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
             base_context: self.base_context.clone(),
-            sim: self.sim.clone(),
             layer_texts: self.session.staged_layer_texts(),
         }
     }
@@ -88,7 +52,6 @@ impl StudioState {
 /// An owned, lock-free snapshot for rendering a view.
 pub struct Snapshot {
     pub base_context: Context,
-    pub sim: Simulated,
     pub layer_texts: Vec<(Layer, PathBuf, String)>,
 }
 
@@ -96,10 +59,7 @@ pub struct Snapshot {
 pub struct PreviewOutcome {
     /// Agent the overlay was rendered for.
     pub agent: String,
-    /// Selected profile label (`none` when no profile applies). Retained for the
-    /// `profile {label}` text in the overlay head.
-    pub profile_label: String,
-    /// Short human summary of the simulated context, e.g. `rust · repo`.
+    /// Short human summary of the context, e.g. `rust · repo`.
     pub context_summary: String,
     /// How many fragments actually render for `agent` (after agent gating) —
     /// the provenance breadcrumb's count, truthful to what's in the overlay.
@@ -148,8 +108,6 @@ pub struct FragmentView {
     pub script_lang: Option<String>,
     /// True when authored in a `*local.toml` layer (private / gitignored).
     pub private: bool,
-    /// Composed into the current preview overlay.
-    pub active: bool,
 }
 
 /// Whether a profile's referenced fragment id resolves to something that
@@ -176,10 +134,8 @@ pub struct ProfileView {
     pub name: String,
     pub targets: Vec<String>,
     pub selected: bool,
-    pub candidate: bool,
     /// When true the profile is an off-switch off (never selected/composed).
     pub disabled: bool,
-    pub fragments: Vec<String>,
     /// Resolved composition atoms, in declared order (drives the card's dots).
     pub atoms: Vec<AtomDot>,
 }
@@ -220,31 +176,6 @@ pub struct TargetsView {
 /// Assemble the staged config (origin-tagged) from a snapshot.
 pub fn staged_config(snap: &Snapshot) -> crate::Result<Config> {
     Config::from_layer_strs(snap.layer_texts.clone())
-}
-
-/// Apply the simulator overrides to the detected context.
-pub fn simulated_context(base: &Context, sim: &Simulated) -> Context {
-    let mut ctx = base.clone();
-    if let Some(lang) = &sim.lang {
-        ctx.stacks = if lang.is_empty() {
-            vec![]
-        } else {
-            vec![lang.clone()]
-        };
-    }
-    match sim.scope {
-        Some(Scope::Machine) => ctx.git = None,
-        Some(Scope::Repo) if ctx.git.is_none() => {
-            ctx.git = Some(GitContext {
-                root: ctx.repo_base.clone(),
-                branch: Some("main".to_string()),
-                remotes: vec![],
-                is_worktree: false,
-            });
-        }
-        _ => {}
-    }
-    ctx
 }
 
 /// Select the profile for `(cfg, ctx)` honoring the on-disk binding. `select`
@@ -394,7 +325,6 @@ fn render_profile_in_config(
         .collect();
     Ok(PreviewOutcome {
         agent: agent_id,
-        profile_label: profile.name.clone(),
         context_summary: context_summary(&ctx),
         fragment_count,
         overlay: out.content,
@@ -460,8 +390,8 @@ fn context_for_profile(base: &Context, profile: &ProfileConfig) -> Context {
     ctx
 }
 
-/// A short human summary of a (simulated) context for the provenance
-/// breadcrumb, e.g. `rust · repo` or `no stack · machine`.
+/// A short human summary of a context for the provenance breadcrumb,
+/// e.g. `rust · repo` or `no stack · machine`.
 fn context_summary(ctx: &Context) -> String {
     let stack = if ctx.stacks.is_empty() {
         "no stack".to_string()
@@ -473,35 +403,22 @@ fn context_summary(ctx: &Context) -> String {
 }
 
 /// Build the left-pane library view (your caps + the palette + your profiles),
-/// marking what's active/selected for the snapshot's simulated context.
+/// marking the profile selected for the snapshot's detected context.
 pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
     let cfg = staged_config(snap)?;
-    let ctx = simulated_context(&snap.base_context, &snap.sim);
-    let selection = select_for(&cfg, &ctx);
+    let selection = select_for(&cfg, &snap.base_context);
 
     let selected_name = match &selection {
         Selection::Use(p) | Selection::Default(p) => Some(p.name.clone()),
         _ => None,
     };
-    let active_ids: Vec<String> = match &selection {
-        Selection::Use(p) | Selection::Default(p) => {
-            profile::compose_profile(&ctx, p, &cfg.fragments, &cfg.fragment_params)
-                .fragments
-                .iter()
-                .map(|rc| rc.fragment.id.clone())
-                .collect()
-        }
-        _ => vec![],
-    };
 
-    let tags = ctx.selection_targets();
     let yours = cfg
         .fragments
         .iter()
         .map(|c| FragmentView {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
             category: c.category.clone(),
-            active: active_ids.contains(&c.id),
             title: c.title().to_string(),
             summary: fragment_summary(c),
             script_lang: c.script_lang.clone(),
@@ -535,7 +452,6 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
         .map(|c| FragmentView {
             kind: kind_of(c.command.is_some(), c.provider.is_some()),
             category: c.category.clone(),
-            active: false,
             title: c.title().to_string(),
             summary: fragment_summary(c),
             script_lang: c.script_lang.clone(),
@@ -550,9 +466,7 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
             name: p.name.clone(),
             targets: p.targets.clone(),
             selected: selected_name.as_deref() == Some(p.name.as_str()),
-            candidate: profile::profile_matches_targets(p, &tags),
             disabled: p.disabled,
-            fragments: p.fragments.iter().map(|r| r.id().to_string()).collect(),
             atoms: p
                 .fragments
                 .iter()
@@ -630,10 +544,8 @@ pub fn targets_view(snap: &Snapshot) -> TargetsView {
 }
 
 /// First-launch onboarding readout for a fresh config (no profiles **and** no
-/// own fragments yet): what rosita detected here, plus a "quick start"
-/// suggestion — a starter profile pre-filled from the detected target and a few
-/// palette fragments. The palette items are only *suggested*; quick-start
-/// duplicates them into your library (staged) so you own and can edit them.
+/// own fragments yet): what rosita detected here. The welcome view pairs this
+/// with the starter-pack gallery, which is what actually seeds a profile.
 pub struct Onboarding {
     /// The detected primary stack (`rust`, `node`, …), or `None` when none was
     /// recognized / outside a repo.
@@ -642,55 +554,18 @@ pub struct Onboarding {
     pub scope: Scope,
     /// The current branch, when in a repo.
     pub branch: Option<String>,
-    /// Suggested profile name (the detected target, `machine`, or `project`).
-    pub name: String,
-    /// Suggested `targets` (the detected target, or empty when none was found).
-    pub targets: Vec<String>,
-    /// Palette fragment ids the quick-start composes (each duplicated into the
-    /// library on use). Already filtered to real palette ids and de-duplicated.
-    pub caps: Vec<String>,
 }
 
-/// Compute the [`Onboarding`] suggestion for a detected context. The mapping is
-/// deliberately coarse: the matching `<stack>-conventions` palette cap (or
-/// `infra-caution` for the machine context), plus the universal `terse-comms`
-/// and `conventional-commits` starters.
+/// Compute the [`Onboarding`] readout (detected stack/scope/branch) for a fresh
+/// config. The welcome view renders this above the starter-pack gallery.
 pub fn onboarding(base: &Context) -> Onboarding {
     let scope = base.scope();
     let stack = base.stacks.first().cloned();
     let branch = base.git.as_ref().and_then(|g| g.branch.clone());
-    let (name, targets) = match (&stack, scope) {
-        (Some(s), _) => (s.clone(), vec![s.clone()]),
-        (None, Scope::Machine) => ("machine".to_string(), vec!["machine".to_string()]),
-        (None, Scope::Repo) => ("project".to_string(), Vec::new()),
-    };
-    let stack_cap = match stack.as_deref() {
-        Some("rust") => Some("rust-conventions"),
-        Some("nextjs") => Some("nextjs-conventions"),
-        Some("node") => Some("node-conventions"),
-        Some("go") => Some("go-conventions"),
-        Some("python") => Some("python-conventions"),
-        _ => None,
-    };
-    let mut caps: Vec<String> = Vec::new();
-    if let Some(c) = stack_cap {
-        caps.push(c.to_string());
-    } else if scope == Scope::Machine {
-        caps.push("infra-caution".to_string());
-    }
-    caps.push("terse-comms".to_string());
-    caps.push("conventional-commits".to_string());
-    // Keep only ids that really exist in the palette, de-duplicated, order-stable.
-    let pal: std::collections::HashSet<String> = palette().into_iter().map(|c| c.id).collect();
-    let mut seen = std::collections::HashSet::new();
-    caps.retain(|id| pal.contains(id) && seen.insert(id.clone()));
     Onboarding {
         stack,
         scope,
         branch,
-        name,
-        targets,
-        caps,
     }
 }
 
@@ -713,20 +588,18 @@ pub struct PackView {
 /// The pack recommended for the snapshot's detected context, if any (the first
 /// pack whose `recommended_for` matches a selection target).
 pub fn recommended_pack(snap: &Snapshot) -> Option<Pack> {
-    let ctx = simulated_context(&snap.base_context, &snap.sim);
-    let targets = ctx.selection_targets();
+    let targets = snap.base_context.selection_targets();
     pack::packs()
         .into_iter()
         .find(|p| targets.iter().any(|t| p.is_recommended_for(t)))
 }
 
-/// Build the starter-pack gallery for the snapshot's (simulated) context:
+/// Build the starter-pack gallery for the snapshot's detected context:
 /// recommended packs first, each with its fragments' atom dots and an
 /// already-applied flag. No probes — purely from the staged snapshot.
 pub fn pack_views(snap: &Snapshot) -> crate::Result<Vec<PackView>> {
     let cfg = staged_config(snap)?;
-    let ctx = simulated_context(&snap.base_context, &snap.sim);
-    let targets = ctx.selection_targets();
+    let targets = snap.base_context.selection_targets();
 
     let owned_ids: std::collections::HashSet<&str> =
         cfg.fragments.iter().map(|c| c.id.as_str()).collect();
@@ -1321,23 +1194,6 @@ mod tests {
             fragment_summary(&c).as_deref(),
             Some("Runs a script; its output is embedded.")
         );
-    }
-
-    #[test]
-    fn simulator_form_updates_and_resets() {
-        let mut sim = Simulated {
-            agent: "claude".into(),
-            lang: None,
-            scope: None,
-        };
-        sim.update_from_form("lang=go&scope=machine&agent=codex");
-        assert_eq!(sim.lang.as_deref(), Some("go"));
-        assert!(matches!(sim.scope, Some(Scope::Machine)));
-        assert_eq!(sim.agent, "codex");
-        // Blank lang resets to "use detected".
-        sim.update_from_form("lang=&scope=");
-        assert!(sim.lang.is_none());
-        assert!(sim.scope.is_none());
     }
 
     #[test]

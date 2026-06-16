@@ -242,16 +242,10 @@ pub fn repo_base_for(cwd: &Path) -> PathBuf {
 
 /// Run the full detector pipeline for `cwd` against `config`. Detection is
 /// **cache-only** for script-predicate targets (no code runs) — the default for
-/// inspection commands; use [`detect_context_live`] on the real render paths.
+/// inspection commands; pass `live = true` via [`detect_context_with`] on the
+/// real render paths (`run`/`refresh`).
 pub fn detect_context(cwd: &Path, config: &Config) -> crate::Result<Context> {
     detect_context_with(cwd, config, false)
-}
-
-/// Like [`detect_context`] but **live**: script-predicate custom targets may
-/// execute (and cache their verdict). For `run`/`render`/`refresh`, which
-/// already execute dynamic fragments.
-pub fn detect_context_live(cwd: &Path, config: &Config) -> crate::Result<Context> {
-    detect_context_with(cwd, config, true)
 }
 
 /// Run the full detector pipeline for `cwd` against `config`, with `live`

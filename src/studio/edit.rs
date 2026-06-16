@@ -59,11 +59,6 @@ pub enum StagedOp {
     /// Copy a shipped palette fragment into a layer to own it (the only way to
     /// "edit" a palette item). Re-resolved from the palette on replay.
     DuplicatePaletteItem { id: String, to_layer: Layer },
-    /// Add a new custom target to a layer.
-    CreateTarget {
-        layer: Layer,
-        target: Box<TargetDef>,
-    },
     /// Replace the target with this id in a layer (created if absent).
     EditTarget {
         layer: Layer,
@@ -84,7 +79,6 @@ impl StagedOp {
             | StagedOp::CreateProfile { layer, .. }
             | StagedOp::EditProfile { layer, .. }
             | StagedOp::DeleteProfile { layer, .. }
-            | StagedOp::CreateTarget { layer, .. }
             | StagedOp::EditTarget { layer, .. }
             | StagedOp::DeleteTarget { layer, .. } => *layer,
             StagedOp::DuplicatePaletteItem { to_layer, .. } => *to_layer,
@@ -421,9 +415,6 @@ fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
                 .ok_or_else(|| anyhow!("unknown palette fragment '{id}'"))?;
             // Duplicating an existing id replaces it (you own the copy now).
             upsert(aot_mut(doc, "fragments"), "id", id, fragment_table(&cap)?);
-        }
-        StagedOp::CreateTarget { target, .. } => {
-            aot_mut(doc, "targets").push(target_table(target)?);
         }
         StagedOp::EditTarget { id, target, .. } => {
             upsert(aot_mut(doc, "targets"), "id", id, target_table(target)?);
