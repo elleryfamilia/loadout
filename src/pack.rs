@@ -126,6 +126,23 @@ const NODE: &[&str] = &[
     "project-scripts",
     "containers",
 ];
+const BUN: &[&str] = &[
+    "bun-conventions",
+    "baseline",
+    "terse-comms",
+    "conventional-commits",
+    "branch-discipline",
+    "secrets-hygiene",
+    "ask-before-risky",
+    "validate-before-done",
+    "testing-discipline",
+    "work-summary",
+    // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
+    "environment",
+    "toolchain",
+    "project-scripts",
+    "containers",
+];
 const NEXTJS: &[&str] = &[
     "nextjs-conventions",
     "baseline",
@@ -219,6 +236,18 @@ pub fn packs() -> Vec<Pack> {
             profile_name: "node",
             targets: &["node"],
             fragments: NODE,
+        },
+        Pack {
+            id: "bun",
+            name: "Bun",
+            description: "Bun conventions (bun runtime + package manager, TypeScript) plus the \
+                          everyday safety, commit, and quality essentials, plus live repo \
+                          grounding (toolchain, project commands, containers) probed at render.",
+            icon: "code",
+            recommended_for: &["bun"],
+            profile_name: "bun",
+            targets: &["bun"],
+            fragments: BUN,
         },
         Pack {
             id: "nextjs",

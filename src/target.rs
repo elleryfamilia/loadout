@@ -231,6 +231,13 @@ pub fn builtin_targets() -> Vec<TargetDef> {
             file("package.json"),
         ),
         t(
+            "bun",
+            "a Bun lockfile (bun.lock or bun.lockb) at the repo root",
+            TargetRule::AnyOf {
+                rules: vec![file("bun.lock"), file("bun.lockb")],
+            },
+        ),
+        t(
             "nextjs",
             "package.json names `next` as a dependency",
             TargetRule::AllOf {
@@ -425,7 +432,8 @@ mod tests {
     fn builtin_catalog_is_well_formed() {
         let ids: Vec<String> = builtin_targets().into_iter().map(|t| t.id).collect();
         for needed in [
-            "rust", "node", "nextjs", "go", "python", "java", "ruby", "php", "swift", "dotnet",
+            "rust", "node", "bun", "nextjs", "go", "python", "java", "ruby", "php", "swift",
+            "dotnet",
         ] {
             assert!(
                 ids.contains(&needed.to_string()),
@@ -468,6 +476,23 @@ mod tests {
         // Plain node (no next) doesn't match the nextjs descriptor.
         fs::write(d.path().join("package.json"), r#"{"dependencies":{}}"#).unwrap();
         assert!(!nextjs.rule.declarative_match(d.path()));
+    }
+
+    #[test]
+    fn bun_descriptor_matches_either_lockfile() {
+        let bun = builtin_targets()
+            .into_iter()
+            .find(|t| t.id == "bun")
+            .unwrap();
+        for lock in ["bun.lock", "bun.lockb"] {
+            let d = tmp();
+            fs::write(d.path().join(lock), "").unwrap();
+            assert!(bun.rule.declarative_match(d.path()), "should match {lock}");
+        }
+        // A plain node repo (no bun lockfile) doesn't match the bun descriptor.
+        let d = tmp();
+        fs::write(d.path().join("package.json"), "{}").unwrap();
+        assert!(!bun.rule.declarative_match(d.path()));
     }
 
     #[test]
