@@ -1026,24 +1026,26 @@ fn handle_profile_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     // The upsert key: the original name when editing (so a rename finds and
     // replaces the right profile in place), else the new name (a fresh create).
     let original = original_profile_name(&pairs);
-    // Renaming onto a *different* existing profile would silently clobber it —
-    // refuse, keeping the user in the editor with their draft intact.
-    if let Some(orig) = original {
-        if orig != name {
-            let taken = {
-                let snap = state.lock().unwrap().snapshot();
-                state::staged_config(&snap)
-                    .map(|cfg| cfg.profiles.iter().any(|p| p.name == name))
-                    .unwrap_or(false)
-            };
-            if taken {
-                return profile_editor_with_error(
-                    state,
-                    &pairs,
-                    &format!("a profile named “{name}” already exists — choose another name"),
-                );
-            }
-        }
+    // The name must be free unless we're keeping it (editing the same profile
+    // under its current name). Creating, or renaming, onto a *different* existing
+    // profile would silently clobber it via upsert — refuse, keeping the user in
+    // the editor with their draft intact.
+    let collides = {
+        let snap = state.lock().unwrap().snapshot();
+        state::staged_config(&snap)
+            .map(|cfg| {
+                cfg.profiles
+                    .iter()
+                    .any(|p| p.name == name && Some(p.name.as_str()) != original)
+            })
+            .unwrap_or(false)
+    };
+    if collides {
+        return profile_editor_with_error(
+            state,
+            &pairs,
+            &format!("a profile named “{name}” already exists — choose another name"),
+        );
     }
     let key = original.unwrap_or(name.as_str()).to_string();
     // Profiles are global-only — always authored into the global config.
@@ -2409,6 +2411,29 @@ mod tests {
         ));
         assert!(err.contains("already exists"), "rename collision: {err}");
         // Nothing staged.
+        let diff = body_of(route(&st, &req("GET", "/diff", "", &[HOST, COOKIE], "")));
+        assert!(diff.contains("No staged changes"));
+    }
+
+    #[test]
+    fn new_profile_onto_existing_name_is_rejected() {
+        // Creating a *new* profile whose name already exists must not silently
+        // clobber the existing one (no `original_name` → it's a create).
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\n\
+                   [[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+        let err = body_of(route(
+            &st,
+            &req(
+                "POST",
+                "/profiles",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "new=1&name=rust&targets=go&fragments=rc",
+            ),
+        ));
+        assert!(err.contains("already exists"), "create collision: {err}");
         let diff = body_of(route(&st, &req("GET", "/diff", "", &[HOST, COOKIE], "")));
         assert!(diff.contains("No staged changes"));
     }

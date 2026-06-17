@@ -473,9 +473,6 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
             id: c.id.clone(),
         })
         .collect();
-    // Resolve each target id a profile declares to its icon token: a built-in's
-    // glyph (or lettermark fallback), a custom target's chosen icon, or `None`
-    // (unknown id / no icon) so the chip derives a lettermark.
     // Selectable target options for the profile editor: every built-in plus the
     // user's custom targets (in catalog order), then the synthetic `machine`
     // scope. Derived from the catalog so the editor can never drift out of sync

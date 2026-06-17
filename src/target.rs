@@ -213,8 +213,7 @@ fn op_matches(op: Op, haystack: &str, needle: &str) -> bool {
 /// built-in is detected, uniformly with custom targets.
 pub fn builtin_targets() -> Vec<TargetDef> {
     // Each built-in's `icon` comes from `builtin_icon` (the single source of
-    // truth). Ids without a dedicated glyph there (go/python/php/swift) carry no
-    // icon and render as a lettermark badge — see [`lettermark`].
+    // truth) — every built-in resolves to a real brand logo there.
     fn t(id: &str, description: &str, rule: TargetRule) -> TargetDef {
         TargetDef {
             id: id.to_string(),
