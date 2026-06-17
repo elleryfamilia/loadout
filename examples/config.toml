@@ -49,9 +49,9 @@ max_output_kib = 32
 # --- everyday essentials (safe, sensible defaults any profile can compose) ----
 [[fragments]]
 id = "terse-comms"
-description = "Terse communication"
+description = "Communication style"
 category = "Operating Style"
-guidance = "Be terse: lead with the result and what changed; skip preamble. For non-trivial decisions, briefly note the reasoning, the tradeoffs, and the alternatives considered."
+guidance = "Use plain, direct language. Explain ideas before using shorthand, and don't over-compress reasoning into jargon. When reporting work, start with the result, say what changed and why it matters, and separate facts, decisions, risks, and next steps."
 
 [[fragments]]
 id = "conventional-commits"
