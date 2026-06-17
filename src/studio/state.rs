@@ -1228,7 +1228,7 @@ mod tests {
             .find(|c| c.id == "terse-comms")
             .unwrap();
         let s = fragment_summary(&c).expect("static cap has a summary");
-        assert!(s.starts_with("Be terse"), "got: {s}");
+        assert!(s.starts_with("Use plain"), "got: {s}");
         assert!(!s.contains('\n'), "summary is a single line");
         // A leading HTML comment + heading marker are stripped, whitespace collapsed.
         c.guidance = "<!-- gen -->\n# Heading\n\nbody".into();

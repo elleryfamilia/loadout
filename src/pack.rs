@@ -62,7 +62,7 @@ impl Pack {
 }
 
 // Each pack's fragment set is spelled out below: a stack cap + the shared
-// "everyday" essentials (incl. work-summary) + a live, repo-relevant grounding
+// "everyday" essentials + a live, repo-relevant grounding
 // tail (the `environment` framing, `toolchain`, `project-scripts`, `containers`).
 // Composition is one-profile-per-repo, so a dev who selects a stack pack never
 // co-applies the machine `everyday` pack — hence each stack pack carries its own
@@ -76,7 +76,6 @@ const EVERYDAY: &[&str] = &[
     "ask-before-risky",
     "secrets-hygiene",
     "validate-before-done",
-    "work-summary",
     "infra-caution",
     // Live machine grounding (dynamic probes). `environment` frames the probed
     // sections that follow; each script embeds its redacted stdout at render
@@ -102,7 +101,6 @@ const RUST: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
-    "work-summary",
     // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
     "environment",
     "toolchain",
@@ -119,7 +117,6 @@ const NODE: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
-    "work-summary",
     // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
     "environment",
     "toolchain",
@@ -136,7 +133,6 @@ const BUN: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
-    "work-summary",
     // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
     "environment",
     "toolchain",
@@ -153,7 +149,6 @@ const NEXTJS: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
-    "work-summary",
     // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
     "environment",
     "toolchain",
@@ -170,7 +165,6 @@ const GO: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
-    "work-summary",
     // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
     "environment",
     "toolchain",
@@ -187,7 +181,6 @@ const PYTHON: &[&str] = &[
     "ask-before-risky",
     "validate-before-done",
     "testing-discipline",
-    "work-summary",
     // Live, repo-relevant grounding (machine-only probes stay in `everyday`).
     "environment",
     "toolchain",
@@ -202,10 +195,10 @@ pub fn packs() -> Vec<Pack> {
         Pack {
             id: "everyday",
             name: "Everyday essentials",
-            description: "Safe, sensible defaults for general or no-repo work — terse \
-                          communication, conventional commits, secrets discipline, ask \
-                          before risky actions, validate-before-done, summarize work — plus \
-                          live machine grounding (host, toolchain, containers, AI tools, \
+            description: "Safe, sensible defaults for general or no-repo work — plain, \
+                          direct communication, conventional commits, secrets discipline, \
+                          ask before risky actions, and validate-before-done — plus live \
+                          machine grounding (host, toolchain, containers, AI tools, \
                           VPN/egress, and secret-store posture) probed fresh at render.",
             icon: "shield",
             recommended_for: &["machine"],
@@ -305,7 +298,6 @@ mod tests {
         "ask-before-risky",
         "validate-before-done",
         "testing-discipline",
-        "work-summary",
     ];
 
     /// Live, repo-relevant grounding every stack pack bakes in (one-profile-per-

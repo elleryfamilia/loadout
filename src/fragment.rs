@@ -202,11 +202,33 @@ pub fn palette() -> Vec<Fragment> {
         // --- communication -------------------------------------------------
         frag(
             "terse-comms",
-            "Terse communication",
+            "Communication style",
             "Operating Style",
-            "Be terse: lead with the result and what changed; skip preamble. For \
-             non-trivial decisions, briefly note the reasoning, the tradeoffs, and the \
-             alternatives considered.",
+            r#"Use plain, direct language.
+
+Assume the reader is technical, but don't assume they have all the current
+context in their head. Explain important ideas clearly before using shorthand.
+
+When reporting work:
+
+- Start with the result.
+- Explain what changed in plain language.
+- Say why it matters.
+- Define any project-specific shorthand or labels before using them.
+- Prefer short sentences over dense paragraphs.
+- Don't over-compress reasoning into jargon-heavy summaries.
+- Use an example when a concept could be misunderstood.
+- Separate facts, decisions, risks, and next steps.
+
+Good: "I added retries to the upload step. Uploads were failing on brief network
+blips, which aborted the whole job. It now retries a few times before giving up,
+so transient failures don't kill the run."
+
+Avoid: "Upload path hardened; transient-failure surface narrowed via bounded
+retry, materially de-risking the happy path."
+
+When asking the user to choose a direction, summarize each option in plain
+language and state the tradeoff in one sentence."#,
         ),
         // --- stack conventions (one per detected language/platform) --------
         frag(
