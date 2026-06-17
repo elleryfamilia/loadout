@@ -8,6 +8,21 @@ All notable changes to rosita are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.7.2 — 2026-06-17
+
+### Changed
+
+- **Starter packs ship a plain "Communication style" fragment.** The everyday
+  and per-stack packs now compose plain, direct communication guidance —
+  explain ideas before using shorthand, report the result first, and separate
+  facts, decisions, risks, and next steps — in place of the old "terse
+  communication" wording. The example config reflects the same change.
+- **`work-summary` is no longer baked into the starter packs.** Its reporting
+  guidance is now covered by the communication fragment, so packs compose one
+  coherent communication section instead of two overlapping ones. The
+  `work-summary` fragment remains in the palette for anyone who still wants to
+  pick it.
+
 ## 0.7.1 — 2026-06-16
 
 ### Changed

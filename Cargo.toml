@@ -1,6 +1,6 @@
 [package]
 name = "rosita"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 rust-version = "1.85"
 description = "Inject global context into your AI coding agents: detect the project, select the profile that fits, and render an agent-specific instruction overlay."
