@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -1357,8 +1358,31 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
     let session = Session::open(&repo_base, global_dir.as_deref())?;
     let token = make_token()?;
 
-    let server = tiny_http::Server::http(("127.0.0.1", args.port))
-        .map_err(|e| anyhow!("binding 127.0.0.1:{}: {e}", args.port))?;
+    let server = match tiny_http::Server::http(("127.0.0.1", args.port)) {
+        Ok(s) => s,
+        Err(e) => {
+            // The port is taken. If a rosita studio is already serving there,
+            // re-attach to it (recover its session token) and just open the
+            // browser instead of failing. Anything else → the original error.
+            if let Some(token) = try_attach_running(args.port) {
+                let url = format!(
+                    "http://127.0.0.1:{}{BOOTSTRAP_PATH}?token={token}",
+                    args.port
+                );
+                println!(
+                    "rosita studio → already running on 127.0.0.1:{}; re-using it",
+                    args.port
+                );
+                println!("rosita studio → open  {url}");
+                println!("(restart that instance to pick up config changes since it started)");
+                if !args.no_open {
+                    open_browser(&url);
+                }
+                return Ok(());
+            }
+            return Err(anyhow!("binding 127.0.0.1:{}: {e}", args.port));
+        }
+    };
     let port = server
         .server_addr()
         .to_ip()
@@ -1382,6 +1406,11 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
         )
     })?;
 
+    // Record where we're serving (port + token) so a second `rosita studio` on
+    // this port can recover the token and re-open the browser instead of failing
+    // to bind. Best-effort: if it can't be written, we just lose that nicety.
+    write_runtime_file(port, &token);
+
     let url = format!("http://127.0.0.1:{port}{BOOTSTRAP_PATH}?token={token}");
     println!("rosita studio → open  {url}");
     if idle.is_zero() {
@@ -1397,7 +1426,158 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
     }
 
     serve_loop(&server, &state, idle);
+    remove_runtime_file(port);
     Ok(())
+}
+
+// --- runtime file: re-attach to an already-running instance ------------------
+
+/// A studio instance's coordinates, written on launch and read by a second
+/// `rosita studio` so it can re-open the browser into the running instance
+/// rather than dying on a port-in-use bind error.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StudioRuntime {
+    port: u16,
+    token: String,
+    pid: i32,
+}
+
+/// Per-port runtime file. Lives under the global config dir (`…/rosita/run`),
+/// falling back to the OS temp dir, and is keyed by port so two instances on
+/// different ports don't collide.
+fn studio_runtime_path(port: u16) -> PathBuf {
+    let dir = config::global_config_dir()
+        .map(|d| d.join("run"))
+        .unwrap_or_else(|| std::env::temp_dir().join("rosita").join("run"));
+    dir.join(format!("studio-{port}.json"))
+}
+
+/// Best-effort: record this instance's port + token in a user-only (0600) file.
+fn write_runtime_file(port: u16, token: &str) {
+    write_runtime_to(&studio_runtime_path(port), port, token);
+}
+
+/// The write half, with the path injected so tests don't touch the real config
+/// dir or env.
+fn write_runtime_to(path: &Path, port: u16, token: &str) {
+    use std::io::Write as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let rt = StudioRuntime {
+        port,
+        token: token.to_string(),
+        pid: std::process::id() as i32,
+    };
+    let Ok(json) = serde_json::to_string(&rt) else {
+        return;
+    };
+    // 0600 so the token (which gates the studio) isn't world-readable. It's no
+    // more exposed than the URL already printed to the terminal.
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+    else {
+        return;
+    };
+    // `mode()` only applies when the file is *created*; an existing file keeps
+    // its old permissions through an overwrite. Re-assert 0600 on the open
+    // handle before writing so the token never lands behind looser perms.
+    if f.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .is_err()
+    {
+        return;
+    }
+    let _ = f.write_all(json.as_bytes());
+}
+
+/// Best-effort cleanup on clean exit. A leaked file (e.g. after Ctrl-C) is
+/// harmless: [`try_attach_running`] re-validates against the live server before
+/// trusting it.
+fn remove_runtime_file(port: u16) {
+    let _ = std::fs::remove_file(studio_runtime_path(port));
+}
+
+/// If a rosita studio is already serving on `port`, return its session token.
+/// Returns `None` when there's no runtime file, it's stale, or the server on
+/// that port doesn't answer as rosita — so the caller falls back to the normal
+/// bind error rather than opening a browser at some unrelated process.
+fn try_attach_running(port: u16) -> Option<String> {
+    if port == 0 {
+        return None; // `0` means "OS picks a free port" — never a fixed target.
+    }
+    attach_from(&studio_runtime_path(port), port)
+}
+
+/// The read + validate half, with the path injected for testing.
+fn attach_from(path: &Path, port: u16) -> Option<String> {
+    let data = std::fs::read_to_string(path).ok()?;
+    let rt: StudioRuntime = serde_json::from_str(&data).ok()?;
+    if rt.port != port {
+        return None;
+    }
+    if probe_studio(port, &rt.token) {
+        Some(rt.token)
+    } else {
+        None
+    }
+}
+
+/// Confirm a live rosita studio on `port` accepts `token`: hit the bootstrap
+/// route and check for its signature (a 302 that sets the `rosita_studio`
+/// cookie). This doubles as a liveness + identity check, so a stale token or a
+/// foreign process on the port both fail closed.
+fn probe_studio(port: u16, token: &str) -> bool {
+    use std::io::Write as _;
+    use std::net::TcpStream;
+
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    let request = format!(
+        "GET {BOOTSTRAP_PATH}?token={token} HTTP/1.0\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         Connection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > 8192 {
+                    break; // bootstrap replies are tiny; cap defensively.
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&buf);
+    // Only inspect the header block (before the blank line), so a foreign server
+    // that happens to echo "rosita_studio=" in its body can't be mistaken for us.
+    let head = text.split("\r\n\r\n").next().unwrap_or("");
+    let mut lines = head.lines();
+    let status_ok = lines
+        .next()
+        .is_some_and(|l| l.starts_with("HTTP/") && l.contains(" 302"));
+    // A real bootstrap reply sets the session cookie via a Set-Cookie header.
+    let sets_cookie = lines.any(|l| {
+        let l = l.to_ascii_lowercase();
+        l.starts_with("set-cookie:") && l.contains("rosita_studio=")
+    });
+    status_ok && sets_cookie
 }
 
 /// The request loop. With a zero `idle` window it blocks until Ctrl-C; otherwise
@@ -2750,5 +2930,104 @@ mod tests {
             &req("POST", "/skills/install", "", &[HOST, COOKIE], ""),
         );
         assert_eq!(r.status, 403);
+    }
+
+    // --- re-attach to an already-running instance ----------------------------
+
+    /// Start a real studio server on an OS-chosen port in a background thread,
+    /// serving via the production `route`. Returns the bound port; the returned
+    /// `TempDir` keeps the fixture's global config dir alive for the test.
+    fn spawn_studio(token: &str) -> (u16, tempfile::TempDir) {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        {
+            let mut s = st.lock().unwrap();
+            s.token = token.to_string();
+            s.port = port; // host_ok checks the Host header against this
+        }
+        std::thread::spawn(move || {
+            for mut request in server.incoming_requests() {
+                let req = read_request(&mut request);
+                let resp = route(&st, &req);
+                let _ = respond(request, resp);
+            }
+        });
+        (port, d)
+    }
+
+    #[test]
+    fn probe_recognizes_running_studio_only_with_right_token() {
+        let (port, _d) = spawn_studio("goodtoken");
+        // Correct token → bootstrap 302 + rosita_studio cookie → recognized.
+        assert!(probe_studio(port, "goodtoken"));
+        // Wrong token → 403, no cookie → not recognized (fails closed).
+        assert!(!probe_studio(port, "badtoken"));
+    }
+
+    #[test]
+    fn probe_false_when_nothing_listening() {
+        // Bind a port, learn it, then drop the listener so the port is free.
+        let port = {
+            let s = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
+            s.server_addr().to_ip().unwrap().port()
+        };
+        assert!(!probe_studio(port, "whatever"));
+    }
+
+    #[test]
+    fn attach_recovers_token_from_runtime_file() {
+        let (port, _d) = spawn_studio("filetoken");
+        let rt_dir = tempfile::tempdir().unwrap();
+        let path = rt_dir.path().join(format!("studio-{port}.json"));
+
+        write_runtime_to(&path, port, "filetoken");
+        assert_eq!(attach_from(&path, port), Some("filetoken".to_string()));
+
+        // Stale token in the file → live server rejects it → no attach.
+        write_runtime_to(&path, port, "stale");
+        assert_eq!(attach_from(&path, port), None);
+
+        // Port recorded in the file must match the port we're attaching to.
+        write_runtime_to(&path, port, "filetoken");
+        assert_eq!(attach_from(&path, port + 1), None);
+    }
+
+    #[test]
+    fn attach_none_when_file_missing() {
+        let rt_dir = tempfile::tempdir().unwrap();
+        let path = rt_dir.path().join("studio-1.json");
+        assert_eq!(attach_from(&path, 1), None);
+    }
+
+    #[test]
+    fn attach_running_refuses_port_zero() {
+        // Port 0 means "let the OS pick"; it's never a re-attach target.
+        assert_eq!(try_attach_running(0), None);
+    }
+
+    #[test]
+    fn runtime_file_is_user_only_readable() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let rt_dir = tempfile::tempdir().unwrap();
+        let path = rt_dir.path().join("studio-7777.json");
+        write_runtime_to(&path, 7777, "secret");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn runtime_file_overwrite_tightens_loose_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let rt_dir = tempfile::tempdir().unwrap();
+        let path = rt_dir.path().join("studio-7777.json");
+        // Pre-existing file with world-readable perms (e.g. a stale leak).
+        std::fs::write(&path, b"old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // Overwriting must re-assert 0600 (mode() alone wouldn't on an existing file).
+        write_runtime_to(&path, 7777, "secret");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }
