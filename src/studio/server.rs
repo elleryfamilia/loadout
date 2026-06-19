@@ -1461,7 +1461,7 @@ fn write_runtime_file(port: u16, token: &str) {
 /// dir or env.
 fn write_runtime_to(path: &Path, port: u16, token: &str) {
     use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
     if let Some(parent) = path.parent() {
         if std::fs::create_dir_all(parent).is_err() {
             return;
@@ -1486,6 +1486,14 @@ fn write_runtime_to(path: &Path, port: u16, token: &str) {
     else {
         return;
     };
+    // `mode()` only applies when the file is *created*; an existing file keeps
+    // its old permissions through an overwrite. Re-assert 0600 on the open
+    // handle before writing so the token never lands behind looser perms.
+    if f.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .is_err()
+    {
+        return;
+    }
     let _ = f.write_all(json.as_bytes());
 }
 
@@ -1557,9 +1565,19 @@ fn probe_studio(port: u16, token: &str) -> bool {
         }
     }
     let text = String::from_utf8_lossy(&buf);
-    let status_ok = text.lines().next().is_some_and(|l| l.contains(" 302"));
-    // The set-cookie carries the fixed cookie name regardless of header casing.
-    status_ok && text.contains("rosita_studio=")
+    // Only inspect the header block (before the blank line), so a foreign server
+    // that happens to echo "rosita_studio=" in its body can't be mistaken for us.
+    let head = text.split("\r\n\r\n").next().unwrap_or("");
+    let mut lines = head.lines();
+    let status_ok = lines
+        .next()
+        .is_some_and(|l| l.starts_with("HTTP/") && l.contains(" 302"));
+    // A real bootstrap reply sets the session cookie via a Set-Cookie header.
+    let sets_cookie = lines.any(|l| {
+        let l = l.to_ascii_lowercase();
+        l.starts_with("set-cookie:") && l.contains("rosita_studio=")
+    });
+    status_ok && sets_cookie
 }
 
 /// The request loop. With a zero `idle` window it blocks until Ctrl-C; otherwise
@@ -2994,6 +3012,20 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let rt_dir = tempfile::tempdir().unwrap();
         let path = rt_dir.path().join("studio-7777.json");
+        write_runtime_to(&path, 7777, "secret");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn runtime_file_overwrite_tightens_loose_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let rt_dir = tempfile::tempdir().unwrap();
+        let path = rt_dir.path().join("studio-7777.json");
+        // Pre-existing file with world-readable perms (e.g. a stale leak).
+        std::fs::write(&path, b"old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // Overwriting must re-assert 0600 (mode() alone wouldn't on an existing file).
         write_runtime_to(&path, 7777, "secret");
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
