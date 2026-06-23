@@ -6,7 +6,7 @@
 //!
 //! It is computed over a canonical JSON form of the [`Context`](crate::context::Context)
 //! with volatile, output-irrelevant fields removed (e.g. the parent process,
-//! which differs between a direct invocation and `rosita run`).
+//! which differs between a direct invocation and `load run`).
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};

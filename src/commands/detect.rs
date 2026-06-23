@@ -1,4 +1,4 @@
-//! `rosita detect` — show the detected context (and optional env probes).
+//! `load detect` — show the detected context (and optional env probes).
 
 use std::time::Duration;
 
@@ -10,7 +10,7 @@ use crate::providers::{self, Probes};
 /// Default probe cache TTL for `detect --probes` (probes refresh after this).
 const PROBE_TTL: Duration = Duration::from_secs(60);
 
-/// Entry point for `rosita detect`.
+/// Entry point for `load detect`.
 pub fn run(rt: &Runtime, args: &DetectArgs) -> crate::Result<()> {
     let prep = prepare(rt)?;
 

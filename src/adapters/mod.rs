@@ -1,6 +1,6 @@
 //! Agent integration: one descriptor-driven engine, not per-agent code.
 //!
-//! rosita produces **one** overlay (the rendered context for the active
+//! loadout produces **one** overlay (the rendered context for the active
 //! profile). Everything agent-specific is *delivery*, captured declaratively by
 //! an [`AgentDescriptor`]. The engine ([`apply`]) renders the overlay, writes it
 //! as a gitignored artifact, and wires it up according to the descriptor:
@@ -46,7 +46,7 @@ pub struct AgentDescriptor {
     pub template: String,
     /// Filename under `.loadout/generated/`.
     pub generated_filename: String,
-    /// Program to exec for `rosita run`, if launchable.
+    /// Program to exec for `load run`, if launchable.
     #[serde(default)]
     pub launch: Option<String>,
     /// Local file to auto-wire via `@import` (e.g. `CLAUDE.local.md`).
@@ -66,11 +66,11 @@ pub struct AgentDescriptor {
     /// Note shown in emit-only mode explaining how to wire the overlay.
     #[serde(default)]
     pub wire_hint: Option<String>,
-    /// `rosita run` injects a freshness note via this flag, if set (e.g.
+    /// `load run` injects a freshness note via this flag, if set (e.g.
     /// Claude's `--append-system-prompt`).
     #[serde(default)]
     pub append_prompt_flag: Option<String>,
-    /// `rosita run` sets this env var to [`launch_context_dir`] (an absolute path)
+    /// `load run` sets this env var to [`launch_context_dir`] (an absolute path)
     /// so an agent with no persistent local hook discovers the overlay at launch
     /// (e.g. Copilot's `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`).
     #[serde(default)]
@@ -79,7 +79,7 @@ pub struct AgentDescriptor {
     /// points at. The agent scans it for its own instruction layout, so the
     /// `generated_filename` is written *inside* this dir in the shape the agent
     /// expects — e.g. Copilot scans `<dir>/.github/instructions/**/*.instructions.md`,
-    /// so copilot uses dir `copilot` + file `copilot/.github/instructions/rosita.instructions.md`.
+    /// so copilot uses dir `copilot` + file `copilot/.github/instructions/loadout.instructions.md`.
     #[serde(default)]
     pub launch_context_dir: Option<String>,
 }
@@ -187,7 +187,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             // opencode's `instructions` config takes file paths/globs (resolved
             // per-project, missing ones skipped). Register the gitignored overlay's
             // path once in the global `~/.config/opencode/opencode.json` so opencode
-            // loads it in every rosita-managed repo — additive, never touches a
+            // loads it in every loadout-managed repo — additive, never touches a
             // committed `opencode.json` or `AGENTS.md`.
             importer_registry: Some(ImporterRegistry {
                 settings_file: ".config/opencode/opencode.json".into(),
@@ -197,7 +197,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             }),
             wire_hint: Some(
                 "opencode reads AGENTS.md; add \".loadout/generated/opencode.md\" to the \
-                 `instructions` array in opencode.json (rosita registers it globally)."
+                 `instructions` array in opencode.json (loadout registers it globally)."
                     .into(),
             ),
             ..d("opencode", "opencode.md")
@@ -207,7 +207,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             launch: Some("copilot".into()),
             // The Copilot CLI has no gitignored persistent hook (its repo
             // .github/instructions discovery is gitignore-filtered, and
-            // copilot-instructions.md / AGENTS.md are committed). So `rosita run`
+            // copilot-instructions.md / AGENTS.md are committed). So `load run`
             // points it at the gitignored overlay dir via an env var. The overlay
             // is written as a `.instructions.md` (with no `applyTo`, so Copilot
             // *inlines* it — a nested AGENTS.md would only become a "view this
@@ -215,13 +215,13 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             launch_context_dir_env: Some("COPILOT_CUSTOM_INSTRUCTIONS_DIRS".into()),
             launch_context_dir: Some("copilot".into()),
             wire_hint: Some(
-                "`rosita run copilot` wires this via COPILOT_CUSTOM_INSTRUCTIONS_DIRS. \
+                "`load run copilot` wires this via COPILOT_CUSTOM_INSTRUCTIONS_DIRS. \
                  For other entry points, point that env at .loadout/generated/copilot."
                     .into(),
             ),
             ..d(
                 "copilot",
-                "copilot/.github/instructions/rosita.instructions.md",
+                "copilot/.github/instructions/loadout.instructions.md",
             )
         },
         AgentDescriptor {
@@ -400,7 +400,7 @@ pub fn apply(
             .or_else(|| std::fs::read_to_string(&override_path).ok())
             .unwrap_or_default();
 
-        // Freshness for the override must track BOTH the rosita context and the
+        // Freshness for the override must track BOTH the loadout context and the
         // base file: a changed AGENTS.md with an unchanged context must still
         // rewrite. Fold the base content (only — never the existing override,
         // whose own embedded hash would make this unstable across runs) into the
@@ -445,7 +445,7 @@ pub fn apply(
         notes.push(hint.clone());
     }
 
-    // 3. gitignore (only inside a repo): the rosita-managed dirs + the private
+    // 3. gitignore (only inside a repo): the loadout-managed dirs + the private
     // local.toml (binding + param overrides) + any root files we created. This
     // keeps a repo clean automatically on every render — there is no `init`.
     if app.in_repo() {
@@ -482,7 +482,7 @@ fn is_home(repo_base: &Path) -> bool {
     canon(repo_base) == canon(&home)
 }
 
-/// Existing rosita-owned files for this agent (used by `clean` to discover what
+/// Existing loadout-owned files for this agent (used by `clean` to discover what
 /// to remove). Does not include committed instruction files we never touch.
 pub fn artifacts(d: &AgentDescriptor, repo_base: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -518,7 +518,7 @@ pub struct CleanResult {
     pub notes: Vec<String>,
 }
 
-/// Remove the artifacts rosita created for an agent: the generated overlay, any
+/// Remove the artifacts loadout created for an agent: the generated overlay, any
 /// override file, and our managed block in the importer (deleting the importer
 /// if nothing else remains). Never touches committed instruction files.
 pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult> {
@@ -536,7 +536,7 @@ pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult
         removed.push(gen);
     }
 
-    // Override file (rosita-owned, gitignored) → remove entirely.
+    // Override file (loadout-owned, gitignored) → remove entirely.
     if let Some(ovr) = &d.override_target {
         let p = app.repo_base().join(ovr);
         if p.exists() {

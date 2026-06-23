@@ -597,7 +597,7 @@ pub fn targets_view(snap: &Snapshot) -> TargetsView {
 }
 
 /// First-launch onboarding readout for a fresh config (no profiles **and** no
-/// own fragments yet): what rosita detected here. The welcome view pairs this
+/// own fragments yet): what loadout detected here. The welcome view pairs this
 /// with the starter-pack gallery, which is what actually seeds a profile.
 pub struct Onboarding {
     /// The detected primary stack (`rust`, `node`, …), or `None` when none was

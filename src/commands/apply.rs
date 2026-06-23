@@ -70,7 +70,7 @@ pub fn apply_for_agents(
 
 pub(crate) fn print_result(agent: &str, profile_label: &str, result: &ApplyResult) {
     println!(
-        "{agent}  ·  profile {profile_label}  ·  {}",
+        "{agent}  ·  loadout {profile_label}  ·  {}",
         hash::short(&result.context_hash)
     );
     for f in &result.files {
@@ -157,7 +157,7 @@ pub(crate) fn print_sync_step(p: &Painter, s: &SyncStatus) {
             p,
             p.yellow("⚠"),
             "sync",
-            "diverged — run `rosita sync` to reconcile".to_string(),
+            "diverged — run `load sync` to reconcile".to_string(),
         ),
     };
     println!("{line}");

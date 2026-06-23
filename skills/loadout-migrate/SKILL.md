@@ -1,16 +1,16 @@
 ---
-name: rosita-migrate
-description: Migrate existing global AI agent instructions into rosita. Use when adopting rosita, importing a CLAUDE.md / AGENTS.md / global agent rules into rosita, setting up ~/.config/rosita/config.toml, or turning prose agent instructions into reusable fragments and stack-targeted profiles.
-when_to_use: The user wants to start using rosita, asks to "import my CLAUDE.md", "set up my rosita config", "turn my agent rules into fragments/profiles", or otherwise convert hand-written global agent instructions into rosita's fragment/profile model.
+name: loadout-migrate
+description: Migrate existing global AI agent instructions into loadout. Use when adopting loadout, importing a CLAUDE.md / AGENTS.md / global agent rules into loadout, setting up ~/.config/loadout/config.toml, or turning prose agent instructions into reusable fragments and stack-targeted profiles.
+when_to_use: The user wants to start using loadout, asks to "import my CLAUDE.md", "set up my loadout config", "turn my agent rules into fragments/profiles", or otherwise convert hand-written global agent instructions into loadout's fragment/profile model.
 ---
 
-# Migrate agent instructions into rosita
+# Migrate agent instructions into loadout
 
-rosita manages a user's **global** AI-agent context as reusable **fragments**
-composed into stack-targeted **profiles**, all in `~/.config/rosita/config.toml`.
+loadout manages a user's **global** AI-agent context as reusable **fragments**
+composed into stack-targeted **profiles**, all in `~/.config/loadout/config.toml`.
 This skill converts existing prose instruction files (a `CLAUDE.md`, `AGENTS.md`,
 etc.) into that structure — **additively**. The original files are left
-untouched; rosita renders a separate, generated overlay.
+untouched; loadout renders a separate, generated overlay.
 
 Read [reference.md](reference.md) for the full TOML schema and a worked example
 before writing any config.
@@ -20,10 +20,10 @@ before writing any config.
 Before anything else, run these and use their output for the rest of the process:
 
 ```bash
-# rosita on PATH?
-command -v rosita >/dev/null 2>&1 && rosita --version || echo "NOT INSTALLED — install rosita first"
+# loadout on PATH?
+command -v loadout >/dev/null 2>&1 && loadout --version || echo "NOT INSTALLED — install loadout first"
 # Existing global config (fresh setup if missing)
-sed -n '1,60p' ~/.config/rosita/config.toml 2>/dev/null || echo "(none yet — this will be a fresh setup)"
+sed -n '1,60p' ~/.config/loadout/config.toml 2>/dev/null || echo "(none yet — this will be a fresh setup)"
 # Candidate source files (also ask the user if their global rules live elsewhere)
 for f in ~/.claude/CLAUDE.md ~/.codex/AGENTS.md ~/.config/AGENTS.md ./CLAUDE.md ./AGENTS.md ./.github/copilot-instructions.md; do [ -f "$f" ] && echo "$f"; done
 ```
@@ -65,33 +65,33 @@ for f in ~/.claude/CLAUDE.md ~/.codex/AGENTS.md ~/.config/AGENTS.md ./CLAUDE.md 
    one-line descriptions and each profile's composition. Get explicit approval
    **before writing anything.**
 
-5. **Write to `~/.config/rosita/config.toml`** (the global config — never a
-   repo's `.rosita/`):
-   - If it exists, back it up first: `cp ~/.config/rosita/config.toml ~/.config/rosita/config.toml.bak`.
-   - **Merge, don't clobber** — append new `[[fragments]]`/`[[profiles]]`
+5. **Write to `~/.config/loadout/config.toml`** (the global config — never a
+   repo's `.loadout/`):
+   - If it exists, back it up first: `cp ~/.config/loadout/config.toml ~/.config/loadout/config.toml.bak`.
+   - **Merge, don't clobber** — append new `[[fragments]]`/`[[loadouts]]`
      and preserve everything already there; match the existing TOML style.
    - Machine-specific literals (real hostnames, IPs) belong in
-     `~/.config/rosita/local.toml` under `[fragment_params.<id>]`, not the
+     `~/.config/loadout/local.toml` under `[fragment_params.<id>]`, not the
      shareable public config. Keep the public fragment clean.
 
 6. **Validate** (and fix anything flagged):
-   - `rosita doctor` — should report healthy; it also leak-lints for private
+   - `load doctor` — should report healthy; it also leak-lints for private
      literals in the public config.
-   - `rosita fragments` and `rosita profiles` — confirm everything is listed.
-   - `rosita explain --cwd <a representative repo>` — confirm the intended
+   - `load fragments` and `load profiles` — confirm everything is listed.
+   - `load explain --cwd <a representative repo>` — confirm the intended
      profile binds for that repo's stack.
-   - Offer `rosita studio` for a visual review/edit.
+   - Offer `load studio` for a visual review/edit.
 
 7. **Wrap up.** Tell the user their original `CLAUDE.md`/`AGENTS.md` are
-   untouched (rosita is additive). To wire an agent inside a repo:
-   `rosita run claude` (or `rosita refresh --agent claude`) — repo setup is
+   untouched (loadout is additive). To wire an agent inside a repo:
+   `load run claude` (or `load refresh --agent claude`) — repo setup is
    automatic, no `init` needed.
 
 ## Rules
 
 - **Additive only.** Never edit or delete the user's `CLAUDE.md`/`AGENTS.md` or
-  any source file. rosita layers on top; it doesn't absorb them.
+  any source file. loadout layers on top; it doesn't absorb them.
 - **Confirm before writing** the config, and back it up first.
 - **Fragments and profiles are global-only.** Never write them into a repo's
-  `.rosita/` — `rosita doctor` will flag that, and they'd be ignored.
+  `.loadout/` — `load doctor` will flag that, and they'd be ignored.
 - **Stay faithful** to the source. Condense; don't invent new policy.

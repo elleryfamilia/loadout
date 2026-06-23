@@ -1,4 +1,4 @@
-//! Socket-level smoke test for `rosita studio`: the real binary binds
+//! Socket-level smoke test for `load studio`: the real binary binds
 //! 127.0.0.1, prints a bootstrap URL, and serves the secured spine over TCP.
 //!
 //! The other studio coverage drives the router directly (see `src/studio/*`);
@@ -10,13 +10,13 @@ use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Spawn `rosita studio --no-open --port 0` in an isolated tempdir and parse the
+/// Spawn `load studio --no-open --port 0` in an isolated tempdir and parse the
 /// bound port + session token from its startup output.
 fn spawn_studio() -> (Child, tempfile::TempDir, u16, String) {
     spawn_studio_args(&[])
 }
 
-/// Like [`spawn_studio`] but with extra `rosita studio` flags appended (e.g.
+/// Like [`spawn_studio`] but with extra `load studio` flags appended (e.g.
 /// `--idle-timeout`).
 fn spawn_studio_args(extra: &[&str]) -> (Child, tempfile::TempDir, u16, String) {
     let dir = tempfile::tempdir().unwrap();
@@ -31,7 +31,7 @@ fn spawn_studio_args(extra: &[&str]) -> (Child, tempfile::TempDir, u16, String) 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn rosita studio");
+        .expect("spawn load studio");
 
     // Rust's stdout is line-buffered, so the banner lines arrive immediately.
     let stdout = child.stdout.take().unwrap();
@@ -126,7 +126,7 @@ fn studio_binds_and_serves_secured_spine() {
     let shell = http(
         port,
         &format!(
-            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nConnection: close\r\n\r\n"
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nConnection: close\r\n\r\n"
         ),
     );
 
@@ -140,7 +140,7 @@ fn studio_binds_and_serves_secured_spine() {
     let bad_host = http(
         port,
         &format!(
-            "GET / HTTP/1.1\r\nHost: evil.test\r\nCookie: rosita_studio={token}\r\nConnection: close\r\n\r\n"
+            "GET / HTTP/1.1\r\nHost: evil.test\r\nCookie: loadout_studio={token}\r\nConnection: close\r\n\r\n"
         ),
     );
 
@@ -151,14 +151,14 @@ fn studio_binds_and_serves_secured_spine() {
     let create = http(
         port,
         &format!(
-            "POST /fragments HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "POST /fragments HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         ),
     );
     let apply = http(
         port,
         &format!(
-            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         ),
     );
     let written =
@@ -168,7 +168,7 @@ fn studio_binds_and_serves_secured_spine() {
     let no_origin = http(
         port,
         &format!(
-            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         ),
     );
 
@@ -181,7 +181,7 @@ fn studio_binds_and_serves_secured_spine() {
         "bootstrap → 302; got:\n{boot}"
     );
     assert!(
-        boot.to_lowercase().contains("set-cookie: rosita_studio="),
+        boot.to_lowercase().contains("set-cookie: loadout_studio="),
         "bootstrap sets the session cookie; got:\n{boot}"
     );
 
@@ -190,7 +190,7 @@ fn studio_binds_and_serves_secured_spine() {
         "shell → 200; got head:\n{}",
         head(&shell)
     );
-    assert!(shell.contains("Rosita studio"), "shell renders the page");
+    assert!(shell.contains("Loadout studio"), "shell renders the page");
     assert!(
         shell.contains("Loadouts") && shell.contains("Fragments"),
         "shell renders the Profiles/Fragments tabs"
@@ -248,7 +248,7 @@ fn studio_packs_gallery_applies_a_pack_over_socket() {
     let gallery = http(
         port,
         &format!(
-            "GET /packs HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nConnection: close\r\n\r\n"
+            "GET /packs HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nConnection: close\r\n\r\n"
         ),
     );
 
@@ -256,13 +256,13 @@ fn studio_packs_gallery_applies_a_pack_over_socket() {
     let apply_pack = http(
         port,
         &format!(
-            "POST /packs/everyday/apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "POST /packs/everyday/apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         ),
     );
     let apply = http(
         port,
         &format!(
-            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         ),
     );
     let written =
@@ -326,7 +326,7 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
     let shell = http(
         port,
         &format!(
-            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nConnection: close\r\n\r\n"
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nConnection: close\r\n\r\n"
         ),
     );
 
@@ -335,7 +335,7 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
     let review = http(
         port,
         &format!(
-            "POST /packs/everyday/apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "POST /packs/everyday/apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         ),
     );
 
@@ -344,7 +344,7 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
     let done = http(
         port,
         &format!(
-            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "POST /apply HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         ),
     );
 
@@ -352,7 +352,7 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
     let reopened = http(
         port,
         &format!(
-            "GET /onboarding/welcome HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: rosita_studio={token}\r\nConnection: close\r\n\r\n"
+            "GET /onboarding/welcome HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nConnection: close\r\n\r\n"
         ),
     );
 
@@ -369,7 +369,7 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
         head(&shell)
     );
     assert!(
-        shell.contains("Welcome to Rosita studio"),
+        shell.contains("Welcome to Loadout studio"),
         "fresh config lands on the Profiles welcome; got head:\n{}",
         head(&shell)
     );
@@ -391,7 +391,7 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
 
     // Beat 3: the finish card with the run command.
     assert!(
-        done.contains("You're set") && done.contains("rosita run"),
+        done.contains("You're set") && done.contains("load run"),
         "apply lands on the you're-set finish card; got:\n{done}"
     );
 
@@ -403,7 +403,7 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
 
     // The tour button brings the welcome back.
     assert!(
-        reopened.contains("Welcome to Rosita studio"),
+        reopened.contains("Welcome to Loadout studio"),
         "the ? button re-opens the welcome; got head:\n{}",
         head(&reopened)
     );

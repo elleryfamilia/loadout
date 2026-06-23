@@ -1,4 +1,4 @@
-//! `rosita doctor` — diagnose environment, config, and generated state.
+//! `load doctor` — diagnose environment, config, and generated state.
 
 use std::path::Path;
 use std::process::Command;
@@ -44,7 +44,7 @@ impl Checks {
     }
 }
 
-/// Entry point for `rosita doctor`.
+/// Entry point for `load doctor`.
 pub fn run(rt: &Runtime) -> crate::Result<()> {
     let mut c = Checks::new();
 
@@ -82,7 +82,7 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     if prep.config.sources.is_empty() {
         c.line(
             Status::Warn,
-            "no config files found; author fragments and loadouts in ~/.config/loadout/config.toml (or run `rosita studio`)",
+            "no config files found; author fragments and loadouts in ~/.config/loadout/config.toml (or run `load studio`)",
         );
     } else {
         for s in &prep.config.sources {
@@ -97,7 +97,7 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     check_env_policy(&mut c, &prep.config);
     // Private-data leak lint over public config layers.
     check_public_leaks(&mut c, &prep);
-    // Script fragments whose output rosita would silently drop (non-zero exit).
+    // Script fragments whose output loadout would silently drop (non-zero exit).
     check_script_dropouts(&mut c, &prep);
 
     // Agents + their launch CLIs.
@@ -154,7 +154,7 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     );
     check_overlays(&mut c, &prep);
 
-    // Embedded agent skills (global; managed by `rosita skill`).
+    // Embedded agent skills (global; managed by `load skill`).
     println!("\nAgent skills (~/.agents/skills)");
     check_skills(&mut c);
 
@@ -162,7 +162,7 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     Ok(())
 }
 
-/// Health of rosita's embedded skills: install state, content freshness, the
+/// Health of loadout's embedded skills: install state, content freshness, the
 /// per-agent links, and the remembered ask-once decision.
 fn check_skills(c: &mut Checks) {
     let Some(home) = config::home_dir() else {
@@ -178,40 +178,40 @@ fn check_skills(c: &mut Checks) {
         match (&st.state, decision) {
             (SkillState::NotInstalled, Some(D::Declined)) => c.line(
                 Status::Ok,
-                format!("{}: not installed (declined — `rosita skill install` re-enables)", skill.id),
+                format!("{}: not installed (declined — `load skill install` re-enables)", skill.id),
             ),
             (SkillState::NotInstalled, Some(D::Accepted)) => c.line(
                 Status::Warn,
                 format!(
-                    "{}: accepted but missing from disk — `rosita skill install` restores it",
+                    "{}: accepted but missing from disk — `load skill install` restores it",
                     skill.id
                 ),
             ),
             (SkillState::NotInstalled, None) => c.line(
                 Status::Ok,
                 format!(
-                    "{}: not installed — `rosita skill install` imports your CLAUDE.md/AGENTS.md into rosita",
+                    "{}: not installed — `load skill install` imports your CLAUDE.md/AGENTS.md into loadout",
                     skill.id
                 ),
             ),
             (SkillState::Unmanaged, _) => c.line(
                 Status::Ok,
                 format!(
-                    "{}: present but not rosita-managed (your own copy; rosita leaves it alone)",
+                    "{}: present but not loadout-managed (your own copy; loadout leaves it alone)",
                     skill.id
                 ),
             ),
             (SkillState::Managed { user_modified: true, .. }, _) => c.line(
                 Status::Warn,
                 format!(
-                    "{}: installed with local edits — auto-upgrade is off ('rosita skill install' would not overwrite)",
+                    "{}: installed with local edits — auto-upgrade is off ('load skill install' would not overwrite)",
                     skill.id
                 ),
             ),
             (SkillState::Managed { upgrade_available: true, .. }, _) => c.line(
                 Status::Warn,
                 format!(
-                    "{}: installed but stale — `rosita skill install` upgrades it to this rosita's version",
+                    "{}: installed but stale — `load skill install` upgrades it to this loadout's version",
                     skill.id
                 ),
             ),
@@ -227,7 +227,7 @@ fn check_skills(c: &mut Checks) {
                     LinkState::Missing | LinkState::Dangling => c.line(
                         Status::Warn,
                         format!(
-                            "{}: link {} is {} — `rosita skill install` repairs it",
+                            "{}: link {} is {} — `load skill install` repairs it",
                             skill.id,
                             link.path.display(),
                             if link.state == LinkState::Missing {
@@ -240,7 +240,7 @@ fn check_skills(c: &mut Checks) {
                     LinkState::Foreign => c.line(
                         Status::Warn,
                         format!(
-                            "{}: {} exists but isn't rosita's — left alone",
+                            "{}: {} exists but isn't loadout's — left alone",
                             skill.id,
                             link.path.display()
                         ),
@@ -261,7 +261,7 @@ fn check_skills(c: &mut Checks) {
 }
 
 /// Execute each configured script-backed fragment and flag any that exit
-/// non-zero while still printing to stdout. rosita drops a probe's output when
+/// non-zero while still printing to stdout. loadout drops a probe's output when
 /// its script exits non-zero, so such a fragment renders as nothing — usually a
 /// final `[ cond ] && cmd` that short-circuits. (Exit non-zero with *no* stdout
 /// is the normal "tool absent / nothing found" case and is left alone.) These
@@ -299,7 +299,7 @@ fn check_script_dropouts(c: &mut Checks, prep: &super::Prepared) {
             c.line(
                 Status::Warn,
                 format!(
-                    "{}: prints output but {exit} — rosita drops a probe's output on a non-zero exit, so this renders nothing. End the script with `exit 0`.",
+                    "{}: prints output but {exit} — loadout drops a probe's output on a non-zero exit, so this renders nothing. End the script with `exit 0`.",
                     f.id
                 ),
             );
@@ -455,8 +455,8 @@ fn repo_declares_caps_or_profiles(path: &Path) -> Option<&'static str> {
             .and_then(|v| v.as_array())
             .is_some_and(|a| !a.is_empty())
     };
-    // The loadout list accepts both the canonical `[[loadouts]]` key and the
-    // legacy `[[profiles]]` alias, so a repo declaring either is global-only.
+    // The load list accepts both the canonical `[[loadouts]]` key and the
+    // legacy `[[loadouts]]` alias, so a repo declaring either is global-only.
     let has_loadouts = has("loadouts") || has("profiles");
     // `&'static` message per combination of the global-only tables present.
     match (has("fragments"), has_loadouts, has("targets")) {
@@ -516,18 +516,18 @@ fn check_overlays(c: &mut Checks, prep: &super::Prepared) {
             Some(h) if h == current => c.line(Status::Ok, format!("{}: up to date", a.id)),
             Some(_) => c.line(
                 Status::Warn,
-                format!("{}: stale (run `rosita refresh`)", a.id),
+                format!("{}: stale (run `load refresh`)", a.id),
             ),
             None => c.line(
                 Status::Warn,
-                format!("{}: present but missing rosita header", a.id),
+                format!("{}: present but missing loadout header", a.id),
             ),
         }
     }
     if !found {
         c.line(
             Status::Warn,
-            "no overlays generated yet (run `rosita refresh`)",
+            "no overlays generated yet (run `load refresh`)",
         );
     }
 }

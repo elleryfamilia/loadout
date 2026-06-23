@@ -1,4 +1,4 @@
-//! End-to-end CLI tests driving the real `rosita` binary against temp repos.
+//! End-to-end CLI tests driving the real `loadout` binary against temp repos.
 //!
 //! Each test isolates the global config via `LOADOUT_CONFIG_DIR` so it never
 //! reads the developer's real `~/.config/loadout`.
@@ -39,7 +39,7 @@ impl Fixture {
         self.repo.path().join(rel).exists()
     }
 
-    /// The working directory rosita is pointed at (`--cwd`).
+    /// The working directory loadout is pointed at (`--cwd`).
     fn repo_path(&self) -> &std::path::Path {
         self.repo.path()
     }
@@ -55,7 +55,7 @@ impl Fixture {
         assert!(ok, "git init failed in fixture");
     }
 
-    /// A configured `rosita` command pointed at this repo, globally isolated.
+    /// A configured `loadout` command pointed at this repo, globally isolated.
     fn cmd(&self) -> Command {
         let mut c = Command::cargo_bin("load").unwrap();
         // Point the global config dir at an empty location → no global layer.
@@ -95,7 +95,7 @@ impl Fixture {
              description = \"Rust conventions\"\n\
              guidance = \"Rust project. Build with cargo, lint with clippy.\"\n\
              \n\
-             [[profiles]]\n\
+             [[loadouts]]\n\
              name = \"rust\"\n\
              targets = [\"rust\"]\n\
              fragments = [\"rust-conventions\"]\n",
@@ -150,18 +150,18 @@ fn refresh_claude_creates_overlay_marker_and_gitignore() {
         .assert()
         .success()
         .stdout(predicate::str::contains("claude"))
-        .stdout(predicate::str::contains("profile rust"));
+        .stdout(predicate::str::contains("loadout rust"));
 
     // Generated overlay exists and carries the header + a detected command.
     assert!(fx.exists(".loadout/generated/claude.md"));
     let overlay = fx.read(".loadout/generated/claude.md");
-    assert!(overlay.contains("rosita:generated"));
+    assert!(overlay.contains("loadout:generated"));
     assert!(overlay.contains("cargo test"));
     assert!(overlay.contains("not enforced policy"));
 
     // CLAUDE.local.md has the managed import block.
     let local = fx.read("CLAUDE.local.md");
-    assert!(local.contains("BEGIN rosita (managed)"));
+    assert!(local.contains("BEGIN loadout (managed)"));
     assert!(local.contains("@.loadout/generated/claude.md"));
 
     // gitignore covers the generated dir.
@@ -186,7 +186,7 @@ fn refresh_in_non_repo_writes_overlay_but_no_gitignore() {
         .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("profile rust"));
+        .stdout(predicate::str::contains("loadout rust"));
 
     assert!(fx.exists(".loadout/generated/claude.md"));
     assert!(fx.exists("CLAUDE.local.md"));
@@ -206,7 +206,7 @@ fn refresh_in_non_repo_writes_overlay_but_no_gitignore() {
 fn refresh_at_home_withholds_the_bleeding_importer() {
     // When repo_base is $HOME, a managed CLAUDE.local.md there would be inherited
     // by every repo underneath it (agents walk the tree upward) — the "bleed".
-    // rosita must still write the gitignored overlay, but NOT wire the importer.
+    // loadout must still write the gitignored overlay, but NOT wire the importer.
     let fx = Fixture::new(); // not a git repo
     fx.rust_project();
     fx.rust_profile();
@@ -255,7 +255,7 @@ fn editing_the_global_library_re_renders_a_repo_with_unchanged_context() {
     fx.rust_project();
     fx.author(
         "[[fragments]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"VERSION-ONE guidance.\"\n\
-         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
+         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
     );
     fx.cmd()
         .args(["refresh", "--agent", "claude"])
@@ -276,7 +276,7 @@ fn editing_the_global_library_re_renders_a_repo_with_unchanged_context() {
     // context is unchanged.
     fx.author(
         "[[fragments]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"VERSION-TWO guidance.\"\n\
-         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
+         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
     );
     fx.cmd()
         .args(["refresh", "--agent", "claude"])
@@ -305,9 +305,9 @@ fn refresh_preserves_user_content_in_claude_local() {
 
     let local = fx.read("CLAUDE.local.md");
     assert!(local.contains("Keep this."));
-    assert!(local.contains("BEGIN rosita (managed)"));
+    assert!(local.contains("BEGIN loadout (managed)"));
     // user content precedes the managed block
-    assert!(local.find("Keep this.").unwrap() < local.find("BEGIN rosita").unwrap());
+    assert!(local.find("Keep this.").unwrap() < local.find("BEGIN loadout").unwrap());
 }
 
 #[test]
@@ -325,8 +325,8 @@ fn codex_writes_override_by_default() {
     assert!(fx.exists("AGENTS.override.md"));
     let ov = fx.read("AGENTS.override.md");
     assert!(ov.contains("Keep me.")); // base AGENTS.md content kept
-    assert!(ov.contains("BEGIN rosita (managed)")); // managed block appended
-                                                    // committed AGENTS.md never touched
+    assert!(ov.contains("BEGIN loadout (managed)")); // managed block appended
+                                                     // committed AGENTS.md never touched
     assert_eq!(fx.read("AGENTS.md"), "# Hand-written AGENTS\n\nKeep me.\n");
 }
 
@@ -363,7 +363,7 @@ fn codex_override_reseeds_base_when_agents_md_changes() {
         .success();
     assert!(fx.read("AGENTS.override.md").contains("first marker."));
 
-    // Change the base; the rosita context is unchanged, but the override must
+    // Change the base; the loadout context is unchanged, but the override must
     // still re-seed from the new AGENTS.md (no --force needed).
     fx.write("AGENTS.md", "# Base\n\nsecond marker.\n");
     fx.cmd()
@@ -390,7 +390,7 @@ fn codex_override_merges_existing_agents_md() {
     assert!(fx.exists("AGENTS.override.md"));
     let ov = fx.read("AGENTS.override.md");
     assert!(ov.contains("Preserve me.")); // original AGENTS.md content kept
-    assert!(ov.contains("BEGIN rosita (managed)")); // managed block appended
+    assert!(ov.contains("BEGIN loadout (managed)")); // managed block appended
     assert!(ov.contains("agent context")); // inlined generated content
                                            // original AGENTS.md still intact
     assert_eq!(
@@ -434,8 +434,8 @@ fn explain_reports_selection_and_plan() {
 
 #[test]
 fn refresh_auto_manages_gitignore_and_init_is_gone() {
-    // There is no `rosita init` — a repo needs no scaffolding. Rendering an
-    // agent gitignores everything rosita manages, automatically.
+    // There is no `loadout init` — a repo needs no scaffolding. Rendering an
+    // agent gitignores everything loadout manages, automatically.
     let fx = Fixture::new();
     fx.rust_project();
     fx.rust_profile();
@@ -473,7 +473,7 @@ fn local_toml_supplies_private_params_to_fragments() {
          description = \"Deploy target\"\n\
          guidance = \"Deploy as {{ params.user }}@{{ params.host }}.\"\n\
          \n\
-         [[profiles]]\n\
+         [[loadouts]]\n\
          name = \"deploy\"\n\
          targets = [\"rust\"]\n\
          fragments = [\"deploy\"]\n",
@@ -538,7 +538,7 @@ fn doctor_flags_a_profile_referencing_an_unknown_fragment() {
     fx.rust_project();
     fx.author(
         "[[fragments]]\nid = \"present\"\nguidance = \"hi\"\n\
-         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"present\", \"gone\"]\n",
+         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"present\", \"gone\"]\n",
     );
 
     fx.cmd()
@@ -561,7 +561,7 @@ fn doctor_flags_repo_declared_caps_and_profiles() {
     fx.write(
         ".loadout/config.toml",
         "[[fragments]]\nid = \"x\"\nguidance = \"hi\"\n\
-         \n[[profiles]]\nname = \"p\"\ntargets = [\"rust\"]\nfragments = [\"x\"]\n",
+         \n[[loadouts]]\nname = \"p\"\ntargets = [\"rust\"]\nfragments = [\"x\"]\n",
     );
 
     fx.cmd()
@@ -591,7 +591,7 @@ fn run_dry_run_reports_would_exec_without_launching() {
         .args(["--dry-run", "run", "claude", "chat", "--model", "sonnet"])
         .assert()
         .success()
-        // rosita injects --append-system-prompt for Claude, then the user args.
+        // loadout injects --append-system-prompt for Claude, then the user args.
         .stdout(predicate::str::contains(
             "would exec: claude --append-system-prompt",
         ))
@@ -610,7 +610,7 @@ fn run_missing_fragment_non_tty_warns_and_continues() {
     fx.rust_project();
     fx.author(
         "[[fragments]]\nid = \"present\"\nguidance = \"hi\"\n\
-         \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"present\", \"gone\"]\n",
+         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"present\", \"gone\"]\n",
     );
 
     fx.cmd()
@@ -640,7 +640,7 @@ fn doctor_runs_and_reports() {
 #[test]
 fn doctor_flags_a_script_fragment_that_drops_output() {
     // A script that prints then exits non-zero has its output dropped at render
-    // (rosita treats a non-zero exit as a failed probe), so doctor flags it. A
+    // (loadout treats a non-zero exit as a failed probe), so doctor flags it. A
     // clean script is reported as exiting cleanly.
     let fx = Fixture::new();
     fx.rust_project();
@@ -716,7 +716,7 @@ fn refresh_all_six_agents_emit_gitignored_overlays() {
         "agents.md",
         "gemini.md",
         "opencode.md",
-        "copilot/.github/instructions/rosita.instructions.md",
+        "copilot/.github/instructions/loadout.instructions.md",
         "generic.md",
     ] {
         assert!(fx.exists(&format!(".loadout/generated/{f}")), "missing {f}");
@@ -750,7 +750,7 @@ fn gemini_auto_wires_local_import_and_registers_settings() {
     assert!(fx.exists("GEMINI.local.md"));
     let local = fx.read("GEMINI.local.md");
     assert!(local.contains("@.loadout/generated/gemini.md"));
-    assert!(local.contains("BEGIN rosita (managed)"));
+    assert!(local.contains("BEGIN loadout (managed)"));
     assert!(fx.read(".gitignore").contains("GEMINI.local.md"));
     // Committed GEMINI.md untouched.
     assert_eq!(fx.read("GEMINI.md"), "# Team GEMINI\n\nKeep me.\n");
@@ -831,7 +831,7 @@ fn run_fails_gracefully_when_cli_not_on_path() {
         "[[agents]]\n\
          id = \"ghost\"\n\
          generated_filename = \"ghost.md\"\n\
-         launch = \"rosita-definitely-not-a-real-binary-zzz\"\n",
+         launch = \"loadout-definitely-not-a-real-binary-zzz\"\n",
     );
 
     fx.cmd()
@@ -857,10 +857,10 @@ fn copilot_render_writes_nested_overlay_without_touching_committed_files() {
 
     // Overlay is a `.instructions.md` (no applyTo → Copilot inlines it) under the
     // gitignored generated dir's .github/instructions.
-    let rel = ".loadout/generated/copilot/.github/instructions/rosita.instructions.md";
+    let rel = ".loadout/generated/copilot/.github/instructions/loadout.instructions.md";
     assert!(fx.exists(rel));
     let overlay = fx.read(rel);
-    assert!(overlay.contains("rosita:generated"));
+    assert!(overlay.contains("loadout:generated"));
     // No frontmatter delimiter at the top → no `applyTo` → inlined, not a pointer.
     assert!(!overlay.starts_with("---"));
     // Committed instruction files are never touched.
@@ -894,8 +894,8 @@ fn overlay_has_self_healing_banner() {
         .assert()
         .success();
     let overlay = fx.read(".loadout/generated/claude.md");
-    assert!(overlay.contains("rosita refresh"));
-    assert!(overlay.contains("rosita clean"));
+    assert!(overlay.contains("load refresh"));
+    assert!(overlay.contains("load clean"));
     assert!(overlay.contains("$LOADOUT_RUN"));
 }
 
@@ -916,7 +916,7 @@ fn refresh_in_repo_gitignores_the_importer() {
 }
 
 #[test]
-fn clean_removes_rosita_artifacts() {
+fn clean_removes_loadout_artifacts() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.git_init();
@@ -954,7 +954,7 @@ fn clean_preserves_user_content_in_importer() {
     assert!(fx.exists("CLAUDE.local.md"));
     let local = fx.read("CLAUDE.local.md");
     assert!(local.contains("keep this"));
-    assert!(!local.contains("BEGIN rosita"));
+    assert!(!local.contains("BEGIN loadout"));
     assert!(!fx.exists(".loadout/generated/claude.md"));
 }
 
@@ -1108,7 +1108,7 @@ fn custom_agent_via_config_is_first_class() {
     // A user-defined agent in the GLOBAL config — no code change required.
     // Agents carry an executable `launch`, so they are global-only: a repo-layer
     // `[[agents]]` is stripped by the loader (see config::strip_global_only) to
-    // stop a cloned repo from hijacking `rosita run`.
+    // stop a cloned repo from hijacking `load run`.
     fx.author(
         "[[agents]]\nid = \"myagent\"\ngenerated_filename = \"myagent.md\"\nlaunch = \"echo\"\nwire_hint = \"include myagent.md\"\n",
     );
@@ -1145,7 +1145,7 @@ fn profile_composes_its_fragment_set_with_no_baseline() {
          description = \"Terse communication\"\n\
          guidance = \"Be terse; lead with the result.\"\n\
          \n\
-         [[profiles]]\n\
+         [[loadouts]]\n\
          name = \"rust\"\n\
          targets = [\"rust\"]\n\
          fragments = [\"rust-conventions\", \"terse\"]\n",
@@ -1155,7 +1155,7 @@ fn profile_composes_its_fragment_set_with_no_baseline() {
         .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("profile rust"));
+        .stdout(predicate::str::contains("loadout rust"));
 
     let overlay = fx.read(".loadout/generated/claude.md");
     // Both of the profile's fragments render, each its own section…
@@ -1189,7 +1189,7 @@ fn user_fragment_via_config_is_composed() {
          description = \"Rust conventions\"\n\
          guidance = \"Rust project. Lint with clippy.\"\n\
          \n\
-         [[profiles]]\n\
+         [[loadouts]]\n\
          name = \"house\"\n\
          targets = [\"rust\"]\n\
          fragments = [\"house-style\", \"rust-conventions\"]\n",
@@ -1253,7 +1253,7 @@ fn dynamic_provider_fragment_renders_live_output() {
          provider = \"host\"\n\
          guidance = \"OS={{ provider.data.os }}\"\n\
          \n\
-         [[profiles]]\n\
+         [[loadouts]]\n\
          name = \"dyn\"\n\
          targets = [\"rust\"]\n\
          fragments = [\"machine\"]\n",
@@ -1279,7 +1279,7 @@ fn global_layer_command_runs() {
          id = \"greet\"\n\
          command = \"echo global-ok\"\n\
          \n\
-         [[profiles]]\n\
+         [[loadouts]]\n\
          name = \"g\"\n\
          targets = [\"rust\"]\n\
          fragments = [\"greet\"]\n",
@@ -1305,9 +1305,9 @@ fn repo_command_fragment_is_ignored() {
         ".loadout/config.toml",
         "[[fragments]]\n\
          id = \"greet\"\n\
-         command = \"echo hello-rosita\"\n\
+         command = \"echo hello-loadout\"\n\
          \n\
-         [[profiles]]\n\
+         [[loadouts]]\n\
          name = \"dyn\"\n\
          targets = [\"rust\"]\n\
          fragments = [\"greet\"]\n",
@@ -1319,7 +1319,7 @@ fn repo_command_fragment_is_ignored() {
         .success();
     let overlay = fx.read(".loadout/generated/claude.md");
     // The command output never appears — the repo-declared cap is dropped.
-    assert!(!overlay.contains("hello-rosita"));
+    assert!(!overlay.contains("hello-loadout"));
 }
 
 #[test]
@@ -1353,7 +1353,7 @@ fn fragments_list_marks_active_and_shows_one() {
          description = \"Terse communication\"\n\
          guidance = \"Be terse.\"\n\
          \n\
-         [[profiles]]\n\
+         [[loadouts]]\n\
          name = \"rust\"\n\
          targets = [\"rust\"]\n\
          fragments = [\"rust-conventions\"]\n",
@@ -1433,12 +1433,12 @@ const TWO_RUST_PROFILES: &str = "[[fragments]]\n\
      description = \"Cap B\"\n\
      guidance = \"BBB guidance\"\n\
      \n\
-     [[profiles]]\n\
+     [[loadouts]]\n\
      name = \"rust-a\"\n\
      targets = [\"rust\"]\n\
      fragments = [\"ca\"]\n\
      \n\
-     [[profiles]]\n\
+     [[loadouts]]\n\
      name = \"rust-b\"\n\
      targets = [\"rust\"]\n\
      fragments = [\"cb\"]\n";
@@ -1457,7 +1457,7 @@ fn ambiguous_profiles_render_empty_and_warn() {
         .assert()
         .success()
         .stderr(predicate::str::contains("loadouts match this project"))
-        .stdout(predicate::str::contains("profile none"));
+        .stdout(predicate::str::contains("loadout none"));
 
     let overlay = fx.read(".loadout/generated/claude.md");
     assert!(!overlay.contains("AAA guidance"));
@@ -1478,7 +1478,7 @@ fn binding_in_local_toml_selects_profile_without_prompt() {
         .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("profile rust-b"))
+        .stdout(predicate::str::contains("loadout rust-b"))
         .stderr(predicate::str::contains("loadouts match").not());
 
     let overlay = fx.read(".loadout/generated/claude.md");
@@ -1506,7 +1506,7 @@ fn stale_binding_targets_hash_redetects() {
         .assert()
         .success()
         .stderr(predicate::str::contains("loadouts match this project"))
-        .stdout(predicate::str::contains("profile none"));
+        .stdout(predicate::str::contains("loadout none"));
 
     let overlay = fx.read(".loadout/generated/claude.md");
     assert!(!overlay.contains("BBB guidance"));
@@ -1544,7 +1544,7 @@ fn update_check_without_a_receipt_reports_unmanaged() {
         .stdout(predicate::str::contains("installer"));
 }
 
-// --- embedded agent skills (`rosita skill`) ------------------------------------
+// --- embedded agent skills (`load skill`) ------------------------------------
 
 /// Path helpers for the isolated `$HOME`.
 impl Fixture {
@@ -1567,29 +1567,29 @@ fn skill_install_writes_canonical_links_existing_agents_and_records_accepted() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("installed rosita-migrate")
-                .and(predicate::str::contains("installed rosita-remember")),
+            predicate::str::contains("installed loadout-migrate")
+                .and(predicate::str::contains("installed loadout-remember")),
         );
 
     // Canonical files under the cross-agent dir, marker in place — for every
     // shipped skill.
-    let skill_md = fx.read_home(".agents/skills/rosita-migrate/SKILL.md");
-    assert!(skill_md.contains("<!-- rosita:skill content=sha256:"));
-    assert!(fx.home_exists(".agents/skills/rosita-migrate/reference.md"));
-    assert!(fx.home_exists(".agents/skills/rosita-remember/SKILL.md"));
-    assert!(fx.home_exists(".claude/skills/rosita-remember"));
+    let skill_md = fx.read_home(".agents/skills/loadout-migrate/SKILL.md");
+    assert!(skill_md.contains("<!-- loadout:skill content=sha256:"));
+    assert!(fx.home_exists(".agents/skills/loadout-migrate/reference.md"));
+    assert!(fx.home_exists(".agents/skills/loadout-remember/SKILL.md"));
+    assert!(fx.home_exists(".claude/skills/loadout-remember"));
 
     // A symlink only for the agent dir that exists.
-    let link = fx.home().join(".claude/skills/rosita-migrate");
+    let link = fx.home().join(".claude/skills/loadout-migrate");
     assert!(link.join("SKILL.md").exists());
     assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
     assert!(!fx.home_exists(".codex"));
 
-    // The ask-once decision is remembered in the rosita-owned store — and the
+    // The ask-once decision is remembered in the loadout-owned store — and the
     // strict config loader still works with it present (regression guard for
     // the deny_unknown_fields layer).
     let store = fx.read_global("bindings.toml");
-    assert!(store.contains("rosita-migrate = \"accepted\""));
+    assert!(store.contains("loadout-migrate = \"accepted\""));
     fx.cmd()
         .args(["skill", "status"])
         .assert()
@@ -1612,12 +1612,12 @@ fn skill_remove_deletes_everything_and_records_declined() {
         .success()
         .stdout(predicate::str::contains("removed"));
 
-    assert!(!fx.home_exists(".agents/skills/rosita-migrate"));
-    assert!(!fx.home_exists(".agents/skills/rosita-remember"));
-    assert!(!fx.home_exists(".claude/skills/rosita-migrate"));
+    assert!(!fx.home_exists(".agents/skills/loadout-migrate"));
+    assert!(!fx.home_exists(".agents/skills/loadout-remember"));
+    assert!(!fx.home_exists(".claude/skills/loadout-migrate"));
     let store = fx.read_global("bindings.toml");
-    assert!(store.contains("rosita-migrate = \"declined\""));
-    assert!(store.contains("rosita-remember = \"declined\""));
+    assert!(store.contains("loadout-migrate = \"declined\""));
+    assert!(store.contains("loadout-remember = \"declined\""));
 }
 
 #[test]
@@ -1626,7 +1626,9 @@ fn skill_install_never_overwrites_user_edits() {
     fx.cmd().args(["skill", "install"]).assert().success();
 
     // The user customizes the installed reference.
-    let refpath = fx.home().join(".agents/skills/rosita-migrate/reference.md");
+    let refpath = fx
+        .home()
+        .join(".agents/skills/loadout-migrate/reference.md");
     let mut text = fs::read_to_string(&refpath).unwrap();
     text.push_str("\nmy own notes\n");
     fs::write(&refpath, &text).unwrap();
@@ -1652,7 +1654,7 @@ fn doctor_reports_accepted_but_missing_skill() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.cmd().args(["skill", "install"]).assert().success();
-    fs::remove_dir_all(fx.home().join(".agents/skills/rosita-migrate")).unwrap();
+    fs::remove_dir_all(fx.home().join(".agents/skills/loadout-migrate")).unwrap();
 
     fx.cmd()
         .args(["doctor"])
@@ -1674,7 +1676,7 @@ fn dry_run_skill_install_writes_nothing() {
 
 /// `refresh` pulls the latest global config before rendering when the config
 /// dir is synced (a git repo with a remote): a fragment edit pushed from
-/// another machine must land in the overlay without a manual `rosita sync`.
+/// another machine must land in the overlay without a manual `load sync`.
 #[test]
 fn refresh_auto_pulls_synced_global_config() {
     fn git(dir: &std::path::Path, args: &[&str]) {
@@ -1698,7 +1700,7 @@ fn refresh_auto_pulls_synced_global_config() {
         format!(
             "[sync]\npull_max_age = \"0s\"\n\n\
              [[fragments]]\nid = \"rc\"\ndescription = \"Rust\"\nguidance = \"{guidance}\"\n\
-             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n"
+             \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n"
         )
     }
 

@@ -1,6 +1,6 @@
-//! rosita — the library behind the `rosita` CLI.
+//! loadout — the library behind the `loadout` CLI.
 //!
-//! `rosita` injects global context into your AI coding agents: it detects
+//! `loadout` injects global context into your AI coding agents: it detects
 //! the current project/runtime context, selects the profile that fits, renders
 //! an agent-specific instruction overlay, and writes it safely (atomic writes,
 //! managed marker blocks). The binary is a thin shell over this library so the

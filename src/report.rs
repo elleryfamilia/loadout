@@ -36,7 +36,7 @@ pub fn warnings_suppressed() -> bool {
 macro_rules! vlog {
     ($($arg:tt)*) => {{
         if $crate::report::is_verbose() {
-            eprintln!("[rosita] {}", format!($($arg)*));
+            eprintln!("[loadout] {}", format!($($arg)*));
         }
     }};
 }

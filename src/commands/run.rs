@@ -1,18 +1,18 @@
-//! `rosita run <agent> [args...]` — render the overlay, then launch the agent.
+//! `load run <agent> [args...]` — render the overlay, then launch the agent.
 //!
 //! This is the simple "preflight/wrapper" approach: refresh the generated files
 //! for the chosen agent, then hand control to the real agent CLI (replacing this
 //! process on Unix so signals and exit codes pass through cleanly). FUSE-style
 //! live virtual files are explicitly out of scope for the MVP.
 //!
-//! Because rosita is the launching parent, it passes a freshness signal to the
+//! Because loadout is the launching parent, it passes a freshness signal to the
 //! agent: `LOADOUT_RUN=1` + `LOADOUT_RENDERED_AT` in the environment (so an agent
 //! that can read env — or its hook — knows the context is current), and, for
 //! agents with an `append_prompt_flag` (e.g. Claude's `--append-system-prompt`),
 //! a short "context is fresh" note injected directly into the launch.
 //!
 //! For an agent with no persistent local hook but a `launch_context_dir_env`
-//! (e.g. Copilot's `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`), rosita also sets that env
+//! (e.g. Copilot's `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`), loadout also sets that env
 //! var to the directory holding the generated overlay, so the agent discovers it
 //! at launch without any committed file being touched.
 
@@ -35,7 +35,7 @@ use crate::skills::{self, LinkState, SkillState};
 use crate::style::Painter;
 use crate::vlog;
 
-/// Interactive "which profile?" prompt for `rosita run` when 2+ profiles match
+/// Interactive "which profile?" prompt for `load run` when 2+ profiles match
 /// and no choice is remembered yet. Falls back to no-profile (no prompt) when
 /// stdin/stdout isn't a terminal, so CI/piped runs never block.
 struct StdinChooser;
@@ -45,7 +45,7 @@ impl ProfileChooser for StdinChooser {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             crate::warn_user!(
                 "{} loadouts match but this isn't an interactive terminal — applying none. \
-                 Re-run `rosita run` interactively (or use `rosita studio`) to pick.",
+                 Re-run `load run` interactively (or use `load studio`) to pick.",
                 candidates.len()
             );
             return Ok(Choice::Skip);
@@ -57,7 +57,7 @@ impl ProfileChooser for StdinChooser {
             ctx.stacks.join("/")
         };
         println!(
-            "rosita › this {langs} project matches {} loadouts — pick one:",
+            "loadout › this {langs} project matches {} loadouts — pick one:",
             candidates.len()
         );
         println!("  ↑/↓ to move · Enter to select · or press a number · Esc/Ctrl-C to cancel");
@@ -66,10 +66,10 @@ impl ProfileChooser for StdinChooser {
         match crate::tui::select(&items)? {
             Some(i) => {
                 let name = candidates[i].name.clone();
-                println!("rosita › bound \"{name}\" → remembered for this project; launching…");
+                println!("loadout › bound \"{name}\" → remembered for this project; launching…");
                 Ok(Choice::Profile(name))
             }
-            // Cancelled (Esc / Ctrl-C / q / EOF): the user invoked rosita but
+            // Cancelled (Esc / Ctrl-C / q / EOF): the user invoked loadout but
             // didn't pick — abort the run rather than launch with no profile.
             None => Ok(Choice::Abort),
         }
@@ -80,7 +80,7 @@ impl ProfileChooser for StdinChooser {
 enum MissingChoice {
     /// Launch anyway; the referenced fragment(s) stay out of this overlay.
     Continue,
-    /// Open `rosita studio` to fix the library — a handoff (the launch does not
+    /// Open `load studio` to fix the library — a handoff (the launch does not
     /// resume; the user re-runs after fixing).
     OpenStudio,
     /// Don't launch.
@@ -117,7 +117,7 @@ fn resolve_missing(prep: &super::Prepared, p: &Painter) -> crate::Result<Missing
     println!();
     println!("  how would you like to proceed?");
     println!("    1) ignore once and launch anyway");
-    println!("    2) open rosita studio to fix it");
+    println!("    2) open load studio to fix it");
     println!("    3) quit");
 
     loop {
@@ -136,12 +136,12 @@ fn resolve_missing(prep: &super::Prepared, p: &Painter) -> crate::Result<Missing
     }
 }
 
-/// Launch `rosita studio` so the user can fix the library, then stop. studio's
-/// server blocks until Ctrl-C, so this is a clean handoff: rosita does not
-/// resume the launch — the user re-runs `rosita run <agent>` after fixing.
+/// Launch `load studio` so the user can fix the library, then stop. studio's
+/// server blocks until Ctrl-C, so this is a clean handoff: loadout does not
+/// resume the launch — the user re-runs `load run <agent>` after fixing.
 fn open_studio_handoff(rt: &Runtime, agent: &str) -> crate::Result<()> {
     println!();
-    println!("Opening rosita studio — fix the fragment, then re-run `rosita run {agent}`.");
+    println!("Opening load studio — fix the fragment, then re-run `load run {agent}`.");
     let args = StudioArgs {
         port: 7777,
         no_open: false,
@@ -150,7 +150,7 @@ fn open_studio_handoff(rt: &Runtime, agent: &str) -> crate::Result<()> {
     crate::studio::serve(rt, &args)
 }
 
-/// Entry point for `rosita run`.
+/// Entry point for `load run`.
 pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     let agent = args.agent.as_str();
     let p = Painter::auto();
@@ -187,7 +187,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
                     "  {} {}",
                     p.yellow("✗"),
                     p.dim(&format!(
-                        "aborted — fix the fragment, then re-run `rosita run {agent}`"
+                        "aborted — fix the fragment, then re-run `load run {agent}`"
                     ))
                 );
                 return Ok(());
@@ -216,7 +216,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     if !rt.dry_run && !super::program_on_path(&program) {
         return Err(anyhow!(
             "the '{agent}' CLI ('{program}') isn't on your PATH — install it (or fix PATH), \
-             then retry. `rosita refresh --agent {agent}` still writes the overlay."
+             then retry. `load refresh --agent {agent}` still writes the overlay."
         ));
     }
 
@@ -273,10 +273,10 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
 
 // --- embedded-skill preflight --------------------------------------------------
 
-/// Maintain or offer rosita's embedded skills before launch. All branches are
+/// Maintain or offer loadout's embedded skills before launch. All branches are
 /// best-effort: errors are logged verbosely and never abort the run. Undecided,
 /// not-yet-installed skills are collected into ONE bundled offer — a fresh user
-/// gets a single question no matter how many skills rosita ships.
+/// gets a single question no matter how many skills loadout ships.
 fn skill_preflight(prep: &super::Prepared, p: &Painter) {
     let Some(home) = crate::config::home_dir() else {
         return;
@@ -288,7 +288,7 @@ fn skill_preflight(prep: &super::Prepared, p: &Painter) {
             Some(SkillDecision::Accepted) => maintain_skill(&home, skill, p),
             None => match skills::status(&home, skill).state {
                 // Already present with our marker (installed elsewhere or on
-                // another rosita version): adopt silently instead of asking.
+                // another loadout version): adopt silently instead of asking.
                 SkillState::Managed { .. } => {
                     crate::binding::write_skill_decision(skill.id, SkillDecision::Accepted)
                 }
@@ -327,7 +327,7 @@ fn maintain_skill(home: &std::path::Path, skill: &skills::Skill, p: &Painter) ->
                     p.dim("·"),
                     "skill",
                     p.dim(&format!(
-                        "'{}' was removed — leaving it; `rosita skill install` restores it",
+                        "'{}' was removed — leaving it; `load skill install` restores it",
                         skill.id
                     )),
                 )
@@ -337,7 +337,7 @@ fn maintain_skill(home: &std::path::Path, skill: &skills::Skill, p: &Painter) ->
         | SkillState::Managed {
             user_modified: true,
             ..
-        } => {} // hands off; `rosita doctor` reports the divergence
+        } => {} // hands off; `load doctor` reports the divergence
         SkillState::Managed {
             upgrade_available, ..
         } => {
@@ -348,7 +348,7 @@ fn maintain_skill(home: &std::path::Path, skill: &skills::Skill, p: &Painter) ->
             if upgrade_available || links_broken {
                 skills::install(home, skill)?;
                 let what = if upgrade_available {
-                    "refreshed to this rosita's version"
+                    "refreshed to this loadout's version"
                 } else {
                     "repaired agent links"
                 };
@@ -366,7 +366,7 @@ fn maintain_skill(home: &std::path::Path, skill: &skills::Skill, p: &Painter) ->
 /// bundle — only on a real terminal, and only while the user looks
 /// pre-migration (no profiles configured yet), which is exactly when the
 /// migrate skill is useful. Configured users are never interrupted; they get
-/// the skills via `rosita skill install` or studio.
+/// the skills via `load skill install` or studio.
 fn offer_skills(
     home: &std::path::Path,
     offerable: &[&skills::Skill],
@@ -387,7 +387,7 @@ fn offer_skills(
         .join(", ");
     println!();
     println!(
-        "  {} rosita ships agent skills {}",
+        "  {} loadout ships agent skills {}",
         p.cyan("✦"),
         p.dim("(work in Claude Code, Codex, Gemini CLI, opencode)")
     );
@@ -397,11 +397,11 @@ fn offer_skills(
     println!("  install to {}?", p.bold("~/.agents/skills"));
     println!(
         "    1) yes — install {}",
-        p.dim("(`rosita skill remove` undoes this)")
+        p.dim("(`load skill remove` undoes this)")
     );
     println!(
         "    2) no — don't ask again {}",
-        p.dim("(`rosita skill install` re-enables)")
+        p.dim("(`load skill install` re-enables)")
     );
 
     loop {
@@ -445,9 +445,9 @@ fn offer_skills(
 /// One-line pitch per shipped skill for the bundled offer.
 fn skill_blurb(id: &str) -> &'static str {
     match id {
-        "rosita-migrate" => "imports an existing CLAUDE.md/AGENTS.md into rosita",
-        "rosita-remember" => "saves durable preferences you state mid-session as rosita guidance",
-        _ => "an agent skill shipped with rosita",
+        "loadout-migrate" => "imports an existing CLAUDE.md/AGENTS.md into loadout",
+        "loadout-remember" => "saves durable preferences you state mid-session as loadout guidance",
+        _ => "an agent skill shipped with loadout",
     }
 }
 
@@ -484,7 +484,7 @@ fn print_launch_step(p: &Painter, program: &str, args: &[String]) {
     println!("{}", step(p, p.cyan("▸"), "launch", cmd));
 }
 
-/// Env vars `rosita run` injects so an agent with no persistent local hook finds
+/// Env vars `load run` injects so an agent with no persistent local hook finds
 /// the overlay at launch: maps `launch_context_dir_env` → the absolute
 /// `launch_context_dir` under `.loadout/generated/` (e.g. Copilot's
 /// `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → `<repo>/.loadout/generated/copilot`).
@@ -529,13 +529,13 @@ fn build_launch_args(
                 guidance
             };
             out.push(format!(
-                "rosita machine context for loadout '{}' (session-only — not written to any file):\n\n{body}",
+                "loadout machine context for loadout '{}' (session-only — not written to any file):\n\n{body}",
                 prep.profile_label()
             ));
         } else {
             out.push(format!(
-                "rosita: project context refreshed for loadout '{}' at {rendered_at} — current. \
-                 Run `rosita refresh` if the project changes mid-session.",
+                "loadout: project context refreshed for loadout '{}' at {rendered_at} — current. \
+                 Run `load refresh` if the project changes mid-session.",
                 prep.profile_label()
             ));
         }
@@ -544,7 +544,7 @@ fn build_launch_args(
     out
 }
 
-/// Launch `program` with `args` in `cwd`, passing the rosita freshness signal in
+/// Launch `program` with `args` in `cwd`, passing the loadout freshness signal in
 /// the environment. On Unix this replaces the current process; elsewhere it
 /// spawns, waits, and mirrors the exit code.
 fn launch(

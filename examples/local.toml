@@ -1,11 +1,11 @@
-# ~/.config/rosita/local.toml — PRIVATE, machine-specific overrides.
+# ~/.config/loadout/local.toml — PRIVATE, machine-specific overrides.
 #
 # This file is gitignored and layered AFTER config.toml (it wins). Put sensitive
 # specifics here so the shareable config.toml stays free of them:
 #   - real hostnames and host_classes globs
 #   - fragment `params` values (hosts, users, paths, tokens-by-reference)
 #
-# (A repo's own .rosita/local.toml is the same private layer for that repo — it
+# (A repo's own .loadout/local.toml is the same private layer for that repo — it
 # also holds the per-project [binding].) Fragments and profiles, however, are
 # global-only and belong in config.toml. Nothing below is active until you
 # uncomment it.

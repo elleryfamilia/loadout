@@ -1,10 +1,10 @@
 //! Self-update via [`axoupdater`] (cargo-dist's own updater), plus a throttled,
-//! best-effort "a newer rosita is available" nudge for `rosita run`.
+//! best-effort "a newer loadout is available" nudge for `load run`.
 //!
 //! axoupdater works off the *install receipt* the cargo-dist shell installer
 //! writes to the config dir (`~/.config/loadout/`). A binary installed any other
 //! way (`cargo install`, a package manager, hand-copied) has no receipt, so
-//! self-update degrades gracefully to [`Outcome::NotManaged`] — rosita never
+//! self-update degrades gracefully to [`Outcome::NotManaged`] — loadout never
 //! pretends to update something it can't.
 
 use std::io::IsTerminal;
@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// The app name axoupdater uses to locate the install receipt and releases.
-const APP: &str = "rosita";
+const APP: &str = "loadout";
 
-/// Opt out of the `rosita run` update nudge (any value disables it).
+/// Opt out of the `load run` update nudge (any value disables it).
 pub const NUDGE_OPT_OUT_ENV: &str = "LOADOUT_NO_UPDATE_CHECK";
 
 /// How often the `run` nudge re-checks for a newer release.
@@ -31,13 +31,13 @@ pub enum Outcome {
     AlreadyCurrent,
     /// `--check` only: a newer release exists (and was not installed).
     UpdateAvailable,
-    /// No install receipt — this binary wasn't installed via the rosita installer,
+    /// No install receipt — this binary wasn't installed via the loadout installer,
     /// so it can't self-update.
     NotManaged,
 }
 
 /// Run the update (or, with `check_only`, just report whether one exists).
-/// Network- and filesystem-heavy; backs the `rosita update` subcommand.
+/// Network- and filesystem-heavy; backs the `load update` subcommand.
 pub fn perform(check_only: bool) -> crate::Result<Outcome> {
     use axoupdater::AxoUpdater;
     let mut updater = AxoUpdater::new_for(APP);
@@ -61,7 +61,7 @@ pub fn perform(check_only: bool) -> crate::Result<Outcome> {
     }
 }
 
-/// Best-effort "update available" hint for `rosita run`. Returns the detail line
+/// Best-effort "update available" hint for `load run`. Returns the detail line
 /// to show (the caller renders it in its own step style), or `None` to stay
 /// quiet. It never errors and is cheap on the common path: gated on a TTY and the
 /// opt-out env, throttled to once per [`NUDGE_INTERVAL`] via an on-disk stamp, and
@@ -82,7 +82,7 @@ pub fn nudge_detail() -> Option<String> {
     let available = check_available_bounded();
     let _ = write_stamp(&stamp, SystemTime::now());
     if available == Some(true) {
-        Some("a newer rosita is available — run `rosita update`".to_string())
+        Some("a newer loadout is available — run `load update`".to_string())
     } else {
         None
     }

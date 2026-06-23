@@ -1,6 +1,6 @@
 //! Per-project remembered profile choice — "the binding".
 //!
-//! When 2+ profiles match a project, rosita asks once which to use and remembers
+//! When 2+ profiles match a project, loadout asks once which to use and remembers
 //! the answer so it never asks again. Where the answer lives depends on scope:
 //!
 //! - **Repo** → the repo's gitignored `.loadout/local.toml` `[binding]` table
@@ -9,11 +9,11 @@
 //! - **Machine** (no repo) → a global, path-keyed store `bindings.toml`, keyed
 //!   by the project path.
 //!
-//! The store is rosita-owned, so the global file is written with the plain
+//! The store is loadout-owned, so the global file is written with the plain
 //! `toml` serializer; only the hand-editable `local.toml` needs `toml_edit`.
 //!
 //! The same store also remembers per-machine **skill decisions** (the ask-once
-//! "install the rosita-migrate skill?" answer) in a `[skills]` table — rosita-
+//! "install the loadout-migrate skill?" answer) in a `[skills]` table — loadout-
 //! owned machine state of the same class as a binding, and deliberately *not*
 //! in `local.toml`, whose strict config parse rejects unknown tables.
 
@@ -28,7 +28,7 @@ use crate::context::{Context, Scope};
 use crate::writer::atomic_write;
 
 /// A remembered profile choice for a project. There is no "opt out" binding:
-/// invoking rosita means you want a profile, so the only remembered choice is
+/// invoking loadout means you want a profile, so the only remembered choice is
 /// *which* one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Binding {
@@ -70,7 +70,7 @@ pub struct RawBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub targets_hash: Option<String>,
     /// Legacy opt-out flag ("no profile here"). No longer honored — invoking
-    /// rosita means you want a profile — but still accepted on read so old
+    /// loadout means you want a profile — but still accepted on read so old
     /// `none = true` files parse, and never re-emitted on write.
     #[serde(default, skip_serializing_if = "is_false")]
     pub none: bool,
@@ -82,7 +82,7 @@ fn is_false(b: &bool) -> bool {
 
 impl RawBinding {
     /// Interpret the raw fields as a [`Binding`]. A legacy `none = true` opt-out
-    /// is ignored (treated as no binding): invoking rosita means you want a
+    /// is ignored (treated as no binding): invoking loadout means you want a
     /// profile, so selection re-runs and the chooser fires when 2+ match.
     pub fn to_binding(&self) -> Option<Binding> {
         self.profile.clone().map(|name| Binding::Profile {
@@ -163,7 +163,7 @@ pub fn write_repo(repo_base: &Path, b: &Binding) -> Result<()> {
 
 /// The global bindings store: cwd path → remembered choice, plus per-machine
 /// skill decisions (skill id → `"accepted"`/`"declined"`). Lenient parse: files
-/// written by newer rosita versions with extra tables still load.
+/// written by newer loadout versions with extra tables still load.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct BindingStore {
     #[serde(default)]
@@ -227,7 +227,7 @@ pub fn write_global_at(store_path: &Path, cwd: &Path, b: &Binding) -> Result<()>
 pub enum SkillDecision {
     /// Install and keep current (repair links, refresh on upgrade).
     Accepted,
-    /// Don't install, don't ask again. Re-enable via `rosita skill install`.
+    /// Don't install, don't ask again. Re-enable via `load skill install`.
     Declined,
 }
 
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn legacy_none_opt_out_is_ignored() {
-        // Files written by old rosita versions may carry `none = true`. It is no
+        // Files written by old loadout versions may carry `none = true`. It is no
         // longer honored: read back as "no binding" so selection runs normally
         // (the chooser fires when 2+ profiles match).
         let repo = tempfile::tempdir().unwrap();
@@ -354,18 +354,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = dir.path().join("bindings.toml");
 
-        assert_eq!(read_skill_decision_at(&store, "rosita-migrate"), None);
-        write_skill_decision_at(&store, "rosita-migrate", SkillDecision::Declined).unwrap();
+        assert_eq!(read_skill_decision_at(&store, "loadout-migrate"), None);
+        write_skill_decision_at(&store, "loadout-migrate", SkillDecision::Declined).unwrap();
         assert_eq!(
-            read_skill_decision_at(&store, "rosita-migrate"),
+            read_skill_decision_at(&store, "loadout-migrate"),
             Some(SkillDecision::Declined)
         );
 
         // Flipping the decision and adding a binding don't clobber each other.
-        write_skill_decision_at(&store, "rosita-migrate", SkillDecision::Accepted).unwrap();
+        write_skill_decision_at(&store, "loadout-migrate", SkillDecision::Accepted).unwrap();
         write_global_at(&store, Path::new("/work/p"), &Binding::profile("machine")).unwrap();
         assert_eq!(
-            read_skill_decision_at(&store, "rosita-migrate"),
+            read_skill_decision_at(&store, "loadout-migrate"),
             Some(SkillDecision::Accepted)
         );
         assert_eq!(
@@ -373,9 +373,9 @@ mod tests {
             Some(Binding::profile("machine"))
         );
 
-        // An unknown value (written by a future rosita) reads as undecided.
-        std::fs::write(&store, "[skills]\nrosita-migrate = \"snoozed\"\n").unwrap();
-        assert_eq!(read_skill_decision_at(&store, "rosita-migrate"), None);
+        // An unknown value (written by a future loadout) reads as undecided.
+        std::fs::write(&store, "[skills]\nloadout-migrate = \"snoozed\"\n").unwrap();
+        assert_eq!(read_skill_decision_at(&store, "loadout-migrate"), None);
     }
 
     #[test]

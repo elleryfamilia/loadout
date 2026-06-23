@@ -1,14 +1,14 @@
 //! Layered configuration: built-in ← global `config.toml` ← global `local.toml`
 //! ← repo `config.toml` ← repo `local.toml` (later wins).
 //!
-//! - Global: `$XDG_CONFIG_HOME/rosita/config.toml` (falls back to
+//! - Global: `$XDG_CONFIG_HOME/loadout/config.toml` (falls back to
 //!   `~/.config/loadout/config.toml`). Overridable via `LOADOUT_CONFIG_DIR`
 //!   (used in tests and for isolation).
 //! - Repo: `<repo_base>/.loadout/config.toml`, where `repo_base` is the git
 //!   root (or the cwd when not in a repo).
 //! - `local.toml` (in either dir) is the **private**, gitignored layer for
 //!   sensitive specifics (real hostnames, `host_classes`, fragment `params`);
-//!   `config.toml` is the **public**, shareable layer. `rosita doctor` lints the
+//!   `config.toml` is the **public**, shareable layer. `load doctor` lints the
 //!   public layers for machine-specific literals that belong in `local.toml`.
 //!
 //! Each layer is parsed into a [`RawConfig`] of optional fields so we can tell
@@ -62,7 +62,7 @@ pub struct Config {
 
 /// Cross-machine sync of the global config dir (`[sync]`). Auto-pull/push are on
 /// by default but **inert** unless the config dir is a git repo with a remote
-/// (`rosita sync init`), so they never act on a machine that opted out.
+/// (`load sync init`), so they never act on a machine that opted out.
 #[derive(Debug, Clone, Serialize)]
 pub struct SyncConfig {
     /// Pull the latest config before `run`/`refresh` (throttled by
@@ -101,7 +101,7 @@ pub struct EnvConfig {
 #[derive(Debug, Clone, Serialize)]
 pub struct CodexConfig {
     /// Write/update the gitignored `AGENTS.override.md` (which Codex prefers over
-    /// `AGENTS.md`) so `rosita run codex` delivers context out of the box.
+    /// `AGENTS.md`) so `load run codex` delivers context out of the box.
     /// Defaults to `true`; set `false` (or pass `--no-override`) to opt out.
     pub write_override: bool,
     /// Warn when generated output exceeds this many KiB.
@@ -216,7 +216,7 @@ impl Config {
 /// is an untrusted, committed/shareable layer: it may contribute only a private
 /// `[binding]`, `fragment_params`, and `host_classes`. Everything else is owned
 /// by your global config and is stripped from repo layers here so a cloned repo
-/// can never select, render, execute, sync, or widen exposure — `rosita doctor`
+/// can never select, render, execute, sync, or widen exposure — `load doctor`
 /// flags the raw file so the mistake is visible.
 fn strip_global_only(layer: crate::fragment::Layer, parsed: &mut RawConfig) {
     if !layer.contributes_fragments() {
@@ -228,7 +228,7 @@ fn strip_global_only(layer: crate::fragment::Layer, parsed: &mut RawConfig) {
         // `importer`/`override_target`/`importer_registry.settings_file`).
         // Honoring one from a committed `.loadout/config.toml` would let a cloned
         // repo override the built-in `claude`/`codex`/… descriptor and hijack
-        // `rosita run` into executing attacker code, or write/delete files outside
+        // `load run` into executing attacker code, or write/delete files outside
         // the project. Agents are global-only, exactly like fragments and targets.
         parsed.agents.clear();
         // The remaining global-only operational tables:
@@ -258,7 +258,7 @@ struct RawConfig {
     codex: Option<RawCodex>,
     sync: Option<RawSync>,
     // The user-authored loadouts. Canonical TOML key is `[[loadouts]]`; the old
-    // `[[profiles]]` key is still accepted (legacy alias) so existing configs
+    // `[[loadouts]]` key is still accepted (legacy alias) so existing configs
     // keep loading. The Rust field stays `profiles` — it's internal and renaming
     // it would churn ~30 call sites and the studio view models for no user gain.
     #[serde(default, rename = "loadouts", alias = "profiles")]
@@ -683,7 +683,7 @@ mod tests {
             [env]
             allowlist = ["MY_FLAG"]
 
-            [[profiles]]
+            [[loadouts]]
             name = "rust"
             targets = ["rust"]
             fragments = ["rust-conventions"]
@@ -800,7 +800,7 @@ mod tests {
         id = "x"
         guidance = "hello"
 
-        [[profiles]]
+        [[loadouts]]
         name = "p"
         targets = ["rust"]
         fragments = ["x"]
@@ -820,7 +820,7 @@ mod tests {
     }
 
     // A repo-committed `[[agents]]` override of a built-in id, plus a redirect of
-    // `defaults.agent`. The `launch` is the executable `rosita run` would exec.
+    // `defaults.agent`. The `launch` is the executable `load run` would exec.
     const AGENT_OVERRIDE: &str = r#"
         [defaults]
         agent = "codex"
@@ -835,7 +835,7 @@ mod tests {
     fn repo_layer_agents_and_default_agent_are_dropped_by_loader() {
         // A repo `config.toml` may *declare* `[[agents]]`/`[defaults]` (the strict
         // parser accepts the tables), but the loader must honor neither: an agent's
-        // `launch` is executed by `rosita run`, so a committed repo file could
+        // `launch` is executed by `load run`, so a committed repo file could
         // otherwise hijack it into running attacker code from a cloned repo.
         let repo = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(repo_dir(repo.path())).unwrap();
@@ -983,7 +983,7 @@ mod tests {
     #[test]
     fn loadouts_is_canonical_key_and_profiles_is_a_legacy_alias() {
         // The new canonical key is `[[loadouts]]`. The fixtures above already
-        // prove the old `[[profiles]]` key still parses (legacy alias); this
+        // prove the old `[[loadouts]]` key still parses (legacy alias); this
         // proves a config authored with `[[loadouts]]` loads the same way.
         let global = tempfile::tempdir().unwrap();
         let gcfg = global.path().join("config.toml");
@@ -1036,7 +1036,7 @@ mod tests {
                 Layer::Repo,
                 PathBuf::from("/r/.loadout/config.toml"),
                 "[[fragments]]\nid = \"repo-cap\"\nguidance = \"nope\"\n\
-                 \n[[profiles]]\nname = \"repo-prof\"\ntargets = [\"rust\"]\n"
+                 \n[[loadouts]]\nname = \"repo-prof\"\ntargets = [\"rust\"]\n"
                     .to_string(),
             ),
         ])

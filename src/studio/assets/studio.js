@@ -1,4 +1,4 @@
-// Minimal htmx-compatible processor for rosita studio.
+// Minimal htmx-compatible processor for loadout studio.
 //
 // Implements the htmx attribute subset we use: hx-get/hx-post/hx-delete drive a
 // same-origin fetch; hx-target selects where the returned fragment is swapped
@@ -243,7 +243,7 @@
   // already stamped <html data-theme/-pref> to avoid a flash. Here we cycle the
   // preference on click, persist it, and (in auto mode) re-resolve when the OS
   // setting flips. CSS keys the visible glyph off data-theme-pref.
-  var THEME_KEY = "rosita-theme";
+  var THEME_KEY = "loadout-theme";
   var THEME_ORDER = ["auto", "light", "dark"];
 
   function applyTheme(pref) {

@@ -23,7 +23,7 @@ use crate::profile::Rule;
 /// repo layer that declares them is ignored, and `doctor` flags it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Layer {
-    /// Shipped with rosita.
+    /// Shipped with loadout.
     #[default]
     BuiltIn,
     /// Global `config.toml`.
@@ -45,7 +45,7 @@ impl Layer {
         matches!(self, Layer::BuiltIn | Layer::Global | Layer::GlobalLocal)
     }
 
-    /// Whether `[[profiles]]` defined in this layer are honored. Profiles are
+    /// Whether `[[loadouts]]` defined in this layer are honored. Profiles are
     /// **public-global only**: authored once in the global `config.toml`, shared
     /// across repos. Not the private global `local.toml`, never a repo layer.
     pub fn contributes_profiles(self) -> bool {

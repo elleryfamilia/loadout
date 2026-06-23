@@ -101,7 +101,7 @@ pub struct RenderedFragment {
     /// True when this fragment resolved a dynamic provider/command.
     pub dynamic: bool,
     /// True when a dynamic command was skipped (`allow_exec = false`); `body` is
-    /// the `> [rosita] …` skip note rather than rendered guidance.
+    /// the `> [loadout] …` skip note rather than rendered guidance.
     pub skipped: bool,
 }
 
@@ -270,7 +270,7 @@ fn render_fragment_list(
             // Dynamic, but the command was skipped (e.g. allow_exec = false).
             Some(res) if res.skipped.is_some() => {
                 skipped = true;
-                format!("> [rosita] {}", res.skipped.as_ref().unwrap())
+                format!("> [loadout] {}", res.skipped.as_ref().unwrap())
             }
             // Dynamic with resolved (or absent) output.
             Some(res) => {

@@ -1,4 +1,4 @@
-//! `rosita studio` — a local, ephemeral web UI for viewing and editing
+//! `load studio` — a local, ephemeral web UI for viewing and editing
 //! fragments and profiles as a lens over your plain TOML config.
 //!
 //! - [`edit`] — the headless comment/format-preserving `toml_edit` write engine

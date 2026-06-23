@@ -232,7 +232,7 @@ pub fn run_once_in(command: &str, lang: Option<&str>, dir: &Path) -> ProviderOut
 }
 
 /// Hard cap on a detection script predicate, so a hanging script can't stall
-/// `rosita run` (which fronts the agent launch). A timeout is fail-closed.
+/// `load run` (which fronts the agent launch). A timeout is fail-closed.
 const PREDICATE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Run a **script predicate** for target detection: exit 0 ⇒ match. Unlike

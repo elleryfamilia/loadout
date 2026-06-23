@@ -2,7 +2,7 @@
 //!
 //! Flags machine-specific literals — IPv4 addresses, `*.domain.tld` globs, and
 //! multi-label hostnames — that belong in the gitignored `local.toml`, not the
-//! shareable `config.toml`. Used by both `rosita doctor` and `rosita studio`
+//! shareable `config.toml`. Used by both `load doctor` and `load studio`
 //! (where it doubles as the cross-machine **sync-safety** guard, §6/§7).
 //!
 //! It is a **heuristic warning, never a gate**: the multi-label-hostname rule

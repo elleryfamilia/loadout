@@ -1,10 +1,10 @@
-//! `rosita skill` — install, remove, and inspect the skills rosita ships.
+//! `load skill` — install, remove, and inspect the skills loadout ships.
 //!
 //! The sole lifecycle path for embedded skills (see [`crate::skills`]):
 //! `clean` stays repo-scoped and never touches them, and the ask-once prompt
-//! in `rosita run` is just a frontend over `install`. Installing records an
+//! in `load run` is just a frontend over `install`. Installing records an
 //! `accepted` decision; removing records `declined` so `run` won't re-offer —
-//! `rosita skill install` is the re-enable path.
+//! `load skill install` is the re-enable path.
 
 use anyhow::anyhow;
 
@@ -15,7 +15,7 @@ use crate::config;
 use crate::skills::{self, InstallAction, LinkState, Skill, SkillState};
 use crate::style::Painter;
 
-/// Entry point for `rosita skill`.
+/// Entry point for `load skill`.
 pub fn run(rt: &Runtime, args: &SkillArgs) -> crate::Result<()> {
     match args.action.as_ref().unwrap_or(&SkillAction::Status) {
         SkillAction::Status => status(),
@@ -45,7 +45,7 @@ fn home() -> crate::Result<std::path::PathBuf> {
     config::home_dir().ok_or_else(|| anyhow!("cannot resolve $HOME"))
 }
 
-/// `rosita skill install [id]`.
+/// `load skill install [id]`.
 fn install(rt: &Runtime, id: Option<&str>) -> crate::Result<()> {
     let p = Painter::auto();
     let home = home()?;
@@ -61,7 +61,7 @@ fn install(rt: &Runtime, id: Option<&str>) -> crate::Result<()> {
     Ok(())
 }
 
-/// `rosita skill remove [id]`.
+/// `load skill remove [id]`.
 fn remove(rt: &Runtime, id: Option<&str>) -> crate::Result<()> {
     let p = Painter::auto();
     let home = home()?;
@@ -75,7 +75,7 @@ fn remove(rt: &Runtime, id: Option<&str>) -> crate::Result<()> {
             continue;
         }
         let removed = skills::remove(&home, skill)?;
-        // Remember the opt-out so `rosita run` doesn't immediately re-offer it.
+        // Remember the opt-out so `load run` doesn't immediately re-offer it.
         binding::write_skill_decision(skill.id, SkillDecision::Declined)?;
         if removed.is_empty() {
             println!("  {} {} was not installed", p.dim("·"), p.bold(skill.id));
@@ -85,14 +85,14 @@ fn remove(rt: &Runtime, id: Option<&str>) -> crate::Result<()> {
             }
             println!(
                 "    {}",
-                p.dim("re-enable any time with `rosita skill install`")
+                p.dim("re-enable any time with `load skill install`")
             );
         }
     }
     Ok(())
 }
 
-/// `rosita skill [status]`.
+/// `load skill [status]`.
 fn status() -> crate::Result<()> {
     let p = Painter::auto();
     let home = home()?;
@@ -105,7 +105,7 @@ fn status() -> crate::Result<()> {
         };
         let state = match &st.state {
             SkillState::NotInstalled => p.dim("not installed"),
-            SkillState::Unmanaged => p.yellow("present but not rosita-managed"),
+            SkillState::Unmanaged => p.yellow("present but not loadout-managed"),
             SkillState::Managed {
                 user_modified: true,
                 ..
@@ -113,7 +113,7 @@ fn status() -> crate::Result<()> {
             SkillState::Managed {
                 upgrade_available: true,
                 ..
-            } => p.cyan("installed, upgrade available (`rosita skill install`)"),
+            } => p.cyan("installed, upgrade available (`load skill install`)"),
             SkillState::Managed { .. } => p.green("installed, current"),
         };
         println!(
@@ -135,10 +135,10 @@ fn status() -> crate::Result<()> {
             let what = match link.state {
                 LinkState::AgentAbsent => continue, // agent not installed; nothing expected
                 LinkState::Linked => p.green("linked"),
-                LinkState::Missing => p.yellow("missing (`rosita skill install` repairs)"),
-                LinkState::Dangling => p.yellow("dangling (`rosita skill install` repairs)"),
+                LinkState::Missing => p.yellow("missing (`load skill install` repairs)"),
+                LinkState::Dangling => p.yellow("dangling (`load skill install` repairs)"),
                 LinkState::CopyManaged => p.cyan("copy (symlink fallback)"),
-                LinkState::Foreign => p.yellow("occupied by a file rosita didn't create"),
+                LinkState::Foreign => p.yellow("occupied by a file loadout didn't create"),
             };
             println!("    {}", p.dim(&format!("{}: {what}", link.path.display())));
         }
@@ -178,7 +178,7 @@ fn report_actions(p: &Painter, skill: &Skill, actions: &[InstallAction]) {
             }
             InstallAction::UpgradedCanonical(path) => {
                 println!(
-                    "  {} upgraded {} to this rosita's version → {}",
+                    "  {} upgraded {} to this loadout's version → {}",
                     p.green("⟳"),
                     p.bold(skill.id),
                     path.display()
@@ -214,7 +214,7 @@ fn report_actions(p: &Painter, skill: &Skill, actions: &[InstallAction]) {
             }
             InstallAction::SkippedForeign(path) => {
                 println!(
-                    "  {} {} exists and isn't rosita's — left untouched",
+                    "  {} {} exists and isn't loadout's — left untouched",
                     p.yellow("⚠"),
                     path.display()
                 );

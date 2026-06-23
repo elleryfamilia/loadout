@@ -21,7 +21,7 @@ use crate::vlog;
 /// Everything we detected about the current project and runtime.
 #[derive(Debug, Clone, Serialize)]
 pub struct Context {
-    /// Current working directory (the dir rosita was asked to operate on).
+    /// Current working directory (the dir loadout was asked to operate on).
     pub cwd: PathBuf,
     /// Repo base: git root when present, otherwise `cwd`.
     pub repo_base: PathBuf,
@@ -89,7 +89,7 @@ pub struct SystemContext {
     pub host_class: Option<String>,
 }
 
-/// Where rosita is operating: inside a git repo, or on the bare machine.
+/// Where loadout is operating: inside a git repo, or on the bare machine.
 ///
 /// **Derived, never stored** — and intentionally **not** part of the context
 /// hash: the `git: Option<…>` field already encodes repo-vs-machine, so adding a
@@ -181,7 +181,7 @@ impl Context {
     /// Deterministic content fingerprint of this context.
     ///
     /// Excludes [`SystemContext::parent_process`], which is provenance (it differs
-    /// between a direct call and `rosita run`) and must not churn the hash.
+    /// between a direct call and `load run`) and must not churn the hash.
     pub fn compute_hash(&self) -> String {
         let mut clone = self.clone();
         clone.system.parent_process = None;

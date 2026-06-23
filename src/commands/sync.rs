@@ -1,6 +1,6 @@
-//! `rosita sync` — git-backed sync of the global config (fragments & profiles)
+//! `load sync` — git-backed sync of the global config (fragments & profiles)
 //! across machines. `init` sets a machine up, `clone` onboards a new one, and a
-//! bare `rosita sync` pulls the latest and pushes local edits.
+//! bare `load sync` pulls the latest and pushes local edits.
 
 use std::io::{IsTerminal, Write as _};
 use std::path::Path;
@@ -38,7 +38,7 @@ pub fn run(_rt: &super::Runtime, args: &SyncArgs) -> Result<()> {
     }
 }
 
-/// `rosita sync init [url]`: set the config dir up as a synced repo. With a URL,
+/// `load sync init [url]`: set the config dir up as a synced repo. With a URL,
 /// wire it non-interactively. Without one, offer to create + push a GitHub repo
 /// via `gh` (interactive), or print manual guidance.
 fn init_flow(dir: &Path, remote_arg: Option<&str>, p: &Painter) -> Result<()> {
@@ -55,10 +55,10 @@ fn init_flow(dir: &Path, remote_arg: Option<&str>, p: &Painter) -> Result<()> {
     }
 
     // No remote given. If one is already wired (e.g. a previous init), there's
-    // nothing to create — just point at `rosita sync`.
+    // nothing to create — just point at `load sync`.
     if sync::is_synced(dir) {
         println!(
-            "{} already set up · origin {} · run `rosita sync` to publish/pull",
+            "{} already set up · origin {} · run `load sync` to publish/pull",
             p.green("✓"),
             p.dim(&sync::remote_name(dir))
         );
@@ -73,7 +73,7 @@ fn init_flow(dir: &Path, remote_arg: Option<&str>, p: &Painter) -> Result<()> {
     } else {
         println!(
             "{}",
-            p.dim("  publish it: `rosita sync init <url>`  (or: gh repo create <name> --source . --push)")
+            p.dim("  publish it: `load sync init <url>`  (or: gh repo create <name> --source . --push)")
         );
         Ok(())
     }
@@ -85,7 +85,7 @@ fn offer_gh(dir: &Path, p: &Painter) -> Result<()> {
     if !prompt_yes("  Create a GitHub repo with gh and push now?", true)? {
         println!(
             "{}",
-            p.dim("  ok — publish later with `rosita sync init <url>`.")
+            p.dim("  ok — publish later with `load sync init <url>`.")
         );
         return Ok(());
     }
@@ -136,7 +136,7 @@ fn offer_gh(dir: &Path, p: &Painter) -> Result<()> {
             }
             GhCreate::Failed(e) => bail!(
                 "gh repo create failed: {e}\n  check `gh auth login`, then retry — \
-                 or set up the remote by hand: `rosita sync init <url>`"
+                 or set up the remote by hand: `load sync init <url>`"
             ),
         }
     }
@@ -188,8 +188,8 @@ fn prompt_line(question: &str, default: &str) -> Result<String> {
 fn sync_now(dir: &Path, p: &Painter) -> Result<()> {
     if !sync::is_synced(dir) {
         bail!(
-            "config isn't set up for sync yet — run `rosita sync init [remote-url]` \
-             (or `rosita sync clone <url>` on a new machine) first"
+            "config isn't set up for sync yet — run `load sync init [remote-url]` \
+             (or `load sync clone <url>` on a new machine) first"
         );
     }
     let remote = sync::remote_name(dir);
@@ -222,7 +222,7 @@ fn sync_now(dir: &Path, p: &Painter) -> Result<()> {
                 ),
                 ReconcileOutcome::Conflicted => bail!(
                     "local and remote changed the same lines — reconcile by hand in {} \
-                     (e.g. `git -C {} pull --rebase`, fix the conflicts, then `rosita sync`)",
+                     (e.g. `git -C {} pull --rebase`, fix the conflicts, then `load sync`)",
                     dir.display(),
                     dir.display()
                 ),
@@ -230,13 +230,13 @@ fn sync_now(dir: &Path, p: &Painter) -> Result<()> {
         }
     }
 
-    match sync::commit_push(dir, "rosita: sync config", MANUAL_TIMEOUT)
+    match sync::commit_push(dir, "loadout: sync config", MANUAL_TIMEOUT)
         .context("pushing to the remote")?
     {
         PushOutcome::Pushed => println!("{} pushed your changes", p.green("✓")),
         PushOutcome::NothingToPush => println!("{} nothing to push", p.dim("·")),
         PushOutcome::Diverged => {
-            bail!("push rejected — the remote moved ahead; run `rosita sync` again to pull first")
+            bail!("push rejected — the remote moved ahead; run `load sync` again to pull first")
         }
     }
     Ok(())

@@ -75,7 +75,7 @@ pub fn program_on_path(program: &str) -> bool {
 }
 
 /// How an ambiguous (2+ matching) profile selection is resolved. The default
-/// [`SkipChooser`] never prompts; `rosita run` injects an interactive one.
+/// [`SkipChooser`] never prompts; `load run` injects an interactive one.
 pub trait ProfileChooser {
     /// Pick among `candidates` for `ctx`. Implementations may prompt the user.
     fn choose(&self, ctx: &Context, candidates: &[LoadoutConfig]) -> crate::Result<Choice>;
@@ -94,7 +94,7 @@ pub enum Choice {
 }
 
 /// Marker error for a user-cancelled interactive prompt (the profile chooser).
-/// `rosita run` catches it and exits cleanly (`Ok(())`) without launching.
+/// `load run` catches it and exits cleanly (`Ok(())`) without launching.
 #[derive(Debug)]
 pub struct Aborted;
 
@@ -108,7 +108,7 @@ impl std::error::Error for Aborted {}
 
 /// What [`prepare_with`] does with fragment ids a profile references but that
 /// aren't in the library (they would otherwise be silently dropped). Most
-/// commands `Warn`; `rosita run` uses `Defer` so it can prompt interactively.
+/// commands `Warn`; `load run` uses `Defer` so it can prompt interactively.
 pub enum MissingPolicy {
     /// Emit a `warning:` line per missing fragment, then continue.
     Warn,
@@ -125,7 +125,7 @@ impl ProfileChooser for SkipChooser {
         let names: Vec<&str> = candidates.iter().map(|p| p.name.as_str()).collect();
         crate::warn_user!(
             "{} loadouts match this project ({}); none chosen — overlay is empty. \
-             Run `rosita run <agent>` to pick one (remembered afterwards).",
+             Run `load run <agent>` to pick one (remembered afterwards).",
             candidates.len(),
             names.join(", ")
         );

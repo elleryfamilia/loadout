@@ -33,7 +33,7 @@ fn tailscale_candidates(exists: impl Fn(&str) -> bool) -> Vec<String> {
     candidates
 }
 
-/// Whether `path` is an executable regular file (unix). rosita is unix-targeted,
+/// Whether `path` is an executable regular file (unix). loadout is unix-targeted,
 /// so the executable bit is the right gate (mirrors agent-env's `[ -x ]`).
 fn is_executable_file(path: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;

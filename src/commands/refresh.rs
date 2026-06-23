@@ -1,4 +1,4 @@
-//! `rosita refresh` — pull the latest config, then (re-)render overlays.
+//! `load refresh` — pull the latest config, then (re-)render overlays.
 //!
 //! Without `--agent`, refreshes every agent whose generated overlay already
 //! exists; if none do, falls back to the default agent. With `--agent` it
@@ -13,7 +13,7 @@ use crate::cli::RefreshArgs;
 use crate::config;
 use crate::style::Painter;
 
-/// Entry point for `rosita refresh`.
+/// Entry point for `load refresh`.
 pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
     let p = Painter::auto();
 

@@ -5,10 +5,10 @@
 //! and syncs; `local.toml` (per-machine hostnames / secret-adjacent params) is
 //! gitignored and never leaves the machine. Every network op is **timeout-bounded
 //! and non-fatal**: a slow/offline remote degrades to "use the local config",
-//! never a hang and never a failed `rosita run`.
+//! never a hang and never a failed `load run`.
 //!
 //! Auto-pull (before run/refresh) is throttled by `[sync] pull_max_age`; auto-push
-//! (after an apply) is best-effort. `rosita sync` is the manual force.
+//! (after an apply) is best-effort. `load sync` is the manual force.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 
 use crate::config::SyncConfig;
 
-/// The status of an auto-pull, used to drive the `rosita run` sync line.
+/// The status of an auto-pull, used to drive the `load run` sync line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncStatus {
     /// Not configured here (auto-pull off, or the dir isn't a synced repo).
@@ -36,7 +36,7 @@ pub enum SyncStatus {
     UpToDate,
     /// Couldn't reach the remote (offline / timeout / auth) — using local config.
     Offline { last: Option<Duration> },
-    /// Local and remote diverged — a manual `rosita sync` is needed.
+    /// Local and remote diverged — a manual `load sync` is needed.
     Diverged,
 }
 
@@ -73,7 +73,7 @@ pub fn config_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("no config directory (could not determine home)"))
 }
 
-/// Whether `dir` is a git repo with at least one remote — i.e. `rosita sync init`
+/// Whether `dir` is a git repo with at least one remote — i.e. `load sync init`
 /// (or `clone`) has been run. Auto-pull/push are inert otherwise.
 pub fn is_synced(dir: &Path) -> bool {
     dir.join(".git").exists()
@@ -89,7 +89,7 @@ pub fn last_synced(dir: &Path) -> Option<SystemTime> {
 }
 
 fn stamp_path(dir: &Path) -> PathBuf {
-    dir.join(".git").join("rosita-sync")
+    dir.join(".git").join("loadout-sync")
 }
 
 /// Record "synced just now" (mtime = now). Best-effort; ignored on failure.
@@ -189,7 +189,7 @@ pub fn pull(dir: &Path, timeout: Duration) -> Result<PullOutcome> {
 
 /// Reconcile a diverged branch by rebasing the local commits onto the upstream.
 ///
-/// Used **only** by the manual `rosita sync` (the user is waiting): unlike the
+/// Used **only** by the manual `load sync` (the user is waiting): unlike the
 /// fast-forward-only auto-pull on the `run`/`refresh` hot path, this is allowed to
 /// rewrite local history, because the common divergence — two machines editing
 /// different fragments — rebases cleanly. On a real content conflict the rebase is
@@ -343,7 +343,7 @@ pub fn init(dir: &Path, remote: Option<&str>, timeout: Duration) -> Result<()> {
     let _ = git(dir, &["add", "config.toml"], None); // may not exist yet
     run_ok(dir, &["add", ".gitignore"])?;
     if !git(dir, &["diff", "--cached", "--quiet"], None)?.ok {
-        run_ok(dir, &["commit", "-q", "-m", "rosita: sync config"])?;
+        run_ok(dir, &["commit", "-q", "-m", "loadout: sync config"])?;
     }
     if let Some(url) = remote {
         // Set or replace origin, then push.
@@ -363,7 +363,7 @@ pub fn init(dir: &Path, remote: Option<&str>, timeout: Duration) -> Result<()> {
 pub fn clone(url: &str, dir: &Path, timeout: Duration) -> Result<()> {
     if dir.join(".git").exists() {
         bail!(
-            "{} is already a git repo — use `rosita sync` to pull",
+            "{} is already a git repo — use `load sync` to pull",
             dir.display()
         );
     }
@@ -408,7 +408,7 @@ pub fn clone(url: &str, dir: &Path, timeout: Duration) -> Result<()> {
 /// never the private/derived files.
 pub fn ensure_gitignore(dir: &Path) -> Result<()> {
     let path = dir.join(".gitignore");
-    let want = "# rosita sync — keep machine-private and generated files out of the repo.\n\
+    let want = "# load sync — keep machine-private and generated files out of the repo.\n\
                 local.toml\n\
                 bindings.toml\n\
                 generated/\n\
@@ -542,7 +542,7 @@ fn run_capture(mut cmd: Command, timeout: Option<Duration>, name: &str) -> Resul
     })
 }
 
-// --- GitHub (`gh`) integration for `rosita sync init` ------------------------
+// --- GitHub (`gh`) integration for `load sync init` ------------------------
 
 /// Whether the GitHub CLI is available to create a repo for the user.
 pub fn gh_available() -> bool {
@@ -577,7 +577,7 @@ pub fn set_commit_email(dir: &Path, email: &str) -> Result<()> {
         .map(|o| o.ok && !o.stdout.trim().is_empty())
         .unwrap_or(false);
     if !has_name {
-        let _ = git(dir, &["config", "user.name", "rosita"], None);
+        let _ = git(dir, &["config", "user.name", "loadout"], None);
     }
     Ok(())
 }
@@ -609,7 +609,7 @@ pub fn gh_create_repo(name: &str, public: bool, dir: &Path, timeout: Duration) -
         Some(timeout),
     )?;
     if out.ok {
-        // Ensure the branch tracks origin/main so a later bare `rosita sync` pulls.
+        // Ensure the branch tracks origin/main so a later bare `load sync` pulls.
         let _ = git(
             dir,
             &["branch", "--set-upstream-to=origin/main", "main"],
@@ -687,7 +687,7 @@ mod tests {
     fn identify(dir: &Path) {
         for (k, v) in [
             ("user.email", "t@example.test"),
-            ("user.name", "rosita test"),
+            ("user.name", "loadout test"),
         ] {
             Command::new("git")
                 .arg("-C")
@@ -915,7 +915,7 @@ mod tests {
 
     #[test]
     fn reconcile_rebase_autostashes_uncommitted_edits() {
-        // `rosita sync` runs reconcile *before* committing, so a hand-edited (still
+        // `load sync` runs reconcile *before* committing, so a hand-edited (still
         // uncommitted) config.toml must not block the rebase — `--autostash` stashes
         // it, rebases onto the remote, and reapplies it.
         let tmp = tempfile::tempdir().unwrap();

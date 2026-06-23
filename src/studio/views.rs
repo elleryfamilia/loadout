@@ -1,4 +1,4 @@
-//! `maud` server-rendered HTML for rosita studio: a tabbed shell (Fragments /
+//! `maud` server-rendered HTML for load studio: a tabbed shell (Fragments /
 //! Profiles), the profile rail + per-fragment detail, the fragment list +
 //! modal dialog, the full-width profile editor, and the diff/review.
 //!
@@ -286,7 +286,7 @@ fn target_icon_only(id: &str, token: Option<&str>) -> Markup {
     html! { span class="rail-icon" title=(id) { (target_icon_markup(&ti)) } }
 }
 
-/// The rosita brandmark: a small red rose (multi-color, so it ignores the
+/// The loadout brandmark: a small red rose (multi-color, so it ignores the
 /// monochrome icon treatment).
 fn brand_mark() -> Markup {
     PreEscaped(
@@ -307,7 +307,7 @@ fn brand_mark() -> Markup {
 /// (`auto`/`light`/`dark`) against the system `prefers-color-scheme` and stamps
 /// `<html data-theme>` (resolved) + `<html data-theme-pref>` (preference) before
 /// the stylesheet paints — preventing a dark→light flash on load.
-const THEME_INIT_JS: &str = "(function(){try{var p=localStorage.getItem('rosita-theme')||'auto';\
+const THEME_INIT_JS: &str = "(function(){try{var p=localStorage.getItem('loadout-theme')||'auto';\
 var m=window.matchMedia&&matchMedia('(prefers-color-scheme: light)').matches;\
 var e=p==='auto'?(m?'light':'dark'):p;var r=document.documentElement;\
 r.dataset.theme=e;r.dataset.themePref=p;}catch(_){}})();";
@@ -374,13 +374,13 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str) -> String {
                 // dark) against the system setting and stamp <html> before the
                 // stylesheet paints, so there's no dark→light flicker on load.
                 script { (PreEscaped(THEME_INIT_JS)) }
-                title { "Rosita studio" }
+                title { "Loadout studio" }
                 link rel="stylesheet" href="/assets/studio.css";
                 script src="/assets/studio.js" defer {}
             }
             body {
                 header class="topbar" {
-                    div class="brand" { span class="brand-mark" { (brand_mark()) } span class="brand-name" { "Rosita" } }
+                    div class="brand" { span class="brand-mark" { (brand_mark()) } span class="brand-name" { "Loadout" } }
                     (tab_bar(active_tab))
                     div class="topbar-right" {
                         div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
@@ -534,10 +534,10 @@ fn studio_welcome(o: &Onboarding, packs: &[PackView]) -> Markup {
         div class="welcome" {
             div class="welcome-head" {
                 span class="welcome-wave" { "👋" }
-                h1 { "Welcome to Rosita studio" }
+                h1 { "Welcome to Loadout studio" }
             }
             div class="welcome-detect" {
-                span class="muted small" { "rosita detected" }
+                span class="muted small" { "loadout detected" }
                 span class="welcome-chips" {
                     @match &o.stack {
                         Some(s) => (target_chip(s, crate::target::builtin_icon(s))),
@@ -570,9 +570,9 @@ pub enum SkillCardState {
     Offer,
     /// Installed and current: show the handoff command.
     Installed,
-    /// Installed but this rosita ships a newer version.
+    /// Installed but this loadout ships a newer version.
     UpgradeAvailable,
-    /// Present with local edits (or a copy rosita didn't write) — hands off.
+    /// Present with local edits (or a copy loadout didn't write) — hands off.
     HandsOff,
 }
 
@@ -587,35 +587,35 @@ pub fn skill_card(ids: &[&str], state: &SkillCardState) -> String {
             @match state {
                 SkillCardState::Offer => {
                     span class="muted small" {
-                        "rosita ships agent skills (" strong { (id_list) } "): import an existing "
+                        "loadout ships agent skills (" strong { (id_list) } "): import an existing "
                         "CLAUDE.md/AGENTS.md, and save preferences you state mid-session as global guidance "
                         "(work in Claude Code, Codex, Gemini CLI, opencode)."
                     }
                     button class="btn btn-ghost"
                         hx-post="/skills/install" hx-target="#skill-card"
                         hx-confirm=(format!(
-                            "Install the rosita skills ({id_list}) into ~/.agents/skills now? \
-                             This writes files immediately (not staged); `rosita skill remove` undoes it."
+                            "Install the loadout skills ({id_list}) into ~/.agents/skills now? \
+                             This writes files immediately (not staged); `load skill remove` undoes it."
                         )) {
                         (icon("bolt")) "Install the skills"
                     }
                 }
                 SkillCardState::Installed => {
-                    span class="muted small" { "The rosita skills (" strong { (id_list) } ") are installed. Import your existing instructions from any agent session:" }
-                    code { "rosita run claude -- \"/rosita-migrate\"" }
-                    span class="muted small" { "remove with " code { "rosita skill remove" } }
+                    span class="muted small" { "The loadout skills (" strong { (id_list) } ") are installed. Import your existing instructions from any agent session:" }
+                    code { "load run claude -- \"/loadout-migrate\"" }
+                    span class="muted small" { "remove with " code { "load skill remove" } }
                 }
                 SkillCardState::UpgradeAvailable => {
-                    span class="muted small" { "The rosita skills (" strong { (id_list) } ") are installed but a newer version ships with this rosita." }
+                    span class="muted small" { "The loadout skills (" strong { (id_list) } ") are installed but a newer version ships with this loadout." }
                     button class="btn btn-ghost"
                         hx-post="/skills/install" hx-target="#skill-card"
-                        hx-confirm="Upgrade the rosita skills in ~/.agents/skills? This rewrites the skill files immediately." {
+                        hx-confirm="Upgrade the loadout skills in ~/.agents/skills? This rewrites the skill files immediately." {
                         (icon("refresh")) "Upgrade the skills"
                     }
                 }
                 SkillCardState::HandsOff => {
                     span class="muted small" {
-                        "Skills (" strong { (id_list) } ") exist in ~/.agents/skills with local edits — rosita leaves them alone."
+                        "Skills (" strong { (id_list) } ") exist in ~/.agents/skills with local edits — loadout leaves them alone."
                     }
                 }
             }
@@ -896,9 +896,9 @@ pub fn fragments_tab_fragment(lib: &LibraryView, flash: Option<&str>) -> String 
     fragments_tab(lib, flash).into_string()
 }
 
-/// The Targets tab: the list of targets rosita can detect, each with the rule
+/// The Targets tab: the list of targets loadout can detect, each with the rule
 /// that makes it work. Built-ins are read-only; the rule text is the answer to
-/// "how does rosita decide a repo is this target?".
+/// "how does loadout decide a repo is this target?".
 pub fn targets_tab(view: &TargetsView, flash: Option<&str>) -> Markup {
     html! {
         div class="tab-targets" {
@@ -910,7 +910,7 @@ pub fn targets_tab(view: &TargetsView, flash: Option<&str>) -> Markup {
             }
             @if let Some(msg) = flash { p class="flash" { (icon("check")) (msg) } }
             p class="muted targets-lead" {
-                "A " strong { "target" } " is a label rosita attaches to a project by detecting it (a Rust repo, a Next.js app, …). A loadout applies to a repo when one of its targets matches. Built-in targets are read-only; add your own to recognize a project kind rosita doesn't yet. "
+                "A " strong { "target" } " is a label loadout attaches to a project by detecting it (a Rust repo, a Next.js app, …). A loadout applies to a repo when one of its targets matches. Built-in targets are read-only; add your own to recognize a project kind loadout doesn't yet. "
                 span class="tag rec-tag" { (icon("check")) "matches here" }
                 " marks the ones that match the repo studio is running in."
             }
@@ -1477,7 +1477,7 @@ pub fn onboarding_review(summary: &crate::studio::state::StagedSummary) -> Strin
 
 /// Beat 3 of the guided first-run: after Apply, confirm the setup is live and —
 /// the piece that was missing — name the one command that actually uses it
-/// (`rosita run <agent>`) plus how to reopen the studio.
+/// (`load run <agent>`) plus how to reopen the studio.
 pub fn onboarding_done(summary: &crate::studio::state::StagedSummary, agent: &str) -> String {
     let targets: Vec<&String> = summary
         .profiles
@@ -1492,7 +1492,7 @@ pub fn onboarding_done(summary: &crate::studio::state::StagedSummary, agent: &st
             }
             p class="welcome-lead" {
                 "Your guidance is live. When you launch an AI agent in a matching repo, "
-                "rosita injects it automatically — no per-project setup."
+                "loadout injects it automatically — no per-project setup."
             }
             @if !targets.is_empty() {
                 div class="welcome-detect" {
@@ -1504,11 +1504,11 @@ pub fn onboarding_done(summary: &crate::studio::state::StagedSummary, agent: &st
             }
             div class="cmd-block" {
                 span class="muted small" { "Use it in any agent session:" }
-                code { "rosita run " (agent) }
+                code { "load run " (agent) }
             }
             div class="cmd-block" {
                 span class="muted small" { "Reopen this studio anytime:" }
-                code { "rosita studio" }
+                code { "load studio" }
             }
             div class="onboard-actions" {
                 button class="btn btn-primary" hx-get="/tab/profiles" hx-target="#main" { (icon("arrow-right")) "Explore your setup" }
@@ -1931,7 +1931,7 @@ fn file_diff(d: &FileDiff) -> Markup {
     html! {
         div class="file-diff" {
             div class="file-head" { span class="file-path" { (display_name(&d.path)) } span class="file-meta" { (scope) " · " (vis) } }
-            @if d.reformats_untouched { p class="hint small" { "rosita will also reformat some untouched lines it parsed." } }
+            @if d.reformats_untouched { p class="hint small" { "loadout will also reformat some untouched lines it parsed." } }
             pre class="diff-body" { (d.unified) }
         }
     }
@@ -1957,7 +1957,7 @@ pub fn error_fragment(msg: &str) -> String {
 
 /// A minimal full-page error (when the shell itself can't be assembled).
 pub fn error_page(msg: &str) -> String {
-    html! { (DOCTYPE) html { head { title { "Rosita studio — error" } } body { pre class="error" { (msg) } } } }.into_string()
+    html! { (DOCTYPE) html { head { title { "Loadout studio — error" } } body { pre class="error" { (msg) } } } }.into_string()
 }
 
 // --- shared bits -------------------------------------------------------------
@@ -2027,8 +2027,8 @@ mod tests {
         let html = shell(maud::html! {}, 0, "fragments");
         // Wordmark + page title are capitalized; the lowercase command name is
         // not what the chrome shows.
-        assert!(html.contains(r#"<span class="brand-name">Rosita</span>"#));
-        assert!(html.contains("Rosita studio"));
+        assert!(html.contains(r#"<span class="brand-name">Loadout</span>"#));
+        assert!(html.contains("Loadout studio"));
         // Right-side controls are grouped so the nav tabs can center.
         assert!(html.contains(r#"class="topbar-right""#));
         // Theme toggle button with all three preference glyphs present.
@@ -2047,7 +2047,7 @@ mod tests {
         // markup, so assert on the script's own tokens instead.)
         assert!(html.contains("dataset.theme"));
         assert!(html.contains("prefers-color-scheme"));
-        let init = html.find("rosita-theme").expect("theme init present");
+        let init = html.find("loadout-theme").expect("theme init present");
         let css = html.find("studio.css").expect("stylesheet link present");
         assert!(
             init < css,

@@ -1,9 +1,9 @@
-# rosita config reference (for the migration skill)
+# loadout config reference (for the migration skill)
 
-Everything lives in `~/.config/rosita/config.toml` (public, shareable) and,
-for machine-specific values, `~/.config/rosita/local.toml` (private,
+Everything lives in `~/.config/loadout/config.toml` (public, shareable) and,
+for machine-specific values, `~/.config/loadout/local.toml` (private,
 gitignored). Fragments and profiles are **global-only** — never put them in
-a repo's `.rosita/`.
+a repo's `.loadout/`.
 
 ## `[[fragments]]`
 
@@ -28,7 +28,7 @@ A fragment is one reusable unit of context. The parser is strict
 ¹ A fragment needs *either* `guidance` (static) *or* `command`/`provider` (dynamic).
 ² `provider` and `command` are mutually exclusive; either makes the fragment "dynamic".
 
-## `[[profiles]]`
+## `[[loadouts]]`
 
 A profile composes fragments and is selected by detected context.
 
@@ -41,7 +41,7 @@ A profile composes fragments and is selected by detected context.
 | `disabled` | no | `true` keeps the definition but never selects it. |
 
 Only **one** profile binds per repo: 0 matches → a no-targets default if you have
-one, else no overlay; exactly 1 → it's used; 2+ → rosita asks once and remembers
+one, else no overlay; exactly 1 → it's used; 2+ → loadout asks once and remembers
 the choice.
 
 ## Worked example
@@ -98,12 +98,12 @@ guidance = "Detected toolchains:\n{{ provider.output }}"
 
 # --- profiles: the matching one binds per repo ---
 
-[[profiles]]
+[[loadouts]]
 name = "machine"
 targets = ["machine"]            # the no-repo context
 fragments = ["terse-comms", "guardrails", "conventional-commits", "host", "toolchain"]
 
-[[profiles]]
+[[loadouts]]
 name = "rust"
 targets = ["rust"]               # any repo detected as rust
 fragments = ["terse-comms", "guardrails", "conventional-commits"]
@@ -115,17 +115,17 @@ If a fragment's guidance needs a real hostname or other machine-specific
 literal, keep it out of the public config:
 
 ```toml
-# ~/.config/rosita/config.toml  (public)
+# ~/.config/loadout/config.toml  (public)
 [[fragments]]
 id = "deploy"
 description = "Deploy target"
 guidance = "Deploy as {{ params.user }}@{{ params.host }}."
 
-# ~/.config/rosita/local.toml  (private, gitignored)
+# ~/.config/loadout/local.toml  (private, gitignored)
 [fragment_params.deploy]
 host = "box.internal.example"
 user = "deployer"
 ```
 
-`rosita doctor` leak-lints the public config and tells you when a literal looks
+`load doctor` leak-lints the public config and tells you when a literal looks
 private and belongs in `local.toml`.

@@ -1,5 +1,5 @@
 //! Starter packs — curated bundles of palette fragments plus one ready-made,
-//! self-contained profile. Packs are how rosita ships *default profiles* without
+//! self-contained profile. Packs are how loadout ships *default profiles* without
 //! breaking the "own your config, no magic" model: applying a pack stages the
 //! same edits you'd make by hand — it duplicates each fragment from the
 //! read-only [`palette`](crate::fragment::palette) into your own config, then

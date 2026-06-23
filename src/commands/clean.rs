@@ -1,6 +1,6 @@
-//! `rosita clean` — remove rosita-generated overlays and managed blocks.
+//! `load clean` — remove loadout-generated overlays and managed blocks.
 //!
-//! Removes only what rosita created (gitignored overlays, override files, and
+//! Removes only what loadout created (gitignored overlays, override files, and
 //! our managed marker block in importer files). Hand-authored, committed
 //! instruction files (`AGENTS.md`, `GEMINI.md`, `copilot-instructions.md`) are
 //! never touched.
@@ -12,7 +12,7 @@ use crate::adapters::{self, AppContext};
 use crate::cli::CleanArgs;
 use crate::writer::AtomicWriter;
 
-/// Entry point for `rosita clean`.
+/// Entry point for `load clean`.
 pub fn run(rt: &Runtime, args: &CleanArgs) -> crate::Result<()> {
     let prep = prepare(rt)?;
 
@@ -22,7 +22,7 @@ pub fn run(rt: &Runtime, args: &CleanArgs) -> crate::Result<()> {
     };
 
     if agents.is_empty() {
-        println!("nothing to clean (no rosita artifacts found).");
+        println!("nothing to clean (no loadout artifacts found).");
         return Ok(());
     }
 
@@ -69,7 +69,7 @@ pub fn run(rt: &Runtime, args: &CleanArgs) -> crate::Result<()> {
     Ok(())
 }
 
-/// Agents that currently have rosita artifacts on disk.
+/// Agents that currently have loadout artifacts on disk.
 fn agents_with_artifacts(prep: &Prepared) -> Vec<String> {
     prep.config
         .agents

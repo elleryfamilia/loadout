@@ -116,7 +116,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     // 3. Session cookie — required for everything else (assets + GETs too).
     if cookie_token(req).as_deref() != Some(token.as_str()) {
         return Resp::forbidden(
-            "missing or invalid session token — open the bootstrap URL printed by `rosita studio`",
+            "missing or invalid session token — open the bootstrap URL printed by `load studio`",
         );
     }
     // 4. Origin/Referer — required for state-changing methods (no CORS).
@@ -801,7 +801,7 @@ fn handle_pack_apply(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
 
 /// First-launch quick start: apply the pack recommended for the detected context.
 /// Falls back to the full gallery when nothing is recommended (e.g. a repo whose
-/// stack rosita doesn't recognize).
+/// stack loadout doesn't recognize).
 fn handle_quickstart(state: &Arc<Mutex<StudioState>>) -> Resp {
     let pack = {
         let snap = state.lock().unwrap().snapshot();
@@ -1251,7 +1251,7 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
     match result {
         Ok(written) => {
             // Guided first-run: a profile actually landed → show the "you're set"
-            // finish card (names `rosita run <agent>`), then disarm the flow. If
+            // finish card (names `load run <agent>`), then disarm the flow. If
             // nothing composed a profile, fall through to the normal flash.
             if let Some(summary) = onboarding {
                 state.lock().unwrap().onboarding_active = false;
@@ -1290,11 +1290,11 @@ fn auto_push_after_apply(state: &Arc<Mutex<StudioState>>) -> Option<String> {
     if !crate::sync::is_synced(&dir) {
         return None;
     }
-    match crate::sync::commit_push(&dir, "rosita studio: edit config", cfg.sync.timeout) {
+    match crate::sync::commit_push(&dir, "load studio: edit config", cfg.sync.timeout) {
         Ok(crate::sync::PushOutcome::Pushed) => Some("synced ✓".to_string()),
         Ok(crate::sync::PushOutcome::NothingToPush) => None,
         Ok(crate::sync::PushOutcome::Diverged) => {
-            Some("remote moved ahead — run `rosita sync`".to_string())
+            Some("remote moved ahead — run `load sync`".to_string())
         }
         Err(_) => Some("saved locally, push pending".to_string()),
     }
@@ -1313,7 +1313,7 @@ fn cookie_token(req: &Req) -> Option<String> {
     let cookies = req.headers.get("cookie")?;
     cookies.split(';').find_map(|kv| {
         kv.trim()
-            .strip_prefix("rosita_studio=")
+            .strip_prefix("loadout_studio=")
             .map(|v| v.to_string())
     })
 }
@@ -1339,7 +1339,7 @@ fn bootstrap(req: &Req, token: &str) -> Resp {
         .map(|(_, v)| v);
     if provided.as_deref() == Some(token) {
         // Token stays out of history/Referer: set the cookie, redirect to `/`.
-        let cookie = format!("rosita_studio={token}; HttpOnly; SameSite=Strict; Path=/");
+        let cookie = format!("loadout_studio={token}; HttpOnly; SameSite=Strict; Path=/");
         Resp::redirect("/", Some(&cookie))
     } else {
         Resp::forbidden("invalid or missing bootstrap token")
@@ -1348,7 +1348,7 @@ fn bootstrap(req: &Req, token: &str) -> Resp {
 
 // --- socket loop -------------------------------------------------------------
 
-/// Entry point for `rosita studio`: bind, print the bootstrap URL, open the
+/// Entry point for `load studio`: bind, print the bootstrap URL, open the
 /// browser (unless `--no-open`), and serve until the process is interrupted.
 pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
     let repo_base = context::repo_base_for(&rt.cwd);
@@ -1361,7 +1361,7 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
     let server = match tiny_http::Server::http(("127.0.0.1", args.port)) {
         Ok(s) => s,
         Err(e) => {
-            // The port is taken. If a rosita studio is already serving there,
+            // The port is taken. If a load studio is already serving there,
             // re-attach to it (recover its session token) and just open the
             // browser instead of failing. Anything else → the original error.
             if let Some(token) = try_attach_running(args.port) {
@@ -1370,10 +1370,10 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
                     args.port
                 );
                 println!(
-                    "rosita studio → already running on 127.0.0.1:{}; re-using it",
+                    "load studio → already running on 127.0.0.1:{}; re-using it",
                     args.port
                 );
-                println!("rosita studio → open  {url}");
+                println!("load studio → open  {url}");
                 println!("(restart that instance to pick up config changes since it started)");
                 if !args.no_open {
                     open_browser(&url);
@@ -1406,13 +1406,13 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
         )
     })?;
 
-    // Record where we're serving (port + token) so a second `rosita studio` on
+    // Record where we're serving (port + token) so a second `load studio` on
     // this port can recover the token and re-open the browser instead of failing
     // to bind. Best-effort: if it can't be written, we just lose that nicety.
     write_runtime_file(port, &token);
 
     let url = format!("http://127.0.0.1:{port}{BOOTSTRAP_PATH}?token={token}");
-    println!("rosita studio → open  {url}");
+    println!("load studio → open  {url}");
     if idle.is_zero() {
         println!("(serving on 127.0.0.1:{port}; Ctrl-C to stop)");
     } else {
@@ -1433,7 +1433,7 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
 // --- runtime file: re-attach to an already-running instance ------------------
 
 /// A studio instance's coordinates, written on launch and read by a second
-/// `rosita studio` so it can re-open the browser into the running instance
+/// `load studio` so it can re-open the browser into the running instance
 /// rather than dying on a port-in-use bind error.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct StudioRuntime {
@@ -1442,13 +1442,13 @@ struct StudioRuntime {
     pid: i32,
 }
 
-/// Per-port runtime file. Lives under the global config dir (`…/rosita/run`),
+/// Per-port runtime file. Lives under the global config dir (`…/loadout/run`),
 /// falling back to the OS temp dir, and is keyed by port so two instances on
 /// different ports don't collide.
 fn studio_runtime_path(port: u16) -> PathBuf {
     let dir = config::global_config_dir()
         .map(|d| d.join("run"))
-        .unwrap_or_else(|| std::env::temp_dir().join("rosita").join("run"));
+        .unwrap_or_else(|| std::env::temp_dir().join("loadout").join("run"));
     dir.join(format!("studio-{port}.json"))
 }
 
@@ -1504,9 +1504,9 @@ fn remove_runtime_file(port: u16) {
     let _ = std::fs::remove_file(studio_runtime_path(port));
 }
 
-/// If a rosita studio is already serving on `port`, return its session token.
+/// If a load studio is already serving on `port`, return its session token.
 /// Returns `None` when there's no runtime file, it's stale, or the server on
-/// that port doesn't answer as rosita — so the caller falls back to the normal
+/// that port doesn't answer as loadout — so the caller falls back to the normal
 /// bind error rather than opening a browser at some unrelated process.
 fn try_attach_running(port: u16) -> Option<String> {
     if port == 0 {
@@ -1529,8 +1529,8 @@ fn attach_from(path: &Path, port: u16) -> Option<String> {
     }
 }
 
-/// Confirm a live rosita studio on `port` accepts `token`: hit the bootstrap
-/// route and check for its signature (a 302 that sets the `rosita_studio`
+/// Confirm a live load studio on `port` accepts `token`: hit the bootstrap
+/// route and check for its signature (a 302 that sets the `loadout_studio`
 /// cookie). This doubles as a liveness + identity check, so a stale token or a
 /// foreign process on the port both fail closed.
 fn probe_studio(port: u16, token: &str) -> bool {
@@ -1566,7 +1566,7 @@ fn probe_studio(port: u16, token: &str) -> bool {
     }
     let text = String::from_utf8_lossy(&buf);
     // Only inspect the header block (before the blank line), so a foreign server
-    // that happens to echo "rosita_studio=" in its body can't be mistaken for us.
+    // that happens to echo "loadout_studio=" in its body can't be mistaken for us.
     let head = text.split("\r\n\r\n").next().unwrap_or("");
     let mut lines = head.lines();
     let status_ok = lines
@@ -1575,7 +1575,7 @@ fn probe_studio(port: u16, token: &str) -> bool {
     // A real bootstrap reply sets the session cookie via a Set-Cookie header.
     let sets_cookie = lines.any(|l| {
         let l = l.to_ascii_lowercase();
-        l.starts_with("set-cookie:") && l.contains("rosita_studio=")
+        l.starts_with("set-cookie:") && l.contains("loadout_studio=")
     });
     status_ok && sets_cookie
 }
@@ -1612,13 +1612,13 @@ fn serve_loop(server: &tiny_http::Server, state: &Arc<Mutex<StudioState>>, idle:
             }
             Ok(None) => {
                 if last.elapsed() >= idle {
-                    println!("rosita studio: idle — shutting down.");
+                    println!("load studio: idle — shutting down.");
                     return;
                 }
             }
             // A receive error means the listener is unusable; stop rather than spin.
             Err(e) => {
-                eprintln!("rosita studio: server error ({e}); shutting down.");
+                eprintln!("load studio: server error ({e}); shutting down.");
                 return;
             }
         }
@@ -1664,7 +1664,7 @@ fn respond(request: tiny_http::Request, resp: Resp) -> std::io::Result<()> {
 ///
 /// Failure is **fatal** — the server refuses to start rather than ever minting a
 /// guessable token (no time/pid fallback). This token gates every request, so a
-/// predictable value would defeat the whole localhost auth model. rosita is
+/// predictable value would defeat the whole localhost auth model. loadout is
 /// unix-targeted (unix `exec`, `libc`); a Windows port would read its CSPRNG via
 /// `getrandom`/`OsRng` here instead.
 fn make_token() -> crate::Result<String> {
@@ -1757,7 +1757,7 @@ mod tests {
     }
 
     const HOST: (&str, &str) = ("Host", "127.0.0.1:7777");
-    const COOKIE: (&str, &str) = ("Cookie", "rosita_studio=testtoken");
+    const COOKIE: (&str, &str) = ("Cookie", "loadout_studio=testtoken");
     const ORIGIN: (&str, &str) = ("Origin", "http://127.0.0.1:7777");
 
     #[test]
@@ -1770,7 +1770,7 @@ mod tests {
         );
         assert_eq!(r.status, 302);
         let (_, cookie) = r.headers.iter().find(|(k, _)| k == "set-cookie").unwrap();
-        assert!(cookie.contains("rosita_studio=testtoken"));
+        assert!(cookie.contains("loadout_studio=testtoken"));
         assert!(cookie.contains("HttpOnly"));
         assert!(cookie.contains("SameSite=Strict"));
     }
@@ -1807,7 +1807,7 @@ mod tests {
         let r = route(&st, &req("GET", "/", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("Rosita studio"));
+        assert!(body.contains("Loadout studio"));
         // The shell renders the Profiles tab (dashboard) by default.
         assert!(body.contains("Loadouts"));
         assert!(body.contains("Fragments"));
@@ -1822,7 +1822,10 @@ mod tests {
         let r = route(&st, &req("GET", "/tab/profiles", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("Welcome to Rosita studio"), "welcome missing");
+        assert!(
+            body.contains("Welcome to Loadout studio"),
+            "welcome missing"
+        );
         // The welcome embeds the starter-pack gallery; the detected stack's pack
         // is the recommended one with an Apply action.
         assert!(
@@ -2060,13 +2063,13 @@ mod tests {
     #[test]
     fn welcome_hidden_once_a_profile_exists() {
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"Use clippy.\"\n\n\
-                   [[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+                   [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let r = route(&st, &req("GET", "/tab/profiles", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
-        assert!(!body.contains("Welcome to rosita studio"));
+        assert!(!body.contains("Welcome to load studio"));
     }
 
     #[test]
@@ -2101,7 +2104,7 @@ mod tests {
              description = \"Terse\"\n\
              guidance = \"Be terse.\"\n\
              \n\
-             [[profiles]]\n\
+             [[loadouts]]\n\
              name = \"rust\"\n\
              targets = [\"rust\"]\n\
              fragments = [\"rc\", \"tc\"]\n";
@@ -2298,7 +2301,7 @@ mod tests {
              description = \"Deploy status\"\n\
              command = \"echo green\"\n\
              \n\
-             [[profiles]]\n\
+             [[loadouts]]\n\
              name = \"rust\"\n\
              targets = [\"rust\"]\n\
              fragments = [\"deploy\"]\n";
@@ -2322,7 +2325,7 @@ mod tests {
              description = \"Deploy status\"\n\
              command = \"echo green\"\n\
              \n\
-             [[profiles]]\n\
+             [[loadouts]]\n\
              name = \"rust\"\n\
              targets = [\"rust\"]\n\
              fragments = [\"deploy\"]\n";
@@ -2358,7 +2361,7 @@ mod tests {
              description = \"Deploy status\"\n\
              command = \"echo boom >&2; exit 7\"\n\
              \n\
-             [[profiles]]\n\
+             [[loadouts]]\n\
              name = \"rust\"\n\
              targets = [\"rust\"]\n\
              fragments = [\"deploy\"]\n";
@@ -2408,7 +2411,7 @@ mod tests {
     fn deleting_a_composed_fragment_warns_and_cleans_up_the_profile() {
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\
                    \n[[fragments]]\nid = \"keep\"\nguidance = \"y\"\n\
-                   \n[[profiles]]\nname = \"p\"\ntargets = [\"rust\"]\nfragments = [\"rc\", \"keep\"]\n";
+                   \n[[loadouts]]\nname = \"p\"\ntargets = [\"rust\"]\nfragments = [\"rc\", \"keep\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
@@ -2526,7 +2529,7 @@ mod tests {
         // Opening an existing profile's editor presents the name editable (not
         // readonly) and carries the original name as the rename key.
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\n\
-                   [[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+                   [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let body = body_of(route(
@@ -2542,7 +2545,7 @@ mod tests {
         // Editing a profile with a changed name renames it in place: the old
         // entry is replaced, not duplicated.
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\n\
-                   [[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+                   [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let r = body_of(route(
@@ -2575,8 +2578,8 @@ mod tests {
     fn profile_rename_onto_existing_name_is_rejected() {
         // Renaming `a` onto the existing `b` would clobber it — refused inline.
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\n\
-                   [[profiles]]\nname = \"a\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n\n\
-                   [[profiles]]\nname = \"b\"\ntargets = [\"go\"]\nfragments = [\"rc\"]\n";
+                   [[loadouts]]\nname = \"a\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n\n\
+                   [[loadouts]]\nname = \"b\"\ntargets = [\"go\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let err = body_of(route(
@@ -2600,7 +2603,7 @@ mod tests {
         // Creating a *new* profile whose name already exists must not silently
         // clobber the existing one (no `original_name` → it's a create).
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\n\
-                   [[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+                   [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let err = body_of(route(
@@ -2623,8 +2626,8 @@ mod tests {
         // `machine` is declared *second*, but the rail pins the machine-scope
         // profile to the top regardless of config order.
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\n\
-                   [[profiles]]\nname = \"web\"\ntargets = [\"nextjs\"]\nfragments = [\"rc\"]\n\n\
-                   [[profiles]]\nname = \"machine\"\ntargets = [\"machine\"]\nfragments = [\"rc\"]\n";
+                   [[loadouts]]\nname = \"web\"\ntargets = [\"nextjs\"]\nfragments = [\"rc\"]\n\n\
+                   [[loadouts]]\nname = \"machine\"\ntargets = [\"machine\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let r = route(&st, &req("GET", "/tab/profiles", "", &[HOST, COOKIE], ""));
@@ -2639,7 +2642,7 @@ mod tests {
     fn profiles_tab_does_not_auto_select() {
         // A rust profile that *would* be the bound candidate in this repo.
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\
-             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+             \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
@@ -2754,7 +2757,7 @@ mod tests {
         // the overlay drops its section, but the profile detail keeps the card and
         // offers a centered "Run" prompt (so it's still listed, openable, runnable).
         let cfg = "[[fragments]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
-             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"host\"]\n";
+             \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"host\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
         let body = body_of(route(
@@ -2770,7 +2773,7 @@ mod tests {
     fn run_all_executes_dynamic_caps_live() {
         // The `host` provider is a safe built-in probe, so a Live run produces output.
         let cfg = "[[fragments]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
-             \n[[profiles]]\nname = \"m\"\ntargets = [\"rust\"]\nfragments = [\"host\"]\n";
+             \n[[loadouts]]\nname = \"m\"\ntargets = [\"rust\"]\nfragments = [\"host\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
@@ -2803,7 +2806,7 @@ mod tests {
     #[test]
     fn per_card_run_executes_one_fragment() {
         let cfg = "[[fragments]]\nid = \"host\"\ndescription = \"Host\"\nprovider = \"host\"\n\
-             \n[[profiles]]\nname = \"m\"\ntargets = [\"rust\"]\nfragments = [\"host\"]\n";
+             \n[[loadouts]]\nname = \"m\"\ntargets = [\"rust\"]\nfragments = [\"host\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
@@ -2870,7 +2873,7 @@ mod tests {
     fn editing_a_fragment_from_a_profile_returns_the_profile_detail() {
         let cfg = "[[fragments]]\n\
              id = \"rc\"\nguidance = \"Old guidance.\"\n\
-             \n[[profiles]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+             \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
@@ -2916,7 +2919,7 @@ mod tests {
         let r = route(&st, &req("GET", "/skills/card", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("rosita-migrate"));
+        assert!(body.contains("loadout-migrate"));
     }
 
     #[test]
@@ -2960,7 +2963,7 @@ mod tests {
     #[test]
     fn probe_recognizes_running_studio_only_with_right_token() {
         let (port, _d) = spawn_studio("goodtoken");
-        // Correct token → bootstrap 302 + rosita_studio cookie → recognized.
+        // Correct token → bootstrap 302 + loadout_studio cookie → recognized.
         assert!(probe_studio(port, "goodtoken"));
         // Wrong token → 403, no cookie → not recognized (fails closed).
         assert!(!probe_studio(port, "badtoken"));

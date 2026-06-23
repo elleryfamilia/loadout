@@ -1,6 +1,6 @@
 //! Embedded agent skills — install, inspect, upgrade, remove.
 //!
-//! rosita ships agent skills (SKILL.md directories per the cross-agent Agent
+//! loadout ships agent skills (SKILL.md directories per the cross-agent Agent
 //! Skills format) embedded in the binary, so installer-based users get them
 //! without a repo checkout. The canonical install location is
 //! `~/.agents/skills/<id>/` — read natively by Gemini CLI and opencode — with
@@ -13,14 +13,14 @@
 //! frontmatter) holding the content hash of the installed version. Three hashes
 //! drive the lifecycle:
 //!
-//! - **marker hash** — what rosita last installed;
+//! - **marker hash** — what loadout last installed;
 //! - **embedded hash** — what this binary ships;
 //! - **on-disk hash** — recomputed from the files (marker stripped).
 //!
 //! managed = marker present; user-modified = on-disk ≠ marker (never touched
 //! again; `doctor` warns); upgrade available = marker ≠ embedded. The ask-once
 //! install decision is remembered per-machine in the bindings store (see
-//! [`crate::binding`]); all lifecycle changes go through `rosita skill …` —
+//! [`crate::binding`]); all lifecycle changes go through `load skill …` —
 //! `clean` stays repo-scoped and never touches skills.
 
 use std::path::{Path, PathBuf};
@@ -48,35 +48,35 @@ pub struct Skill {
     pub files: &'static [SkillFile],
 }
 
-/// The `rosita-migrate` skill: imports an existing CLAUDE.md/AGENTS.md into
-/// rosita fragments + profiles.
+/// The `loadout-migrate` skill: imports an existing CLAUDE.md/AGENTS.md into
+/// load fragments + profiles.
 pub const MIGRATE: Skill = Skill {
-    id: "rosita-migrate",
+    id: "loadout-migrate",
     files: &[
         SkillFile {
             relpath: "SKILL.md",
-            content: include_str!("../skills/rosita-migrate/SKILL.md"),
+            content: include_str!("../skills/loadout-migrate/SKILL.md"),
         },
         SkillFile {
             relpath: "reference.md",
-            content: include_str!("../skills/rosita-migrate/reference.md"),
+            content: include_str!("../skills/loadout-migrate/reference.md"),
         },
     ],
 };
 
-/// The `rosita-remember` skill: saves durable, cross-project user guidance
-/// into rosita fragments — the ongoing-maintenance complement to migrate's
+/// The `loadout-remember` skill: saves durable, cross-project user guidance
+/// into load fragments — the ongoing-maintenance complement to migrate's
 /// one-time import.
 pub const REMEMBER: Skill = Skill {
-    id: "rosita-remember",
+    id: "loadout-remember",
     files: &[
         SkillFile {
             relpath: "SKILL.md",
-            content: include_str!("../skills/rosita-remember/SKILL.md"),
+            content: include_str!("../skills/loadout-remember/SKILL.md"),
         },
         SkillFile {
             relpath: "reference.md",
-            content: include_str!("../skills/rosita-remember/reference.md"),
+            content: include_str!("../skills/loadout-remember/reference.md"),
         },
     ],
 };
@@ -94,11 +94,11 @@ pub fn by_id(id: &str) -> Option<&'static Skill> {
 // --- marker -------------------------------------------------------------------
 
 /// Prefix of the managed marker line written into installed SKILL.md files.
-pub const SKILL_MARKER: &str = "<!-- rosita:skill";
+pub const SKILL_MARKER: &str = "<!-- loadout:skill";
 
 fn marker_line(content_hash: &str) -> String {
     format!(
-        "{SKILL_MARKER} content={content_hash} — installed by rosita; edits disable auto-upgrade; manage with `rosita skill` -->"
+        "{SKILL_MARKER} content={content_hash} — installed by loadout; edits disable auto-upgrade; manage with `load skill` -->"
     )
 }
 
@@ -183,12 +183,12 @@ fn link_path(home: &Path, dotdir: &str, id: &str) -> PathBuf {
 pub enum SkillState {
     /// Canonical directory absent.
     NotInstalled,
-    /// Marker present: rosita manages this install.
+    /// Marker present: loadout manages this install.
     Managed {
         /// Hash recorded by the marker (the installed version).
         marker_hash: String,
         /// On-disk content (marker stripped) no longer matches the marker —
-        /// the user edited the files; rosita won't touch them again.
+        /// the user edited the files; loadout won't touch them again.
         user_modified: bool,
         /// The binary ships a different version than the marker records.
         upgrade_available: bool,
@@ -384,7 +384,7 @@ pub fn install(home: &Path, skill: &Skill) -> Result<Vec<InstallAction>> {
 }
 
 /// Remove the managed install: canonical dir (only when it carries our marker)
-/// plus every symlink/copy rosita created. Refuses to delete an unmanaged
+/// plus every symlink/copy loadout created. Refuses to delete an unmanaged
 /// (marker-less) canonical dir. Returns the paths removed.
 pub fn remove(home: &Path, skill: &Skill) -> Result<Vec<PathBuf>> {
     let current = status(home, skill);
@@ -405,7 +405,7 @@ pub fn remove(home: &Path, skill: &Skill) -> Result<Vec<PathBuf>> {
     match current.state {
         SkillState::NotInstalled => {}
         SkillState::Unmanaged => bail!(
-            "{} exists but has no rosita marker — not removing a file rosita didn't install",
+            "{} exists but has no loadout marker — not removing a file loadout didn't install",
             dir.display()
         ),
         SkillState::Managed { .. } => {
@@ -615,7 +615,7 @@ mod tests {
 
         // Hand-build a *pristine* older install: the marker hash matches the
         // on-disk content but differs from what this binary embeds.
-        let old_skill_md = "---\nname: rosita-migrate\n---\nold body\n";
+        let old_skill_md = "---\nname: loadout-migrate\n---\nold body\n";
         let old_reference = "old reference\n";
         let old_hash = hash::context_hash(&[
             ("SKILL.md", old_skill_md.to_string()),

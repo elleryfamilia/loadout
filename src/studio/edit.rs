@@ -218,7 +218,7 @@ impl Session {
     pub fn profile_layer(&self, name: &str) -> Option<Layer> {
         self.layers
             .iter()
-            .find(|lf| has_entry(&lf.staged, "profiles", "name", name))
+            .find(|lf| has_entry(&lf.staged, "loadouts", "name", name))
             .map(|lf| lf.layer)
     }
 
@@ -395,18 +395,18 @@ fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
             remove(aot_mut(doc, "fragments"), "id", id);
         }
         StagedOp::CreateProfile { profile, .. } => {
-            aot_mut(doc, "profiles").push(profile_table(profile)?);
+            aot_mut(doc, "loadouts").push(profile_table(profile)?);
         }
         StagedOp::EditProfile { name, profile, .. } => {
             upsert(
-                aot_mut(doc, "profiles"),
+                aot_mut(doc, "loadouts"),
                 "name",
                 name,
                 profile_table(profile)?,
             );
         }
         StagedOp::DeleteProfile { name, .. } => {
-            remove(aot_mut(doc, "profiles"), "name", name);
+            remove(aot_mut(doc, "loadouts"), "name", name);
         }
         StagedOp::DuplicatePaletteItem { id, .. } => {
             let cap = palette()

@@ -1,4 +1,4 @@
-//! `rosita fragments` / `profiles` / `agents` — introspect the resolved
+//! `load fragments` / `profiles` / `agents` — introspect the resolved
 //! configuration and what's active for the current context.
 //!
 //! These are read-only debugging aids: they run the same config load + context
@@ -94,7 +94,7 @@ fn targets(rt: &Runtime, json: bool) -> crate::Result<()> {
 
 // --- fragments ------------------------------------------------------------
 
-/// Entry point for `rosita fragments`.
+/// Entry point for `load fragments`.
 pub fn fragments(rt: &Runtime, args: &FragmentsArgs) -> crate::Result<()> {
     let prep = prepare(rt)?;
     let active: Vec<&str> = prep
@@ -219,7 +219,7 @@ fn print_fragments_list(caps: &[Fragment], active: &[&str]) {
         };
         println!("  {mark} {} — {}{suffix}", c.id, c.title());
     }
-    println!("\nShow one with `rosita fragments show <id>`.");
+    println!("\nShow one with `load fragments show <id>`.");
 }
 
 fn dynamic_target(c: &Fragment) -> String {
@@ -281,7 +281,7 @@ fn print_fragment_show(c: &Fragment, via: Option<&str>) {
 
 // --- profiles ----------------------------------------------------------------
 
-/// Entry point for `rosita profiles`.
+/// Entry point for `load profiles`.
 pub fn profiles(rt: &Runtime, args: &ProfilesArgs) -> crate::Result<()> {
     let prep = prepare(rt)?;
     let tags = prep.context.selection_targets();
@@ -360,7 +360,7 @@ fn profile_row(p: &LoadoutConfig, candidate: bool, selected: bool) -> ProfileRow
 
 // --- agents ------------------------------------------------------------------
 
-/// Entry point for `rosita agents`.
+/// Entry point for `load agents`.
 pub fn agents(rt: &Runtime, args: &AgentsArgs) -> crate::Result<()> {
     let prep = prepare(rt)?;
 

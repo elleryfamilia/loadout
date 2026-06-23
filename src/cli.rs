@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-/// rosita — inject global context into your AI coding agents.
+/// loadout — inject global context into your AI coding agents.
 ///
 /// Detects the current project/runtime context, selects the loadout that fits,
 /// renders an agent-specific instruction overlay, writes it safely, and can
@@ -66,11 +66,11 @@ pub enum Command {
     /// Pull the latest config, then (re-)render overlays (`--agent` to target
     /// or first-adopt one).
     Refresh(RefreshArgs),
-    /// Remove rosita-generated overlays and managed blocks for an agent.
+    /// Remove loadout-generated overlays and managed blocks for an agent.
     Clean(CleanArgs),
     /// Diagnose the environment and configuration.
     Doctor,
-    /// List fragments, or show one (`rosita fragments [list|show <id>]`).
+    /// List fragments, or show one (`load fragments [list|show <id>]`).
     Fragments(FragmentsArgs),
     /// List configured loadouts and which match the current context.
     Profiles(ProfilesArgs),
@@ -80,9 +80,9 @@ pub enum Command {
     Studio(StudioArgs),
     /// Sync your global config (fragments & loadouts) across machines via git.
     Sync(SyncArgs),
-    /// Manage the agent skills rosita ships (installed under `~/.agents/skills`).
+    /// Manage the agent skills loadout ships (installed under `~/.agents/skills`).
     Skill(SkillArgs),
-    /// Update rosita to the latest release (installer-based installs only).
+    /// Update loadout to the latest release (installer-based installs only).
     Update(UpdateArgs),
     /// Pin this project to a loadout (remembers the choice; `load use <name>`).
     Use(UseArgs),
@@ -97,7 +97,7 @@ pub enum Command {
     Launch(Vec<String>),
 }
 
-/// `skill` options. Bare `rosita skill` shows status.
+/// `skill` options. Bare `load skill` shows status.
 #[derive(Debug, Args)]
 pub struct SkillArgs {
     /// `install`, `remove`, or `status` (the default).
@@ -114,7 +114,7 @@ pub enum SkillAction {
         /// Skill id (defaults to every shipped skill).
         id: Option<String>,
     },
-    /// Remove rosita-installed skills (canonical files + agent symlinks).
+    /// Remove loadout-installed skills (canonical files + agent symlinks).
     Remove {
         /// Skill id (defaults to every shipped skill).
         id: Option<String>,
@@ -169,7 +169,7 @@ pub struct EditArgs {
     pub name: Option<String>,
 }
 
-/// `sync` options. Bare `rosita sync` pulls the latest and pushes local edits.
+/// `sync` options. Bare `load sync` pulls the latest and pushes local edits.
 #[derive(Debug, Args)]
 pub struct SyncArgs {
     /// `init` (set this machine up) or `clone` (pull config onto a new machine).

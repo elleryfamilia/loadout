@@ -1,9 +1,9 @@
-# rosita config reference (for the remember skill)
+# loadout config reference (for the remember skill)
 
-Everything lives in `~/.config/rosita/config.toml` (public, shareable) and,
-for machine-specific values, `~/.config/rosita/local.toml` (private,
+Everything lives in `~/.config/loadout/config.toml` (public, shareable) and,
+for machine-specific values, `~/.config/loadout/local.toml` (private,
 gitignored). Fragments and profiles are **global-only** — never put them in
-a repo's `.rosita/`.
+a repo's `.loadout/`.
 
 ## `[[fragments]]`
 
@@ -28,7 +28,7 @@ A fragment is one reusable unit of context. The parser is strict
 ¹ A fragment needs *either* `guidance` (static) *or* `command`/`provider` (dynamic).
 ² `provider` and `command` are mutually exclusive.
 
-## `[[profiles]]`
+## `[[loadouts]]`
 
 A profile composes fragments and is selected by detected context.
 
@@ -67,7 +67,7 @@ id = "dependency-policy"
 description = "Dependency policy"
 guidance = "Ask before adding a new dependency; prefer the standard library when reasonable."
 
-[[profiles]]
+[[loadouts]]
 name = "machine"
 targets = ["machine"]
 fragments = ["conventional-commits", "dependency-policy"]
@@ -82,17 +82,17 @@ If guidance needs a real hostname or other machine-specific literal, keep it
 out of the public config:
 
 ```toml
-# ~/.config/rosita/config.toml  (public)
+# ~/.config/loadout/config.toml  (public)
 [[fragments]]
 id = "deploy"
 description = "Deploy target"
 guidance = "Deploy as {{ params.user }}@{{ params.host }}."
 
-# ~/.config/rosita/local.toml  (private, gitignored)
+# ~/.config/loadout/local.toml  (private, gitignored)
 [fragment_params.deploy]
 host = "box.internal.example"
 user = "deployer"
 ```
 
-`rosita doctor` leak-lints the public config and tells you when a literal looks
+`load doctor` leak-lints the public config and tells you when a literal looks
 private and belongs in `local.toml`.

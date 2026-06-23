@@ -1,4 +1,4 @@
-//! `rosita explain` — show what would be selected and written, and why.
+//! `load explain` — show what would be selected and written, and why.
 
 use serde::Serialize;
 
@@ -8,7 +8,7 @@ use crate::cli::ExplainArgs;
 use crate::profile;
 use crate::writer::AtomicWriter;
 
-/// Entry point for `rosita explain`.
+/// Entry point for `load explain`.
 pub fn run(rt: &Runtime, args: &ExplainArgs) -> crate::Result<()> {
     let prep = prepare(rt)?;
     let agents = resolve_agents(args.agent.as_deref(), &prep.config)?;

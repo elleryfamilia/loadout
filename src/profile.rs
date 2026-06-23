@@ -151,7 +151,7 @@ pub struct ResolvedFragment {
 
 /// A fragment id a profile referenced but that isn't in the library. Recorded
 /// during composition (rather than warned about inline) so the caller decides
-/// how to surface it: most commands warn and continue, while `rosita run`
+/// how to surface it: most commands warn and continue, while `load run`
 /// prompts interactively (ignore / open studio / quit).
 #[derive(Debug, Clone)]
 pub struct MissingFragment {
@@ -398,7 +398,7 @@ impl Accumulator {
             None => {
                 // Record rather than warn: the caller decides how to surface it
                 // (warn-and-continue for most commands; an interactive prompt in
-                // `rosita run`). Without this, the id is silently dropped.
+                // `load run`). Without this, the id is silently dropped.
                 self.missing.push(MissingFragment {
                     id: id.to_string(),
                     provenance: provenance.to_string(),
@@ -792,7 +792,7 @@ mod tests {
         let c = compose_t(&sample_context(), &p, &caps);
         assert_eq!(ids(&c), vec!["real"]);
         // The dangling ref is recorded (with provenance) so callers can surface
-        // it — `rosita run` prompts; other commands warn.
+        // it — `load run` prompts; other commands warn.
         assert_eq!(c.missing.len(), 1);
         let m = &c.missing[0];
         assert_eq!(m.id, "does-not-exist");

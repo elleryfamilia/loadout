@@ -1,21 +1,21 @@
-# ~/.config/rosita/config.toml — your GLOBAL rosita configuration.
+# ~/.config/loadout/config.toml — your GLOBAL loadout configuration.
 #
 # Fragments and profiles are global-only: authored once here and shared
 # across every repo. A repo never defines them — it only inherits whichever
 # profile matches its detected stack. This file is PUBLIC / shareable; keep
 # sensitive specifics (real hostnames, host_classes globs, fragment `params`
-# values) in the gitignored ~/.config/rosita/local.toml instead.
+# values) in the gitignored ~/.config/loadout/local.toml instead.
 #
 # Layer order (later wins): built-in ← global config.toml ← global local.toml.
 # (Repo layers contribute only a private [binding] and param overrides — never
 # fragments or profiles.)
 #
-# The fastest way to fill this in is `rosita studio` → "Starter packs": pick a
+# The fastest way to fill this in is `load studio` → "Starter packs": pick a
 # pack and it stages a curated set of fragments plus a ready-made profile for
 # you to review and Apply. What follows is the same idea written by hand.
 
 [defaults]
-# Default agent when `rosita refresh` finds no overlays and --agent is omitted.
+# Default agent when `load refresh` finds no overlays and --agent is omitted.
 agent = "claude"
 
 [env]
@@ -26,15 +26,15 @@ deny_name_patterns = ["(?i)(secret|token|key|password|credential|auth|session|co
 
 [codex]
 # Write a gitignored AGENTS.override.md (which Codex reads before AGENTS.md) so
-# `rosita run codex` delivers context out of the box. AGENTS.md is never touched.
+# `load run codex` delivers context out of the box. AGENTS.md is never touched.
 # Defaults to true; set false (or pass --no-override) to opt out.
 write_override = true
 # Warn when generated output exceeds this many KiB.
 max_output_kib = 32
 
 # Fragments are reusable guidance atoms that profiles compose. They are
-# entirely YOURS — there are no always-on built-ins. rosita ships a read-only
-# *palette* you can copy from (`rosita fragments`, or duplicate in studio),
+# entirely YOURS — there are no always-on built-ins. loadout ships a read-only
+# *palette* you can copy from (`load fragments`, or duplicate in studio),
 # but a profile only renders fragments that physically live in your config.
 # Fields:
 #   id (required); description, category,
@@ -42,7 +42,7 @@ max_output_kib = 32
 #   agents (restrict to specific agent ids), guidance (templated markdown).
 #   `category` groups the fragment in studio's tree. Dynamic: provider (built-in:
 #   host|toolchain|ai-tools|tailnet|docker), command (shell), cache (TTL).
-#   Authored globally, every fragment is trusted — no per-repo `rosita allow` gate.
+#   Authored globally, every fragment is trusted — no per-repo `loadout allow` gate.
 # Guidance is a minijinja template with { context, profile, fragment, params,
 # agent, provider } in scope (provider.output / provider.data for dynamic fragments).
 
@@ -119,7 +119,7 @@ a PR over pushing to shared branches.
 
 # A repo uses ONE profile, chosen by language/platform. Each profile is tied to
 # coarse `targets` (rust | node | nextjs | go | python | java | ruby | php |
-# swift | dotnet | machine). On `rosita run`/`refresh`: 0 targets match → a
+# swift | dotnet | machine). On `load run`/`refresh`: 0 targets match → a
 # no-targets "default" profile if you have one, else no profile (empty overlay);
 # exactly 1 → auto-used; 2+ → you're asked once and the choice is remembered
 # per-project in the gitignored local.toml `[binding]`.
@@ -127,7 +127,7 @@ a PR over pushing to shared branches.
 # per-fragment `when`-filtered). Profiles are self-contained — there is no
 # always-on base layered underneath — so each one composes the shared essentials
 # it wants (this is exactly what a Starter pack stages for you).
-[[profiles]]
+[[loadouts]]
 name = "rust"
 targets = ["rust"]
 fragments = [
@@ -139,7 +139,7 @@ fragments = [
   "validate-before-done",
 ]
 
-[[profiles]]
+[[loadouts]]
 name = "machine"
 targets = ["machine"] # the "no repo" context (general devops/sysadmin work)
 fragments = [
@@ -155,7 +155,7 @@ fragments = [
 #   id, generated_filename (required); display_name, template, launch,
 #   importer (auto-wire @import into a LOCAL file), override_target/override_base
 #   (opt-in merge), wire_hint, append_prompt_flag.
-# rosita auto-wires only agents with a LOCAL importer; everything else is
+# loadout auto-wires only agents with a LOCAL importer; everything else is
 # emit-only (a gitignored overlay + a hint), so committed AGENTS.md/GEMINI.md
 # are never touched by default.
 #
@@ -163,4 +163,4 @@ fragments = [
 # id = "myagent"
 # generated_filename = "myagent.md"
 # launch = "myagent"
-# wire_hint = "include .rosita/generated/myagent.md from your agent's config"
+# wire_hint = "include .loadout/generated/myagent.md from your agent's config"

@@ -1,4 +1,4 @@
-//! The TOML examples shipped in the embedded skills must stay valid rosita
+//! The TOML examples shipped in the embedded skills must stay valid loadout
 //! config — otherwise a skill would teach people a schema that no longer
 //! parses. This guards every ```toml block in each skill's reference.
 
@@ -47,7 +47,7 @@ fn check_skill_reference(skill: &str) -> Vec<String> {
 
 #[test]
 fn skill_reference_toml_examples_are_valid_config() {
-    let blocks = check_skill_reference("rosita-migrate");
+    let blocks = check_skill_reference("loadout-migrate");
 
     // The first (complete) example defines the documented profiles + a dynamic
     // fragment — assert the schema the skill teaches still resolves.
@@ -59,7 +59,7 @@ fn skill_reference_toml_examples_are_valid_config() {
 
 #[test]
 fn remember_skill_reference_toml_examples_are_valid_config() {
-    let blocks = check_skill_reference("rosita-remember");
+    let blocks = check_skill_reference("loadout-remember");
 
     // The editing example teaches a minimal fragment edit — it must keep
     // resolving as a fragment with guidance.

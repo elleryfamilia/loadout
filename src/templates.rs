@@ -4,7 +4,7 @@
 //! agent-specific freshness/provenance header is prepended in Rust. Resolution
 //! order for a given template name (first hit wins):
 //! 1. repo templates dir — `<repo>/.loadout/templates/<name>.md.j2`
-//! 2. global templates dir — `…/rosita/templates/<name>.md.j2`
+//! 2. global templates dir — `…/loadout/templates/<name>.md.j2`
 //! 3. the embedded default overlay.
 //!
 //! So an agent's `template` field can name a custom per-agent body (drop a file

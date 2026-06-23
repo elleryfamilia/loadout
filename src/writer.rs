@@ -11,9 +11,9 @@ use anyhow::Context as _;
 use std::io::Write as _;
 
 /// Begin marker for managed blocks inside user-owned files.
-pub const BLOCK_BEGIN: &str = "<!-- BEGIN rosita (managed) -->";
+pub const BLOCK_BEGIN: &str = "<!-- BEGIN loadout (managed) -->";
 /// End marker for managed blocks.
-pub const BLOCK_END: &str = "<!-- END rosita (managed) -->";
+pub const BLOCK_END: &str = "<!-- END loadout (managed) -->";
 
 /// What a write did (or would do, in dry-run).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
