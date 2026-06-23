@@ -20,7 +20,7 @@ use crate::profile::LoadoutConfig;
 use crate::studio::edit::FileDiff;
 use crate::studio::state::{
     AtomDot, AtomState, FragmentView, LibraryView, Onboarding, PackView, PreviewCap,
-    PreviewOutcome, ProfileView, TargetView, TargetsView,
+    PreviewOutcome, ProfileView, TargetView, TargetsView, WorkflowView, WorkflowsView,
 };
 use crate::target::{TargetDef, TargetRule};
 
@@ -400,6 +400,7 @@ fn tab_bar(active: &str) -> Markup {
             button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
             button class=(cls("fragments")) data-tab="fragments" hx-get="/tab/fragments" hx-target="#main" { (icon("box")) "Fragments" }
             button class=(cls("targets")) data-tab="targets" hx-get="/tab/targets" hx-target="#main" { (icon("target")) "Targets" }
+            button class=(cls("workflows")) data-tab="workflows" hx-get="/tab/workflows" hx-target="#main" { (icon("git-branch")) "Workflows" }
         }
     }
 }
@@ -919,6 +920,97 @@ pub fn targets_tab(view: &TargetsView, flash: Option<&str>) -> Markup {
 
 pub fn targets_tab_fragment(view: &TargetsView) -> String {
     targets_tab(view, None).into_string()
+}
+
+// --- Workflows tab -----------------------------------------------------------
+
+/// The Workflows tab: the named stage spines a loadout can bind, each shown as a
+/// card with its ordered stages, the handoff files passed between them, and the
+/// loadouts that use it. Read-only in v1 — edit by hand in `config.toml`.
+pub fn workflows_tab(view: &WorkflowsView) -> Markup {
+    html! {
+        div class="tab-workflows" {
+            div class="dash-head" {
+                h1 { "Workflows" }
+            }
+            p class="muted workflows-lead" {
+                "A " strong { "workflow" } " is a named, ordered set of stages a loadout binds (bind it with "
+                code { "workflow = \"<id>\"" } " on a loadout). loadout renders the spine into every agent — as an always-on map, and as one "
+                code { "/loadout:<stage>" } " slash command per stage. Stages hand off through files under "
+                code { ".loadout/workflow/artifacts/" } ". Built-ins are read-only starting points; copy one into "
+                code { "[[workflows]]" } " to make your own. "
+                em { "Editing in the studio lands in a later release — for now, edit config.toml." }
+            }
+            div class="workflow-list" {
+                @for w in &view.workflows { (workflow_card(w)) }
+            }
+        }
+    }
+}
+
+pub fn workflows_tab_fragment(view: &WorkflowsView) -> String {
+    workflows_tab(view).into_string()
+}
+
+/// One workflow card: heading + provenance + binding loadouts, then the ordered
+/// stage list with each stage's handoff artifacts, gate marker, and checklist.
+fn workflow_card(w: &WorkflowView) -> Markup {
+    html! {
+        div class="workflow-card" {
+            div class="workflow-head" {
+                span class="workflow-glyph" { (icon("git-branch")) }
+                div class="workflow-titles" {
+                    span class="workflow-top" {
+                        span class="workflow-id" { (w.title) }
+                        code class="workflow-bind" { (w.id) }
+                        @if w.builtin { span class="tag" { "built-in" } }
+                        @if w.private { span class="tag" { (icon("lock")) "private" } }
+                        @if let Some(m) = &w.modeled_on { span class="tag" { "modeled on " (m) } }
+                    }
+                    span class="workflow-bound muted" {
+                        @if w.bound_by.is_empty() {
+                            (icon("alert")) "Not bound to any loadout yet — add " code { (format!("workflow = \"{}\"", w.id)) } " to one."
+                        } @else {
+                            (icon("layers")) "Bound by " (w.bound_by.join(", "))
+                        }
+                    }
+                }
+            }
+            @for prob in &w.problems { p class="flash flash-warn" { (icon("alert")) (prob) } }
+            ol class="workflow-stages" {
+                @for s in &w.stages { (workflow_stage_row(s)) }
+            }
+            @if !w.artifacts.is_empty() {
+                p class="workflow-artifacts muted" {
+                    (icon("file")) "Handoff: "
+                    @for (i, a) in w.artifacts.iter().enumerate() {
+                        @if i > 0 { ", " }
+                        code { (a) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One `<li>` in a workflow card's stage list.
+fn workflow_stage_row(s: &crate::studio::state::WorkflowStageView) -> Markup {
+    html! {
+        li class="workflow-stage" {
+            div class="stage-line" {
+                code class="stage-name" { "/loadout:" (s.name) }
+                @if s.gate { span class="tag gate-tag" { "gate" } }
+                @if let Some(r) = &s.reads { span class="stage-io" { (icon("arrow-right")) "reads " code { (r) } } }
+                @if let Some(wr) = &s.writes { span class="stage-io" { (icon("arrow-right")) "writes " code { (wr) } } }
+            }
+            @if let Some(p) = &s.purpose { span class="stage-purpose muted" { (p) } }
+            @if !s.exit.is_empty() {
+                ul class="stage-exit" {
+                    @for item in &s.exit { li { (icon("check")) (item) } }
+                }
+            }
+        }
+    }
 }
 
 /// Re-render the Targets tab after a staged edit: the tab (with a flash), close

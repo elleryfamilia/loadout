@@ -190,6 +190,50 @@ pub struct TargetsView {
     pub targets: Vec<TargetView>,
 }
 
+/// One stage row inside a [`WorkflowView`] card.
+pub struct WorkflowStageView {
+    /// Free-string stage name (e.g. `plan`).
+    pub name: String,
+    /// One-line contract for the stage.
+    pub purpose: Option<String>,
+    /// Handoff artifact this stage reads (a bare filename).
+    pub reads: Option<String>,
+    /// Handoff artifact this stage writes (a bare filename).
+    pub writes: Option<String>,
+    /// A review checkpoint stage.
+    pub gate: bool,
+    /// "Done when" checklist items.
+    pub exit: Vec<String>,
+}
+
+/// One workflow card for the Workflows tab.
+pub struct WorkflowView {
+    /// Stable id a profile binds (e.g. `lean`).
+    pub id: String,
+    /// Heading title (description, else the id).
+    pub title: String,
+    /// Provenance: the suite this is modeled on, if any.
+    pub modeled_on: Option<String>,
+    /// Built-in (read-only) vs your own `[[workflows]]`.
+    pub builtin: bool,
+    /// Authored in a `local.toml` layer (private / gitignored).
+    pub private: bool,
+    /// The ordered stages.
+    pub stages: Vec<WorkflowStageView>,
+    /// Distinct handoff artifacts the workflow passes between stages.
+    pub artifacts: Vec<String>,
+    /// Names of the loadouts that bind this workflow (empty = bound by none).
+    pub bound_by: Vec<String>,
+    /// Validation problems (malformed workflow); empty when well-formed.
+    pub problems: Vec<String>,
+}
+
+/// The Workflows tab snapshot: the built-in catalog plus your own, each with the
+/// loadouts that bind it.
+pub struct WorkflowsView {
+    pub workflows: Vec<WorkflowView>,
+}
+
 /// Assemble the staged config (origin-tagged) from a snapshot.
 pub fn staged_config(snap: &Snapshot) -> crate::Result<Config> {
     Config::from_layer_strs(snap.layer_texts.clone())
@@ -601,6 +645,64 @@ pub fn targets_view(snap: &Snapshot) -> TargetsView {
         private: false,
     });
     TargetsView { targets }
+}
+
+/// Build the Workflows tab view: the built-in catalog plus your own
+/// `[[workflows]]` (yours override a built-in of the same id), each annotated
+/// with the loadouts that bind it and any validation problems. Read-only in v1.
+pub fn workflows_view(snap: &Snapshot) -> WorkflowsView {
+    let cfg = staged_config(snap).ok();
+    let effective = cfg
+        .as_ref()
+        .map(|c| c.effective_workflows())
+        .unwrap_or_else(crate::workflow::builtin_workflows);
+    // Which loadouts bind each workflow id (a profile's `workflow = "<id>"`).
+    let bindings: Vec<(String, String)> = cfg
+        .as_ref()
+        .map(|c| {
+            c.profiles
+                .iter()
+                .filter_map(|p| p.workflow.clone().map(|id| (id, p.name.clone())))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let workflows = effective
+        .into_iter()
+        .map(|w| {
+            let problems = w.validate();
+            let artifacts = w.artifacts();
+            let bound_by: Vec<String> = bindings
+                .iter()
+                .filter(|(id, _)| id == &w.id)
+                .map(|(_, name)| name.clone())
+                .collect();
+            let stages = w
+                .stages
+                .iter()
+                .map(|s| WorkflowStageView {
+                    name: s.name.clone(),
+                    purpose: s.purpose.clone(),
+                    reads: s.reads.clone(),
+                    writes: s.writes.clone(),
+                    gate: s.gate,
+                    exit: s.exit.clone(),
+                })
+                .collect();
+            WorkflowView {
+                title: w.title().to_string(),
+                builtin: w.origin == Layer::BuiltIn,
+                private: matches!(w.origin, Layer::GlobalLocal),
+                modeled_on: w.modeled_on.clone(),
+                id: w.id,
+                stages,
+                artifacts,
+                bound_by,
+                problems,
+            }
+        })
+        .collect();
+    WorkflowsView { workflows }
 }
 
 /// First-launch onboarding readout for a fresh config (no profiles **and** no

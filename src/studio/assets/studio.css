@@ -395,6 +395,38 @@ body {
 .target-rule .icon { width: 13px; height: 13px; flex: none; }
 .rule-code { font-family: var(--mono); color: var(--muted); }
 
+/* --- workflows tab --------------------------------------------------------- */
+.workflows-lead { max-width: 64rem; margin: 0 0 16px; font-size: 13px; line-height: 1.5; }
+.workflows-lead code, .workflow-bound code { font-family: var(--mono); font-size: 11.5px; color: var(--muted); background: var(--elevated); border-radius: var(--r-sm); padding: 1px 5px; }
+.workflow-list { display: flex; flex-direction: column; gap: 12px; }
+.workflow-card { border: 1px solid var(--border); border-radius: var(--r); background: var(--panel-2); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.workflow-head { display: flex; align-items: flex-start; gap: 12px; }
+.workflow-glyph { color: var(--accent); display: inline-flex; margin-top: 2px; }
+.workflow-glyph .icon { width: 24px; height: 24px; }
+.workflow-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.workflow-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.workflow-id { font-size: 14px; font-weight: 600; }
+.workflow-bind { font-family: var(--mono); font-size: 12px; color: var(--muted); background: var(--elevated); border-radius: var(--r-sm); padding: 1px 6px; }
+.workflow-bound { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.workflow-bound .icon { width: 13px; height: 13px; flex: none; }
+.workflow-stages { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 11px; counter-reset: stage; }
+.workflow-stage { position: relative; padding-left: 28px; display: flex; flex-direction: column; gap: 3px; }
+.workflow-stage::before { counter-increment: stage; content: counter(stage); position: absolute; left: 0; top: 0; width: 19px; height: 19px; border-radius: 50%; background: var(--elevated); color: var(--muted); font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.stage-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stage-name { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.gate-tag { color: var(--caution); background: var(--caution-soft); }
+.stage-io { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--faint); }
+.stage-io .icon { width: 12px; height: 12px; }
+.stage-io code { font-family: var(--mono); color: var(--muted); }
+.stage-purpose { font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+.stage-exit { margin: 2px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.stage-exit li { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--faint); }
+.stage-exit .icon { width: 11px; height: 11px; flex: none; color: var(--ok); }
+.workflow-artifacts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11.5px; color: var(--faint); border-top: 1px solid var(--border); padding-top: 10px; margin: 0; }
+.workflow-artifacts .icon { width: 13px; height: 13px; }
+.workflow-artifacts code { font-family: var(--mono); color: var(--muted); }
+.flash-warn { background: var(--caution-soft); color: var(--caution); }
+
 /* --- modal dialog ---------------------------------------------------------- */
 .modal-root { position: fixed; inset: 0; z-index: 50; display: none; }
 .modal-root:has(.modal) { display: grid; place-items: center; }

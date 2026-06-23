@@ -131,6 +131,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/tab/profiles") => handle_tab(state, "profiles"),
         ("GET", "/tab/fragments") => handle_tab(state, "fragments"),
         ("GET", "/tab/targets") => handle_tab(state, "targets"),
+        ("GET", "/tab/workflows") => handle_tab(state, "workflows"),
         ("GET", "/staged") => handle_staged(state),
         ("GET", "/close") => Resp::html(String::new()),
         ("GET", "/diff") => handle_diff(state),
@@ -237,6 +238,10 @@ fn handle_tab(state: &Arc<Mutex<StudioState>>, tab: &str) -> Resp {
     if tab == "targets" {
         let snap = state.lock().unwrap().snapshot();
         return Resp::html(views::targets_tab_fragment(&state::targets_view(&snap)));
+    }
+    if tab == "workflows" {
+        let snap = state.lock().unwrap().snapshot();
+        return Resp::html(views::workflows_tab_fragment(&state::workflows_view(&snap)));
     }
     let snap = state.lock().unwrap().snapshot();
     match state::library_view(&snap) {
@@ -1951,6 +1956,39 @@ mod tests {
         assert!(body.contains("machine"), "lists the machine scope");
         // In a Rust repo, the rust target matches.
         assert!(body.contains("matches here"), "flags a detected target");
+    }
+
+    #[test]
+    fn workflows_tab_lists_builtins_and_bindings() {
+        let d = rust_repo();
+        // A loadout that binds the built-in `lean` workflow.
+        let st = state_for(
+            d.path(),
+            Some(
+                "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
+                 [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"lean\"\n",
+            ),
+        );
+        let r = route(&st, &req("GET", "/tab/workflows", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Workflows"), "tab heading");
+        // The built-in catalog is listed with titles + stages.
+        assert!(
+            body.contains("Explore, plan, code, commit"),
+            "lists the lean workflow"
+        );
+        assert!(
+            body.contains("spec-driven"),
+            "lists the spec-driven workflow"
+        );
+        assert!(
+            body.contains("/loadout:plan"),
+            "renders a stage as a command name"
+        );
+        assert!(body.contains("built-in"), "marks built-ins read-only");
+        // The lean workflow shows the loadout that binds it.
+        assert!(body.contains("Bound by rust"), "shows the binding loadout");
     }
 
     #[test]

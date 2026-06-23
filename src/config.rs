@@ -237,6 +237,21 @@ impl Config {
         .cloned()
     }
 
+    /// The built-in workflow catalog plus your own, keyed by id — your
+    /// `[[workflows]]` **override** a built-in of the same id (the copy-and-edit
+    /// story), unlike custom targets which can't shadow a built-in. For display
+    /// (studio's Workflows tab); render/run resolution uses [`resolve_workflow`].
+    pub fn effective_workflows(&self) -> Vec<Workflow> {
+        let mut out = crate::workflow::builtin_workflows();
+        for w in &self.workflows {
+            match out.iter_mut().find(|e| e.id == w.id) {
+                Some(existing) => *existing = w.clone(),
+                None => out.push(w.clone()),
+            }
+        }
+        out
+    }
+
     /// The workflow bound by the profile named `name` (if any), resolved. `None`
     /// when `name` is `None`, the named profile isn't found, it carries no
     /// `workflow` binding, or the bound id is unknown/disabled. This is the
