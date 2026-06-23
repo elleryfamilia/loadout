@@ -45,6 +45,8 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
         codex_override: args.codex_override,
         codex_no_override: args.codex_no_override,
         force: args.force,
+        // refresh uses the profile's bound workflow; the override is run-only.
+        workflow_override: None,
     };
     if rt.dry_run {
         println!("dry run — no files will be written\n");

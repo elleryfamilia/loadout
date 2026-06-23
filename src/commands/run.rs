@@ -227,6 +227,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
             codex_override: args.codex_override,
             codex_no_override: args.codex_no_override,
             force: false,
+            workflow_override: args.workflow.clone(),
         };
         apply_for_agents(rt, &prep, &[agent.to_string()], &opts)?
             .into_iter()
@@ -238,6 +239,13 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     };
     print_render_step(&p, &prep, agent, result.as_ref());
 
+    // The workflow active for this run (override wins, else the profile binding),
+    // resolved the same way the render did. Drives the launch-env wiring + notice.
+    let workflow = prep
+        .config
+        .resolve_active_workflow(args.workflow.as_deref(), prep.composition.primary_profile());
+    print_workflow_step(&p, workflow.as_ref());
+
     let rendered_at = now_rfc3339();
     let launch_args = build_launch_args(
         &descriptor,
@@ -246,7 +254,8 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         &rendered_at,
         &args.args,
     );
-    let extra_env = launch_context_env(&descriptor, &prep);
+    let mut extra_env = launch_context_env(&descriptor, &prep);
+    extra_env.extend(workflow_launch_env(workflow.as_ref(), &prep.repo_base));
 
     if rt.dry_run {
         let env_prefix: String = extra_env.iter().map(|(k, v)| format!("{k}={v} ")).collect();
@@ -258,6 +267,13 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
             p.dim(&format!("{env_prefix}{program} {}", launch_args.join(" ")))
         );
         return Ok(());
+    }
+
+    // Ensure the handoff-artifact dir exists so a stage command can write its
+    // output (e.g. `$LOADOUT_PLAN_PATH`) without first creating the directory.
+    // Best-effort: a failure here must never block the launch.
+    if workflow.is_some() {
+        std::fs::create_dir_all(crate::workflow::artifacts_dir(&prep.repo_base)).ok();
     }
 
     // Best-effort, throttled (once/day), time-bounded "update available" hint —
@@ -482,6 +498,46 @@ fn print_launch_step(p: &Painter, program: &str, args: &[String]) {
         format!("{program} {}", args.join(" "))
     };
     println!("{}", step(p, p.cyan("▸"), "launch", cmd));
+}
+
+/// One concise run-summary line naming the active workflow (or nothing when
+/// none is bound). Tells the user the spine is live and how to invoke a stage.
+fn print_workflow_step(p: &Painter, workflow: Option<&crate::workflow::Workflow>) {
+    let Some(wf) = workflow else { return };
+    println!(
+        "{}",
+        step(
+            p,
+            p.cyan("◆"),
+            "flow",
+            format!(
+                "{} {}",
+                wf.title(),
+                p.dim(&format!("· {} stages · /loadout:<stage>", wf.stages.len()))
+            ),
+        )
+    );
+}
+
+/// The `LOADOUT_<NAME>_PATH` env vars for a bound workflow's handoff artifacts,
+/// each an absolute path under `.loadout/workflow/artifacts/`. A stage command
+/// references these so it reads/writes the right file without hardcoding a path.
+/// Empty when no workflow is active; unsafe artifact names are skipped.
+fn workflow_launch_env(
+    workflow: Option<&crate::workflow::Workflow>,
+    repo_base: &std::path::Path,
+) -> Vec<(String, String)> {
+    let Some(wf) = workflow else {
+        return Vec::new();
+    };
+    wf.artifacts()
+        .iter()
+        .filter_map(|name| {
+            let var = crate::workflow::artifact_env_var(name)?;
+            let path = crate::workflow::artifact_path(repo_base, name)?;
+            Some((var, path.to_string_lossy().into_owned()))
+        })
+        .collect()
 }
 
 /// Env vars `load run` injects so an agent with no persistent local hook finds

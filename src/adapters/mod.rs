@@ -298,6 +298,9 @@ pub struct ApplyOptions {
     pub codex_no_override: bool,
     /// Re-render even when the context hash is unchanged.
     pub force: bool,
+    /// `load run --workflow <id>` override: render this workflow instead of the
+    /// profile's bound one for this apply. `None` → use the profile's binding.
+    pub workflow_override: Option<String>,
 }
 
 /// What an apply did.
@@ -325,13 +328,14 @@ pub fn apply(
     app: &AppContext,
     opts: &ApplyOptions,
 ) -> crate::Result<ApplyResult> {
-    // The workflow (if any) bound by the selected profile — resolved against the
-    // config's `[[workflows]]` plus the built-in catalog. A dangling binding
-    // resolves to `None` and simply isn't rendered (doctor/run surface it). Used
-    // by both render channels: the context section and the per-stage commands.
-    let workflow = app
-        .config
-        .workflow_for_profile(app.composition.primary_profile());
+    // The workflow (if any) for this apply: a `--workflow` override wins,
+    // otherwise the selected profile's binding. A dangling id resolves to `None`
+    // and simply isn't rendered (doctor/run surface it). Used by both render
+    // channels: the context section and the per-stage commands.
+    let workflow = app.config.resolve_active_workflow(
+        opts.workflow_override.as_deref(),
+        app.composition.primary_profile(),
+    );
     let rendered = render_overlay(d, app, workflow.as_ref())?;
     let mut files = Vec::new();
     let mut warnings = Vec::new();

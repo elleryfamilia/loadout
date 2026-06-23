@@ -247,6 +247,23 @@ impl Config {
         let profile = self.profiles.iter().find(|p| p.name == name)?;
         self.resolve_workflow(profile.workflow.as_deref()?)
     }
+
+    /// The workflow active for a run: an explicit `--workflow <id>` override wins
+    /// outright (and resolves to `None` if it dangles — a bad override is not
+    /// silently swapped for the profile's binding); otherwise the profile named
+    /// by `profile` decides. The single resolver shared by the render engine and
+    /// `load run`'s launch-env wiring, so the overlay, the generated commands,
+    /// and the `LOADOUT_*_PATH` env vars all describe the same workflow.
+    pub fn resolve_active_workflow(
+        &self,
+        override_id: Option<&str>,
+        profile: Option<&str>,
+    ) -> Option<Workflow> {
+        match override_id {
+            Some(id) => self.resolve_workflow(id),
+            None => self.workflow_for_profile(profile),
+        }
+    }
 }
 
 /// Enforce the global-only model. A repo (`.loadout/config.toml` / `local.toml`)

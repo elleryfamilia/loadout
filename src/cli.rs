@@ -282,6 +282,10 @@ pub struct RunArgs {
     /// Skip Codex's `AGENTS.override.md` (emit-only; leaves `AGENTS.md` untouched).
     #[arg(long = "no-override", conflicts_with = "codex_override")]
     pub codex_no_override: bool,
+    /// Override the profile's bound workflow for this run (a built-in or your own
+    /// `[[workflows]]` id). An unknown id applies no workflow.
+    #[arg(long)]
+    pub workflow: Option<String>,
     /// Arguments passed through to the agent.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
@@ -303,6 +307,7 @@ impl RunArgs {
             skip_render: false,
             codex_override: false,
             codex_no_override: false,
+            workflow: None,
             args: argv,
         }
     }

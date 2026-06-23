@@ -216,6 +216,39 @@ fn refresh_renders_a_bound_workflow_in_both_channels_and_clean_removes_commands(
 }
 
 #[test]
+fn run_workflow_override_sets_handoff_env_in_dry_run() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    // `--workflow` resolves a built-in directly, so no profile binding is needed.
+    // Placed before the agent so it isn't swallowed by the trailing agent args.
+    fx.cmd()
+        .args(["--dry-run", "run", "--workflow", "lean", "claude"])
+        .assert()
+        .success()
+        // The run summary names the active workflow…
+        .stdout(predicate::str::contains("Explore, plan, code, commit"))
+        // …and the launch env exposes each handoff artifact's absolute path.
+        .stdout(predicate::str::contains("LOADOUT_PLAN_PATH="))
+        .stdout(predicate::str::contains(
+            ".loadout/workflow/artifacts/plan.md",
+        ));
+}
+
+#[test]
+fn doctor_flags_a_dangling_workflow_binding() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    // A profile that binds a workflow id with no matching built-in or [[workflows]].
+    fx.author("[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nworkflow = \"nope\"\n");
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("binds unknown workflow 'nope'"));
+}
+
+#[test]
 fn refresh_in_non_repo_writes_overlay_but_no_gitignore() {
     // First-class non-repo use case (e.g. running in $HOME): the overlay and
     // the CLAUDE.local.md import are written, but no stray .gitignore is made.

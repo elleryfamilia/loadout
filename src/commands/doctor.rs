@@ -93,6 +93,8 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     check_repo_global_only(&mut c, &prep.repo_base);
     // Profiles referencing fragments that don't exist (e.g. a hand-deleted cap).
     check_dangling_fragment_refs(&mut c, &prep.config);
+    // Profiles binding an unknown workflow, and malformed user workflows.
+    check_workflows(&mut c, &prep.config);
     // Allowlist/denylist consistency.
     check_env_policy(&mut c, &prep.config);
     // Private-data leak lint over public config layers.
@@ -421,6 +423,35 @@ fn check_dangling_fragment_refs(c: &mut Checks, cfg: &config::Config) {
                     ),
                 );
             }
+        }
+    }
+}
+
+/// Profiles that bind a workflow id resolving to nothing (a typo or a deleted
+/// `[[workflows]]` entry), plus any malformed user-authored workflow. A dangling
+/// binding degrades silently at render time, so surface it here. Resolves
+/// against the same built-in + user catalog the renderer uses.
+fn check_workflows(c: &mut Checks, cfg: &config::Config) {
+    for p in &cfg.profiles {
+        let Some(id) = &p.workflow else { continue };
+        if cfg.resolve_workflow(id).is_some() {
+            c.line(
+                Status::Ok,
+                format!("loadout '{}' → workflow '{id}'", p.name),
+            );
+        } else {
+            c.line(
+                Status::Warn,
+                format!(
+                    "loadout '{}' binds unknown workflow '{id}' (it won't apply — define it under [[workflows]] or fix the id)",
+                    p.name
+                ),
+            );
+        }
+    }
+    for w in &cfg.workflows {
+        for problem in w.validate() {
+            c.line(Status::Warn, format!("workflow '{}': {problem}", w.id));
         }
     }
 }
