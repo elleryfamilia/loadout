@@ -400,7 +400,7 @@ fn tab_bar(active: &str) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
         nav class="tabs" {
-            button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Profiles" }
+            button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
             button class=(cls("fragments")) data-tab="fragments" hx-get="/tab/fragments" hx-target="#main" { (icon("box")) "Fragments" }
             button class=(cls("targets")) data-tab="targets" hx-get="/tab/targets" hx-target="#main" { (icon("target")) "Targets" }
         }
@@ -489,7 +489,7 @@ pub fn profiles_tab(
         div class="tab-profiles" {
             aside class="profile-rail" {
                 div class="rail-head" {
-                    h1 { "Profiles" }
+                    h1 { "Loadouts" }
                     div class="rail-head-actions" {
                         button class="btn btn-ghost btn-sm" hx-get="/packs" hx-target="#main" { (icon("grid")) "Starter packs" }
                         button class="btn btn-primary btn-sm" hx-get="/profiles/new" hx-target="#main" { (icon("plus")) "New" }
@@ -497,7 +497,7 @@ pub fn profiles_tab(
                 }
                 @if let Some(msg) = flash { p class="flash" { (icon("check")) (msg) } }
                 @if lib.profiles.is_empty() {
-                    p class="rail-empty muted" { "No profiles yet." }
+                    p class="rail-empty muted" { "No loadouts yet." }
                 } @else {
                     nav class="rail-list" {
                         @for p in &lib.profiles { (profile_rail_item(p, sel_name == Some(p.name.as_str()))) }
@@ -547,8 +547,8 @@ fn studio_welcome(o: &Onboarding, packs: &[PackView]) -> Markup {
                     @if let Some(b) = &o.branch { span class="target-chip muted" { "branch " (b) } }
                 }
             }
-            p class="welcome-lead" { "A " strong { "profile" } " decides what guidance your agent gets here. Apply a " strong { "starter pack" } " to get one in a click." }
-            p class="muted" { "Each pack copies a curated set of fragments into your library and creates a ready-made profile — all staged; nothing is saved until you Apply. You can customize everything afterward." }
+            p class="welcome-lead" { "A " strong { "loadout" } " decides what guidance your agent gets here. Apply a " strong { "starter pack" } " to get one in a click." }
+            p class="muted" { "Each pack copies a curated set of fragments into your library and creates a ready-made loadout — all staged; nothing is saved until you Apply. You can customize everything afterward." }
             (legend())
             div class="pack-grid" { @for p in packs { (pack_card(p)) } }
             div class="welcome-actions" {
@@ -694,7 +694,7 @@ pub fn profile_detail(d: &ProfileDetail) -> Markup {
                 }
                 div class="detail-actions" {
                     @if !p.agent.is_empty() { span class="chip chip-agent" title="rendered for this agent" { (p.agent.as_str()) } }
-                    button class="toggle" title=(if d.disabled { "Enable profile" } else { "Disable profile" }) aria-label="Toggle profile"
+                    button class="toggle" title=(if d.disabled { "Enable loadout" } else { "Disable loadout" }) aria-label="Toggle loadout"
                         hx-post=(format!("/profiles/{e}/disable")) hx-target="#main" {
                         span class=(if d.disabled { "switch off" } else { "switch on" }) {}
                     }
@@ -702,7 +702,7 @@ pub fn profile_detail(d: &ProfileDetail) -> Markup {
                         hx-get=(format!("/profiles/{e}/edit")) hx-target="#main" { (icon("pencil")) }
                     button class="icon-btn danger" title="Delete" aria-label=(format!("Delete {name}"))
                         hx-delete=(format!("/profiles/{e}")) hx-target="#main"
-                        hx-confirm=(format!("Stage deletion of profile \"{name}\"?")) { (icon("trash")) }
+                        hx-confirm=(format!("Stage deletion of loadout \"{name}\"?")) { (icon("trash")) }
                 }
             }
             div class="provenance" {
@@ -712,7 +712,7 @@ pub fn profile_detail(d: &ProfileDetail) -> Markup {
                 @if p.caps.iter().any(|c| c.dynamic) {
                     span class="prov-spacer" {}
                     button type="button" class="btn btn-ghost btn-sm run-all"
-                        title="Run every script/provider in this profile and show the live output it adds"
+                        title="Run every script/provider in this loadout and show the live output it adds"
                         hx-post=(format!("/profiles/{e}/run")) hx-target="#profile-main" {
                         (icon("play")) "Run all scripts"
                     }
@@ -722,7 +722,7 @@ pub fn profile_detail(d: &ProfileDetail) -> Markup {
             @if p.caps.is_empty() {
                 div class="detail-blank" {
                     (icon("eye"))
-                    p class="muted" { "This profile composes no guidance for " (p.agent.as_str()) " in this context." }
+                    p class="muted" { "This loadout composes no guidance for " (p.agent.as_str()) " in this context." }
                 }
             } @else {
                 div class="detail-doc" { @for c in &p.caps {
@@ -835,9 +835,9 @@ fn profiles_empty_main() -> Markup {
     html! {
         div class="detail-blank" {
             (icon("layers"))
-            p { "No profiles yet." }
-            p class="muted" { "A profile bundles fragments and binds them to a kind of repo." }
-            button class="btn btn-primary" hx-get="/profiles/new" hx-target="#main" { (icon("plus")) "Create your first profile" }
+            p { "No loadouts yet." }
+            p class="muted" { "A loadout bundles fragments and binds them to a kind of repo." }
+            button class="btn btn-primary" hx-get="/profiles/new" hx-target="#main" { (icon("plus")) "Create your first loadout" }
         }
     }
 }
@@ -846,7 +846,7 @@ fn profile_pick_prompt() -> Markup {
     html! {
         div class="detail-blank" {
             (icon("arrow-right"))
-            p class="muted" { "Select a profile to see what it composes." }
+            p class="muted" { "Select a loadout to see what it composes." }
         }
     }
 }
@@ -870,7 +870,7 @@ pub fn fragments_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
             @if lib.yours.is_empty() {
                 div class="empty-card" {
                     p { "No fragments yet." }
-                    p class="muted" { "A fragment is a reusable chunk of guidance (or a script) that profiles compose. Write one here, or apply a Starter pack from the Profiles tab to get a curated set plus a ready-made profile." }
+                    p class="muted" { "A fragment is a reusable chunk of guidance (or a script) that loadouts compose. Write one here, or apply a Starter pack from the Loadouts tab to get a curated set plus a ready-made loadout." }
                     div class="empty-actions" {
                         button class="btn btn-primary" hx-get="/fragments/new" hx-target="#modal" { (icon("plus")) "Write your first fragment" }
                     }
@@ -910,7 +910,7 @@ pub fn targets_tab(view: &TargetsView, flash: Option<&str>) -> Markup {
             }
             @if let Some(msg) = flash { p class="flash" { (icon("check")) (msg) } }
             p class="muted targets-lead" {
-                "A " strong { "target" } " is a label rosita attaches to a project by detecting it (a Rust repo, a Next.js app, …). A profile applies to a repo when one of its targets matches. Built-in targets are read-only; add your own to recognize a project kind rosita doesn't yet. "
+                "A " strong { "target" } " is a label rosita attaches to a project by detecting it (a Rust repo, a Next.js app, …). A loadout applies to a repo when one of its targets matches. Built-in targets are read-only; add your own to recognize a project kind rosita doesn't yet. "
                 span class="tag rec-tag" { (icon("check")) "matches here" }
                 " marks the ones that match the repo studio is running in."
             }
@@ -1047,7 +1047,7 @@ fn target_icon_picker(current: Option<&str>, id: &str) -> Markup {
     };
     html! {
         div class="field icon-pick-field" {
-            span class="field-label" { "icon" span class="field-hint" { "shown on profiles — pick a glyph, or use a lettermark from the name" } }
+            span class="field-label" { "icon" span class="field-hint" { "shown on loadouts — pick a glyph, or use a lettermark from the name" } }
             div class="icon-picker" {
                 input type="radio" name="icon" id="ic-auto" value="" checked[cur.is_none()];
                 label class="icon-opt" for="ic-auto" title="Lettermark (from the name)" {
@@ -1101,7 +1101,7 @@ pub fn target_dialog(target: Option<&TargetDef>, layer: Layer) -> String {
                 }
                 div class="modal-body" {
                     @if !is_new { input type="hidden" name="id" value=(id); }
-                    label class="field grow" { span class="field-label" { "name" span class="field-hint" { "the label profiles target, e.g. deno" } }
+                    label class="field grow" { span class="field-label" { "name" span class="field-hint" { "the label loadouts target, e.g. deno" } }
                         input type="text" name="name" value=(if is_new { "" } else { id }) placeholder="deno" required[is_new] readonly[!is_new];
                     }
                     label class="field grow" { span class="field-label" { "description" span class="field-hint" { "optional" } }
@@ -1156,7 +1156,7 @@ pub fn target_dialog(target: Option<&TargetDef>, layer: Layer) -> String {
                         p class="hint small" { "The predicate runs at detection (only on real renders), cwd set to the repo; its verdict is cached. Uncheck " strong { "Allow execution" } " to disable it." }
                     }
                     (lives_in(layer))
-                    p class="hint small" { "Detected against each repo at render. A profile whose targets include this id applies wherever it matches." }
+                    p class="hint small" { "Detected against each repo at render. A loadout whose targets include this id applies wherever it matches." }
                 }
                 div class="modal-foot" {
                     @if !is_new {
@@ -1334,7 +1334,7 @@ pub fn packs_gallery(packs: &[PackView]) -> Markup {
                 }
                 (legend())
             }
-            p class="muted gallery-lead" { "A pack copies a curated set of fragments into your library and creates a ready-made profile — all staged for you to review and Apply. " strong { "Preview" } " any pack first, and customize it freely once added." }
+            p class="muted gallery-lead" { "A pack copies a curated set of fragments into your library and creates a ready-made loadout — all staged for you to review and Apply. " strong { "Preview" } " any pack first, and customize it freely once added." }
             div class="pack-grid" { @for p in packs { (pack_card(p)) } }
         }
     }
@@ -1395,7 +1395,7 @@ pub fn pack_preview(pack: &crate::pack::Pack, outcome: &PreviewOutcome) -> Strin
                 div class="modal-body" {
                     p class="muted" {
                         "Applying stages " (outcome.caps.len()) " fragments and the "
-                        strong { (pack.profile_name) } " profile. You review the diff before "
+                        strong { (pack.profile_name) } " loadout. You review the diff before "
                         "anything is saved — and can edit, add, or remove any of it afterward."
                     }
                     @if outcome.caps.is_empty() {
@@ -1455,7 +1455,7 @@ pub fn onboarding_review(summary: &crate::studio::state::StagedSummary) -> Strin
                 @for p in &summary.profiles {
                     li {
                         span class="fragment-glyph" { (icon("layers")) }
-                        "profile " strong { (p.name) }
+                        "loadout " strong { (p.name) }
                         @if !p.targets.is_empty() {
                             span class="welcome-chips" {
                                 @for t in &p.targets { @let id = t.as_str(); (target_chip(id, crate::target::builtin_icon(id))) }
@@ -1547,9 +1547,9 @@ pub fn fragment_dialog(
             .collect::<Vec<_>>()
             .join(", ");
         let those = if used_by.len() == 1 {
-            "that profile"
+            "that loadout"
         } else {
-            "those profiles"
+            "those loadouts"
         };
         format!(
             "Delete fragment “{id}”? It's composed by {names} — deleting it will also remove it from {those}. This stages all the changes."
@@ -1638,7 +1638,7 @@ pub fn fragment_dialog(
                         }
                         (lives_in(layer))
                         @if !is_new {
-                            p class="hint small" { "Save updates this fragment in every profile that uses it. Use " strong { "Save as a copy" } " to make a separate version under a new name." }
+                            p class="hint small" { "Save updates this fragment in every loadout that uses it. Use " strong { "Save as a copy" } " to make a separate version under a new name." }
                         }
                     }
                     div class="modal-foot" {
@@ -1770,7 +1770,7 @@ pub fn profile_editor(
                 @if !is_new { input type="hidden" name="new" value="0"; } @else { input type="hidden" name="new" value="1"; }
                 div class="editor-head" {
                     button type="button" class="icon-btn" title="Back" hx-get="/tab/profiles" hx-target="#main" { (icon("arrow-right")) }
-                    h1 { (if is_new { "New profile" } else { "Edit profile" }) }
+                    h1 { (if is_new { "New loadout" } else { "Edit loadout" }) }
                 }
                 @if let Some(err) = error {
                     div class="banner error" { span class="banner-icon" { (icon("alert")) } div class="banner-body" { (err) } }
@@ -1815,12 +1815,12 @@ pub fn profile_editor(
                 }
                 fieldset class="lives-in" {
                     legend { "Where it lives" }
-                    p class="hint small" { "Global — every repo can use it; the profile whose targets match a repo binds there." }
+                    p class="hint small" { "Global — every repo can use it; the loadout whose targets match a repo binds there." }
                     label class="check" { input type="checkbox" name="disabled" checked[draft.disabled]; span { "Disabled (kept, but never selected)" } }
                 }
                 div class="form-buttons" {
                     button type="button" class="btn btn-ghost" hx-get="/tab/profiles" hx-target="#main" { "Cancel" }
-                    button type="button" class="btn btn-primary" hx-post="/profiles" hx-target="#main" { (icon("check")) "Stage profile" }
+                    button type="button" class="btn btn-primary" hx-post="/profiles" hx-target="#main" { (icon("check")) "Stage loadout" }
                 }
             }
             aside class="editor-preview-col" {

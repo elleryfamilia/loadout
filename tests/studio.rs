@@ -192,7 +192,7 @@ fn studio_binds_and_serves_secured_spine() {
     );
     assert!(shell.contains("Rosita studio"), "shell renders the page");
     assert!(
-        shell.contains("Profiles") && shell.contains("Fragments"),
+        shell.contains("Loadouts") && shell.contains("Fragments"),
         "shell renders the Profiles/Fragments tabs"
     );
 
@@ -385,7 +385,7 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
         "pack apply runs the guided review beat; got:\n{review}"
     );
     assert!(
-        review.contains("profile") && review.contains("everyday"),
+        review.contains("loadout") && review.contains("everyday"),
         "review summarizes the staged profile; got:\n{review}"
     );
 

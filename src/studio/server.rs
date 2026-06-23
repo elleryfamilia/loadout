@@ -961,7 +961,7 @@ fn handle_profile_edit(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
                 None,
             ))
         }
-        None => Resp::html(views::error_fragment(&format!("unknown profile '{name}'"))),
+        None => Resp::html(views::error_fragment(&format!("unknown loadout '{name}'"))),
     }
 }
 
@@ -995,7 +995,7 @@ fn handle_profile_disable(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
                     profile: Box::new(next),
                 })
             }
-            None => return Resp::html(views::error_fragment(&format!("unknown profile '{name}'"))),
+            None => return Resp::html(views::error_fragment(&format!("unknown loadout '{name}'"))),
         }
     };
     match res {
@@ -1045,7 +1045,7 @@ fn handle_profile_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         return profile_editor_with_error(
             state,
             &pairs,
-            &format!("a profile named “{name}” already exists — choose another name"),
+            &format!("a loadout named “{name}” already exists — choose another name"),
         );
     }
     let key = original.unwrap_or(name.as_str()).to_string();
@@ -1059,7 +1059,7 @@ fn handle_profile_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         Ok(()) => profiles_tab_resp(
             state,
             Some(&name),
-            Some(&format!("staged profile “{name}”")),
+            Some(&format!("staged loadout “{name}”")),
             true,
         ),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
@@ -1160,7 +1160,7 @@ fn handle_profile_delete(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
                 layer,
                 name: name.to_string(),
             }),
-            None => return Resp::html(views::error_fragment(&format!("unknown profile '{name}'"))),
+            None => return Resp::html(views::error_fragment(&format!("unknown loadout '{name}'"))),
         }
     };
     match res {
@@ -1809,7 +1809,7 @@ mod tests {
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Rosita studio"));
         // The shell renders the Profiles tab (dashboard) by default.
-        assert!(body.contains("Profiles"));
+        assert!(body.contains("Loadouts"));
         assert!(body.contains("Fragments"));
     }
 
@@ -2136,7 +2136,7 @@ mod tests {
         let r = route(&st, &req("GET", "/tab/profiles", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("No profiles yet"));
+        assert!(body.contains("No loadouts yet"));
     }
 
     fn body_of(r: Resp) -> String {
@@ -2490,7 +2490,7 @@ mod tests {
                 "name=p&targets=rust&fragments=rc&scope=repo",
             ),
         ));
-        assert!(ok.contains("staged profile"));
+        assert!(ok.contains("staged loadout"));
     }
 
     #[test]
@@ -2513,7 +2513,7 @@ mod tests {
         ));
         assert!(err.contains("name is required")); // inline error
         assert!(err.contains("banner error")); // shown in the editor, not a fragment
-        assert!(err.contains("New profile")); // re-rendered in new-profile mode
+        assert!(err.contains("New loadout")); // re-rendered in new-profile mode
         assert!(err.contains("name=\"name\"")); // with the editable name field
 
         // Nothing was staged by the failed save.
@@ -2555,7 +2555,7 @@ mod tests {
                 "original_name=rust&name=rust-web&targets=rust&fragments=rc",
             ),
         ));
-        assert!(r.contains("staged profile"));
+        assert!(r.contains("staged loadout"));
         body_of(route(
             &st,
             &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
@@ -2649,7 +2649,7 @@ mod tests {
         ));
         // The rail lists the profile, but the main pane shows the pick prompt —
         // no profile is auto-selected, so no detail/cards render.
-        assert!(body.contains("Select a profile to see what it composes."));
+        assert!(body.contains("Select a loadout to see what it composes."));
         assert!(!body.contains("fragment-detail"));
         assert!(!body.contains("<h1>rust</h1>"));
         // Explicitly selecting one still renders its detail.
