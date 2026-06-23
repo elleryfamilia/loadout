@@ -223,6 +223,30 @@ impl Config {
         }
         out
     }
+
+    /// Resolve a workflow id against your `[[workflows]]` plus the built-in
+    /// catalog (your own shadow a built-in of the same id). `None` for an unknown
+    /// or disabled id — a dangling binding that degrades gracefully. Returns an
+    /// owned clone so the temporary built-in catalog doesn't leak its lifetime.
+    pub fn resolve_workflow(&self, id: &str) -> Option<Workflow> {
+        crate::workflow::resolve_workflow(
+            id,
+            &self.workflows,
+            &crate::workflow::builtin_workflows(),
+        )
+        .cloned()
+    }
+
+    /// The workflow bound by the profile named `name` (if any), resolved. `None`
+    /// when `name` is `None`, the named profile isn't found, it carries no
+    /// `workflow` binding, or the bound id is unknown/disabled. This is the
+    /// resolution the renderer and `doctor` share, so the rendered section and
+    /// the freshness fingerprint always agree.
+    pub fn workflow_for_profile(&self, name: Option<&str>) -> Option<Workflow> {
+        let name = name?;
+        let profile = self.profiles.iter().find(|p| p.name == name)?;
+        self.resolve_workflow(profile.workflow.as_deref()?)
+    }
 }
 
 /// Enforce the global-only model. A repo (`.loadout/config.toml` / `local.toml`)
@@ -1208,6 +1232,37 @@ mod tests {
         assert!(
             !c.workflows.iter().any(|w| w.id == "evil"),
             "repo workflow stripped"
+        );
+    }
+
+    #[test]
+    fn workflow_for_profile_resolves_binding() {
+        // A profile that binds a built-in workflow resolves it by name; an
+        // unbound profile, a dangling id, an unknown profile, and `None` are all
+        // None (the renderer/doctor then simply render no workflow section).
+        let mut base = RawConfig::default();
+        let overlay: RawConfig = toml::from_str(
+            "[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nworkflow = \"lean\"\n\n\
+             [[loadouts]]\nname = \"plain\"\ntargets = [\"go\"]\n\n\
+             [[loadouts]]\nname = \"bad\"\ntargets = [\"py\"]\nworkflow = \"nope\"\n",
+        )
+        .unwrap();
+        base.merge(overlay);
+        let c = base.finalize(vec![]);
+        assert_eq!(
+            c.workflow_for_profile(Some("rust")).map(|w| w.id),
+            Some("lean".to_string()),
+            "built-in workflow resolves from the binding"
+        );
+        assert!(
+            c.workflow_for_profile(Some("plain")).is_none(),
+            "no binding"
+        );
+        assert!(c.workflow_for_profile(Some("bad")).is_none(), "dangling id");
+        assert!(c.workflow_for_profile(None).is_none());
+        assert!(
+            c.workflow_for_profile(Some("ghost")).is_none(),
+            "unknown profile"
         );
     }
 }

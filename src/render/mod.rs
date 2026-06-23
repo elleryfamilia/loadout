@@ -19,6 +19,7 @@ use crate::fragment::Fragment;
 use crate::profile::Composition;
 use crate::providers::ProviderOutput;
 use crate::templates;
+use crate::workflow::Workflow;
 
 /// Abstraction over a template engine.
 pub trait TemplateRenderer {
@@ -58,6 +59,11 @@ pub struct RenderRequest<'a> {
     pub context: &'a Context,
     /// Composed fragments + matching profiles.
     pub composition: &'a Composition,
+    /// The workflow bound by the selected profile, already resolved by the
+    /// caller (a built-in or user `[[workflows]]`), or `None` when the profile
+    /// binds none / the binding dangles. Rendered as the `## Workflow` context
+    /// section and folded into the freshness fingerprint.
+    pub workflow: Option<&'a Workflow>,
     /// Loaded config (template overrides, source provenance).
     pub config: &'a Config,
     /// Injected generation timestamp (RFC3339) — passed in for testability.
@@ -137,12 +143,26 @@ struct ProviderRef<'a> {
 }
 
 /// The freshness fingerprint stamped into a generated overlay (and compared on
-/// the next render / by `doctor`): the detected context **and** the composition
-/// that produced the overlay. A change to either — including a global-config
-/// edit that alters the resolved fragments/profile for an unchanged context —
-/// moves the fingerprint, so a cached overlay is never silently stale.
-pub fn overlay_fingerprint(context: &Context, composition: &Composition) -> String {
-    crate::hash::context_hash(&(context.compute_hash(), composition.fingerprint()))
+/// the next render / by `doctor`): the detected context, the composition that
+/// produced the overlay, **and** the bound workflow. A change to any — including
+/// a global-config edit that alters the resolved fragments/profile/workflow for
+/// an unchanged context — moves the fingerprint, so a cached overlay is never
+/// silently stale.
+///
+/// When no workflow is bound the fingerprint is byte-identical to the
+/// pre-workflow `(context, composition)` hash, so adding the feature doesn't
+/// churn every existing overlay — only a profile that gains a workflow
+/// re-renders.
+pub fn overlay_fingerprint(
+    context: &Context,
+    composition: &Composition,
+    workflow: Option<&Workflow>,
+) -> String {
+    let base = (context.compute_hash(), composition.fingerprint());
+    match workflow {
+        None => crate::hash::context_hash(&base),
+        Some(w) => crate::hash::context_hash(&(base.0, base.1, w.content_hash())),
+    }
 }
 
 /// Render an overlay for `req`.
@@ -174,13 +194,25 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
         now,
     )?;
     let has_dynamic = rendered_caps.iter().any(|c| c.dynamic);
-    let profile_guidance = join_fragment_sections(&rendered_caps);
+    let mut profile_guidance = join_fragment_sections(&rendered_caps);
 
-    // 3. Freshness fingerprint: the detected context AND the composition that
-    //    produced this overlay. Folding in the composition is what makes a
-    //    *global-config* change (a new/edited/removed fragment or profile)
-    //    re-render a repo whose detected context is unchanged.
-    let context_hash = overlay_fingerprint(req.context, req.composition);
+    // 2b. The always-on workflow map. Appended *into* `profile_guidance` so it
+    //     travels with whatever base template renders the overlay (no template
+    //     needs to know about workflows), after the fragment conventions.
+    if let Some(wf) = req.workflow {
+        let section = render_workflow_section(wf);
+        if profile_guidance.is_empty() {
+            profile_guidance = section;
+        } else {
+            profile_guidance = format!("{profile_guidance}\n\n{section}");
+        }
+    }
+
+    // 3. Freshness fingerprint: the detected context, the composition, AND the
+    //    bound workflow. Folding in the composition is what makes a
+    //    *global-config* change (a new/edited/removed fragment, profile, or
+    //    workflow) re-render a repo whose detected context is unchanged.
+    let context_hash = overlay_fingerprint(req.context, req.composition, req.workflow);
 
     // 4. Header.
     let sources: Vec<String> = req
@@ -325,6 +357,56 @@ fn join_fragment_sections(caps: &[RenderedFragment]) -> String {
         .join("\n\n")
 }
 
+/// Render a bound workflow as the always-on `## Workflow` context section: a
+/// short framing plus the stage spine in order, each stage's purpose, its
+/// handoff artifacts, gate marker, and exit checklist. This is the "context
+/// channel" — the map an agent reads in every render; the per-stage commands
+/// (the "command channel") are generated separately by the adapters.
+pub fn render_workflow_section(wf: &Workflow) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::new();
+    let _ = writeln!(s, "## Workflow: {}", wf.title());
+    let _ = writeln!(
+        s,
+        "\nThe house workflow for this profile — work the stages below in order. \
+         Files passed between stages (the _reads_/_writes_ notes) live under \
+         `.loadout/{}/`; loadout creates that directory and exposes each file as a \
+         `LOADOUT_<NAME>_PATH` environment variable. A _(gate)_ stage is a \
+         checkpoint — pause for review before moving on. This is guidance, not \
+         enforced.\n",
+        crate::workflow::ARTIFACT_SUBDIR
+    );
+    for (i, stage) in wf.stages.iter().enumerate() {
+        let _ = write!(s, "{}. **{}**", i + 1, stage.name);
+        if let Some(purpose) = &stage.purpose {
+            let _ = write!(s, " — {purpose}");
+        }
+        // Trailing annotations (handoff + gate) collapsed into one parenthetical.
+        let mut notes: Vec<String> = Vec::new();
+        match (&stage.reads, &stage.writes) {
+            (Some(r), Some(w)) if r == w => notes.push(format!("updates `{r}`")),
+            (Some(r), Some(w)) => {
+                notes.push(format!("reads `{r}`"));
+                notes.push(format!("writes `{w}`"));
+            }
+            (Some(r), None) => notes.push(format!("reads `{r}`")),
+            (None, Some(w)) => notes.push(format!("writes `{w}`")),
+            (None, None) => {}
+        }
+        if stage.gate {
+            notes.push("gate".to_string());
+        }
+        if !notes.is_empty() {
+            let _ = write!(s, " _({})_", notes.join("; "));
+        }
+        s.push('\n');
+        for item in &stage.exit {
+            let _ = writeln!(s, "   - done when: {item}");
+        }
+    }
+    s.trim_end().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,6 +474,7 @@ mod tests {
             template_name: "claude",
             context: &ctx,
             composition: &comp,
+            workflow: None,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
@@ -425,6 +508,7 @@ mod tests {
             template_name: "claude",
             context: &ctx,
             composition: &comp,
+            workflow: None,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
@@ -457,6 +541,7 @@ mod tests {
             template_name: "claude",
             context: &ctx,
             composition: &comp,
+            workflow: None,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
@@ -483,6 +568,7 @@ mod tests {
             template_name: "claude",
             context: &ctx,
             composition: &comp,
+            workflow: None,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
@@ -503,6 +589,7 @@ mod tests {
             template_name: "generic",
             context: &ctx,
             composition: &comp,
+            workflow: None,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
@@ -522,11 +609,73 @@ mod tests {
             template_name: "claude",
             context: &ctx,
             composition: &comp,
+            workflow: None,
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
         })
         .unwrap();
         assert!(out.content.contains("agent context"));
+    }
+
+    #[test]
+    fn renders_bound_workflow_section() {
+        let ctx = sample_context();
+        let cfg = Config::defaults();
+        let comp = composition(
+            "rust",
+            vec![resolved(named_cap("baseline", "Be minimal."), "rust")],
+        );
+        let lean = crate::workflow::builtin_workflows()
+            .into_iter()
+            .find(|w| w.id == "lean")
+            .unwrap();
+        let out = render(&RenderRequest {
+            agent: "claude",
+            template_name: "claude",
+            context: &ctx,
+            composition: &comp,
+            workflow: Some(&lean),
+            config: &cfg,
+            generated_at: "2026-05-29T00:00:00Z".into(),
+            dynamic: DynamicMode::ReadOnly,
+        })
+        .unwrap();
+        // The section renders with its title, the ordered stages, and the handoff.
+        assert!(out
+            .content
+            .contains("## Workflow: Explore, plan, code, commit"));
+        assert!(out.content.contains("**plan**"));
+        assert!(out.content.contains("writes `plan.md`"));
+        assert!(out.content.contains("reads `plan.md`"));
+        // It rides inside profile_guidance, after the fragment conventions.
+        assert!(out.profile_guidance.contains("### baseline"));
+        let frag_at = out.profile_guidance.find("### baseline").unwrap();
+        let wf_at = out.profile_guidance.find("## Workflow:").unwrap();
+        assert!(frag_at < wf_at, "workflow section follows the fragments");
+    }
+
+    #[test]
+    fn workflow_is_folded_into_the_fingerprint_without_churn() {
+        let ctx = sample_context();
+        let comp = composition("rust", vec![resolved(named_cap("a", "A"), "rust")]);
+        let lean = crate::workflow::builtin_workflows()
+            .into_iter()
+            .find(|w| w.id == "lean")
+            .unwrap();
+
+        // No workflow → byte-identical to the pre-workflow (context, composition)
+        // hash, so adding the feature doesn't re-render every existing overlay.
+        let legacy = crate::hash::context_hash(&(ctx.compute_hash(), comp.fingerprint()));
+        assert_eq!(overlay_fingerprint(&ctx, &comp, None), legacy);
+
+        // Binding a workflow moves the fingerprint...
+        let with = overlay_fingerprint(&ctx, &comp, Some(&lean));
+        assert_ne!(with, legacy);
+
+        // ...and editing the bound workflow moves it again.
+        let mut edited = lean.clone();
+        edited.stages[0].purpose = Some("changed".into());
+        assert_ne!(with, overlay_fingerprint(&ctx, &comp, Some(&edited)));
     }
 }

@@ -278,11 +278,18 @@ fn render_profile_in_config(
     let descriptor = adapters::descriptor(cfg, &agent_id)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("unknown agent '{agent_id}'"))?;
+    // Resolve the workflow straight from this (possibly draft) profile's binding,
+    // not by name — a draft being previewed may not be in `cfg.profiles` yet.
+    let workflow = profile
+        .workflow
+        .as_deref()
+        .and_then(|id| cfg.resolve_workflow(id));
     let out = render::render(&RenderRequest {
         agent: &descriptor.id,
         template_name: &descriptor.template,
         context: &ctx,
         composition: &composition,
+        workflow: workflow.as_ref(),
         config: cfg,
         generated_at: now_rfc3339(),
         dynamic: mode,

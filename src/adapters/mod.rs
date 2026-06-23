@@ -590,11 +590,18 @@ fn render_overlay(d: &AgentDescriptor, app: &AppContext) -> crate::Result<render
     } else {
         crate::dynamic::DynamicMode::Live
     };
+    // The workflow (if any) bound by the selected profile — resolved against the
+    // config's `[[workflows]]` plus the built-in catalog. A dangling binding
+    // resolves to `None` and simply isn't rendered (doctor/run surface it).
+    let workflow = app
+        .config
+        .workflow_for_profile(app.composition.primary_profile());
     render::render(&RenderRequest {
         agent: &d.id,
         template_name: &d.template,
         context: app.context,
         composition: app.composition,
+        workflow: workflow.as_ref(),
         config: app.config,
         generated_at: app.generated_at.clone(),
         dynamic,
