@@ -1,8 +1,6 @@
-<p align="left">
-  <img src="docs/loadout-mark.svg" alt="Loadout" width="64">
-</p>
-
-# Loadout
+<h1>
+  <img src="docs/loadout-mark.svg" alt="" width="38" align="middle">&nbsp; LOADOUT
+</h1>
 
 *Equip the right context for the job.*
 
