@@ -130,7 +130,7 @@ body {
    the nav tabs sit dead-center. */
 .brand { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 4px; }
 .brand-mark { display: inline-flex; }
-.brand-mark .mark { width: 26px; height: 26px; display: block; color: var(--accent); }
+.brand-mark .mark { width: 22px; height: 22px; display: block; color: var(--accent); }
 .brand-name { font-family: var(--brand); font-size: 22px; font-weight: 400; line-height: 1; letter-spacing: .5px; text-transform: uppercase; }
 .topbar-right { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 
