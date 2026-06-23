@@ -82,7 +82,7 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     if prep.config.sources.is_empty() {
         c.line(
             Status::Warn,
-            "no config files found; author fragments and profiles in ~/.config/rosita/config.toml (or run `rosita studio`)",
+            "no config files found; author fragments and loadouts in ~/.config/rosita/config.toml (or run `rosita studio`)",
         );
     } else {
         for s in &prep.config.sources {
@@ -415,7 +415,7 @@ fn check_dangling_fragment_refs(c: &mut Checks, cfg: &config::Config) {
                 c.line(
                     Status::Warn,
                     format!(
-                        "profile '{}' references unknown fragment '{}' (it renders nothing — remove it or define the fragment)",
+                        "loadout '{}' references unknown fragment '{}' (it renders nothing — remove it or define the fragment)",
                         p.name,
                         r.id()
                     ),
@@ -455,14 +455,17 @@ fn repo_declares_caps_or_profiles(path: &Path) -> Option<&'static str> {
             .and_then(|v| v.as_array())
             .is_some_and(|a| !a.is_empty())
     };
+    // The loadout list accepts both the canonical `[[loadouts]]` key and the
+    // legacy `[[profiles]]` alias, so a repo declaring either is global-only.
+    let has_loadouts = has("loadouts") || has("profiles");
     // `&'static` message per combination of the global-only tables present.
-    match (has("fragments"), has("profiles"), has("targets")) {
-        (true, true, true) => Some("fragments, profiles, and targets"),
-        (true, true, false) => Some("fragments and profiles"),
+    match (has("fragments"), has_loadouts, has("targets")) {
+        (true, true, true) => Some("fragments, loadouts, and targets"),
+        (true, true, false) => Some("fragments and loadouts"),
         (true, false, true) => Some("fragments and targets"),
-        (false, true, true) => Some("profiles and targets"),
+        (false, true, true) => Some("loadouts and targets"),
         (true, false, false) => Some("fragments"),
-        (false, true, false) => Some("profiles"),
+        (false, true, false) => Some("loadouts"),
         (false, false, true) => Some("targets"),
         (false, false, false) => None,
     }

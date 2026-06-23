@@ -235,7 +235,7 @@ fn print_fragment_show(c: &Fragment, via: Option<&str>) {
     println!("  kind        : {}", kind_of(c));
     println!("  origin      : {}", origin_label(c.origin));
     match via {
-        Some(p) => println!("  active      : yes (via profile '{p}')"),
+        Some(p) => println!("  active      : yes (via loadout '{p}')"),
         None => println!("  active      : no (not composed for this context)"),
     }
     println!(
@@ -309,7 +309,7 @@ pub fn profiles(rt: &Runtime, args: &ProfilesArgs) -> crate::Result<()> {
         .collect();
 
     println!(
-        "Profiles ({} configured; selected: {})",
+        "Loadouts ({} configured; selected: {})",
         prep.config.profiles.len(),
         selected.as_deref().unwrap_or("none")
     );

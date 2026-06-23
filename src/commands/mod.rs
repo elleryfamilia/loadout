@@ -124,7 +124,7 @@ impl ProfileChooser for SkipChooser {
     fn choose(&self, _ctx: &Context, candidates: &[LoadoutConfig]) -> crate::Result<Choice> {
         let names: Vec<&str> = candidates.iter().map(|p| p.name.as_str()).collect();
         crate::warn_user!(
-            "{} profiles match this project ({}); none chosen — overlay is empty. \
+            "{} loadouts match this project ({}); none chosen — overlay is empty. \
              Run `rosita run <agent>` to pick one (remembered afterwards).",
             candidates.len(),
             names.join(", ")
@@ -181,13 +181,13 @@ pub fn prepare_with_live(
     if live {
         match &selection {
             Selection::Default(p) => crate::warn_user!(
-                "no profile targets this project ({}); using the default profile '{}' \
+                "no loadout targets this project ({}); using the default loadout '{}' \
                  (it declares no targets).",
                 detected_summary(&context),
                 p.name
             ),
             Selection::None => crate::warn_user!(
-                "no profile targets this project ({}) — overlay is empty. Create a profile \
+                "no loadout targets this project ({}) — overlay is empty. Create a loadout \
                  (one with no targets becomes the default).",
                 detected_summary(&context)
             ),
@@ -232,13 +232,13 @@ fn resolve_selection(
                 .iter()
                 .find(|p| p.name == name)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("chooser returned unknown profile '{name}'"))?;
+                .ok_or_else(|| anyhow::anyhow!("chooser returned unknown loadout '{name}'"))?;
             if !rt.dry_run {
                 // Fingerprint the chosen profile's targets so the binding goes
                 // stale (and re-detects) if the profile is later retargeted.
                 let targets_hash = Some(crate::hash::context_hash(&chosen.targets));
                 binding::write(context, &Binding::Profile { name, targets_hash })
-                    .context("remembering profile choice")?;
+                    .context("remembering loadout choice")?;
             }
             Ok(Selection::Use(chosen))
         }

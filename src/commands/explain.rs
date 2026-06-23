@@ -184,10 +184,10 @@ fn print_human(r: &ExplainReport) {
     }
 
     println!("\nDetected targets: [{}]", r.selection_targets.join(", "));
-    println!("Profile selection → {}", r.selected_profile);
+    println!("Loadout selection → {}", r.selected_profile);
     if r.candidate_profiles.len() > 1 {
         println!(
-            "  {} profiles match (pick one): {}",
+            "  {} loadouts match (pick one): {}",
             r.candidate_profiles.len(),
             r.candidate_profiles.join(", ")
         );

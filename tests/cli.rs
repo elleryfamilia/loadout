@@ -427,7 +427,7 @@ fn explain_reports_selection_and_plan() {
         .arg("explain")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Profile selection → rust"))
+        .stdout(predicate::str::contains("Loadout selection → rust"))
         .stdout(predicate::str::contains("Write plan"))
         .stdout(predicate::str::contains("Profiles considered"));
 }
@@ -569,7 +569,7 @@ fn doctor_flags_repo_declared_caps_and_profiles() {
         .assert()
         .success()
         .stdout(predicate::str::contains("global-only"))
-        .stdout(predicate::str::contains("fragments and profiles"));
+        .stdout(predicate::str::contains("fragments and loadouts"));
 
     // A clean repo (no repo-declared caps/profiles) is not flagged.
     let clean = Fixture::new();
@@ -1375,7 +1375,7 @@ fn fragments_list_marks_active_and_shows_one() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Fragment: rust-conventions"))
-        .stdout(predicate::str::contains("via profile 'rust'"));
+        .stdout(predicate::str::contains("via loadout 'rust'"));
 
     // Unknown id errors.
     fx.cmd()
@@ -1402,7 +1402,7 @@ fn profiles_list_marks_matching() {
         .arg("profiles")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Profiles ("))
+        .stdout(predicate::str::contains("Loadouts ("))
         // the rust profile is selected (→) on a rust repo.
         .stdout(predicate::str::contains("→ rust"))
         .stdout(predicate::str::contains("fragments: rust-conventions"));
@@ -1456,7 +1456,7 @@ fn ambiguous_profiles_render_empty_and_warn() {
         .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("profiles match this project"))
+        .stderr(predicate::str::contains("loadouts match this project"))
         .stdout(predicate::str::contains("profile none"));
 
     let overlay = fx.read(".rosita/generated/claude.md");
@@ -1479,7 +1479,7 @@ fn binding_in_local_toml_selects_profile_without_prompt() {
         .assert()
         .success()
         .stdout(predicate::str::contains("profile rust-b"))
-        .stderr(predicate::str::contains("profiles match").not());
+        .stderr(predicate::str::contains("loadouts match").not());
 
     let overlay = fx.read(".rosita/generated/claude.md");
     assert!(overlay.contains("BBB guidance"));
@@ -1505,7 +1505,7 @@ fn stale_binding_targets_hash_redetects() {
         .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("profiles match this project"))
+        .stderr(predicate::str::contains("loadouts match this project"))
         .stdout(predicate::str::contains("profile none"));
 
     let overlay = fx.read(".rosita/generated/claude.md");

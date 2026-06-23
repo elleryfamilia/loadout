@@ -44,7 +44,7 @@ impl ProfileChooser for StdinChooser {
     fn choose(&self, ctx: &Context, candidates: &[LoadoutConfig]) -> crate::Result<Choice> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             crate::warn_user!(
-                "{} profiles match but this isn't an interactive terminal — applying none. \
+                "{} loadouts match but this isn't an interactive terminal — applying none. \
                  Re-run `rosita run` interactively (or use `rosita studio`) to pick.",
                 candidates.len()
             );
@@ -57,7 +57,7 @@ impl ProfileChooser for StdinChooser {
             ctx.stacks.join("/")
         };
         println!(
-            "rosita › this {langs} project matches {} profiles — pick one:",
+            "rosita › this {langs} project matches {} loadouts — pick one:",
             candidates.len()
         );
         println!("  ↑/↓ to move · Enter to select · or press a number · Esc/Ctrl-C to cancel");
@@ -168,7 +168,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
             println!(
                 "  {} {}",
                 p.yellow("✗"),
-                p.dim("cancelled — no profile picked, nothing launched")
+                p.dim("cancelled — no loadout picked, nothing launched")
             );
             return Ok(());
         }
@@ -461,7 +461,7 @@ fn print_render_step(
 ) {
     let label = prep.profile_label();
     let profile = if label.is_empty() {
-        "no profile"
+        "no loadout"
     } else {
         label
     };
@@ -529,12 +529,12 @@ fn build_launch_args(
                 guidance
             };
             out.push(format!(
-                "rosita machine context for profile '{}' (session-only — not written to any file):\n\n{body}",
+                "rosita machine context for loadout '{}' (session-only — not written to any file):\n\n{body}",
                 prep.profile_label()
             ));
         } else {
             out.push(format!(
-                "rosita: project context refreshed for profile '{}' at {rendered_at} — current. \
+                "rosita: project context refreshed for loadout '{}' at {rendered_at} — current. \
                  Run `rosita refresh` if the project changes mid-session.",
                 prep.profile_label()
             ));

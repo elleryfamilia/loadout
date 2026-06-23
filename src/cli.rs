@@ -6,7 +6,7 @@ use clap::{Args, Parser, Subcommand};
 
 /// rosita — inject global context into your AI coding agents.
 ///
-/// Detects the current project/runtime context, selects the profile that fits,
+/// Detects the current project/runtime context, selects the loadout that fits,
 /// renders an agent-specific instruction overlay, writes it safely, and can
 /// launch the agent. Generated files are agent *guidance*, not enforced policy.
 #[derive(Debug, Parser)]
@@ -72,13 +72,13 @@ pub enum Command {
     Doctor,
     /// List fragments, or show one (`rosita fragments [list|show <id>]`).
     Fragments(FragmentsArgs),
-    /// List configured profiles and which match the current context.
+    /// List configured loadouts and which match the current context.
     Profiles(ProfilesArgs),
     /// List configured agents and how each delivers the overlay.
     Agents(AgentsArgs),
     /// Launch the local studio web UI (ephemeral; serves until Ctrl-C).
     Studio(StudioArgs),
-    /// Sync your global config (fragments & profiles) across machines via git.
+    /// Sync your global config (fragments & loadouts) across machines via git.
     Sync(SyncArgs),
     /// Manage the agent skills rosita ships (installed under `~/.agents/skills`).
     Skill(SkillArgs),
@@ -134,7 +134,7 @@ pub struct UpdateArgs {
 /// `use` options — pin this project to a named loadout.
 #[derive(Debug, Args)]
 pub struct UseArgs {
-    /// The loadout (profile) name to pin for this project.
+    /// The loadout name to pin for this project.
     pub loadout: String,
 }
 
