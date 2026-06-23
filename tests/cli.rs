@@ -441,11 +441,13 @@ fn refresh_auto_manages_gitignore_and_init_is_gone() {
     fx.rust_profile();
     fx.git_init();
 
+    // With bare-agent dispatch, `init` is an unknown first token → it falls
+    // through to the launcher and fails as an unknown agent (never scaffolds).
     fx.cmd()
         .arg("init")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("unrecognized subcommand"));
+        .stderr(predicate::str::contains("unknown agent 'init'"));
 
     fx.cmd()
         .args(["refresh", "--agent", "claude"])
@@ -965,6 +967,46 @@ fn unknown_agent_is_an_error() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("unknown agent 'nope'"));
+}
+
+#[test]
+fn bare_agent_dispatches_like_run() {
+    // `load <agent> [args…]` is shorthand for `load run <agent> [args…]`.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[agents]]\nid = \"myagent\"\ngenerated_filename = \"myagent.md\"\nlaunch = \"echo\"\nwire_hint = \"include myagent.md\"\n",
+    );
+    // No `run` token — the agent id is the first positional.
+    fx.cmd()
+        .args(["--dry-run", "myagent", "hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would exec: echo"))
+        .stdout(predicate::str::contains("hello"));
+}
+
+#[test]
+fn bare_unknown_agent_is_an_error() {
+    // A first token that's neither a known command nor a known agent is treated
+    // as an agent id and rejected by the launcher.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.cmd()
+        .args(["--dry-run", "definitelynotanagent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unknown agent 'definitelynotanagent'",
+        ));
+}
+
+#[test]
+fn reserved_subcommand_wins_over_implicit_launch() {
+    // `doctor` is a real subcommand — it must run, not be treated as an agent.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.cmd().arg("doctor").assert().success();
 }
 
 #[test]
@@ -1613,7 +1655,10 @@ fn refresh_auto_pulls_synced_global_config() {
 }
 
 /// `render` was consolidated into `refresh` in 0.5.0 — the subcommand must be
-/// gone, not silently aliased.
+/// gone, not silently aliased. With bare-agent dispatch (`load <agent>`), an
+/// unknown first token falls through to the launcher, so `render` now fails as
+/// an unknown agent rather than an unrecognized subcommand. Either way it never
+/// behaves like the old render command.
 #[test]
 fn render_subcommand_is_gone() {
     let fx = Fixture::new();
@@ -1621,5 +1666,5 @@ fn render_subcommand_is_gone() {
         .args(["render", "--agent", "claude"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("unrecognized subcommand"));
+        .stderr(predicate::str::contains("unknown agent 'render'"));
 }

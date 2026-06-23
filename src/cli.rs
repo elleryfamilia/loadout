@@ -10,7 +10,16 @@ use clap::{Args, Parser, Subcommand};
 /// renders an agent-specific instruction overlay, writes it safely, and can
 /// launch the agent. Generated files are agent *guidance*, not enforced policy.
 #[derive(Debug, Parser)]
-#[command(name = "load", version, about, long_about = None)]
+#[command(
+    name = "load",
+    version,
+    about,
+    long_about = None,
+    after_help = "Examples:\n  \
+        load claude              Equip the matching loadout and launch Claude\n  \
+        load run claude -- -p    Same, but pass `-p` through to the agent\n\n\
+        Tip: `load <agent>` is shorthand for `load run <agent>`."
+)]
 pub struct Cli {
     /// Global options shared by all subcommands.
     #[command(flatten)]
@@ -72,6 +81,11 @@ pub enum Command {
     Skill(SkillArgs),
     /// Update rosita to the latest release (installer-based installs only).
     Update(UpdateArgs),
+    /// Launch an agent by id — the implicit form of `run` (e.g. `load claude`).
+    /// Any first token that isn't a known command is treated as an agent id;
+    /// the rest pass through to the agent.
+    #[command(external_subcommand)]
+    Launch(Vec<String>),
 }
 
 /// `skill` options. Bare `rosita skill` shows status.
@@ -224,6 +238,27 @@ pub struct RunArgs {
     /// Arguments passed through to the agent.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
+}
+
+impl RunArgs {
+    /// Build run-args from the bare-launch form (`load <agent> [args…]`), where
+    /// the first token is the agent id and the rest pass through to the agent.
+    /// The Codex override flags are not parsed in this form — use `load run` for
+    /// those. `argv` always has at least one element (clap's external subcommand).
+    pub fn from_launch(mut argv: Vec<String>) -> Self {
+        let agent = if argv.is_empty() {
+            String::new()
+        } else {
+            argv.remove(0)
+        };
+        RunArgs {
+            agent,
+            skip_render: false,
+            codex_override: false,
+            codex_no_override: false,
+            args: argv,
+        }
+    }
 }
 
 /// `explain` options.

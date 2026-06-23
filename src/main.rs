@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use loadout::cli::{Cli, Command};
+use loadout::cli::{Cli, Command, RunArgs};
 use loadout::commands::{self, Runtime};
 use loadout::report;
 
@@ -36,6 +36,8 @@ fn main() -> ExitCode {
         Command::Sync(args) => commands::sync::run(&rt, args),
         Command::Skill(args) => commands::skill::run(&rt, args),
         Command::Update(args) => commands::update::run(&rt, args),
+        // Bare `load <agent> [args…]` — the implicit form of `run`.
+        Command::Launch(argv) => commands::run::run(&rt, &RunArgs::from_launch(argv.clone())),
     };
 
     match result {
