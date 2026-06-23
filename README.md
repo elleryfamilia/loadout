@@ -1,5 +1,5 @@
 <h1>
-  <img src="docs/loadout-mark.svg" alt="" width="38" align="absmiddle">&nbsp; LOADOUT
+  <img src="docs/loadout-wordmark.svg" alt="Loadout" width="320">
 </h1>
 
 *Equip the right context for the job.*
