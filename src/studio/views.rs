@@ -286,14 +286,16 @@ fn target_icon_only(id: &str, token: Option<&str>) -> Markup {
     html! { span class="rail-icon" title=(id) { (target_icon_markup(&ti)) } }
 }
 
-/// The loadout brandmark: an item being loaded down into a tray — the "load"
-/// gesture. Single-stroke `currentColor`, so the CSS sets its accent color.
+/// The loadout brandmark: a rucksack / military backpack — the gear you equip
+/// before a job. Single-stroke `currentColor`, so the CSS sets its accent color.
 fn brand_mark() -> Markup {
     PreEscaped(
         r##"<svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-  <path d="M12 3v10"/>
-  <path d="m8 9 4 4 4-4"/>
-  <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+  <path d="M5 20V10a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v10a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z"/>
+  <path d="M9 6V4.5A2.5 2.5 0 0 1 11.5 2h1A2.5 2.5 0 0 1 15 4.5V6"/>
+  <path d="M5 11h14"/>
+  <path d="M9 22v-5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v5"/>
+  <path d="M10 18h4"/>
 </svg>"##
             .to_string(),
     )

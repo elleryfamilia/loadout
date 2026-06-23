@@ -1,7 +1,7 @@
 /* loadout studio — refined dark, tabbed (Loadouts / Fragments).
    One accent (blue); a 4px grid and a real type scale.
-   Inter is self-hosted (no external calls) for body/UI and the wordmark,
-   © its authors under the SIL Open Font License 1.1
+   Fonts are self-hosted (no external calls): Inter for body/UI, Alfa Slab One
+   for the wordmark. Both © their authors under the SIL Open Font License 1.1
    (https://scripts.sil.org/OFL); redistributed here in binary woff2 form. */
 
 @font-face {
@@ -10,6 +10,13 @@
   font-weight: 100 900;
   font-display: swap;
   src: url(/assets/fonts/inter.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Alfa Slab One";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/assets/fonts/alfa-slab-one.woff2) format("woff2");
 }
 
 :root {
@@ -52,7 +59,7 @@
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --brand: var(--sans);
+  --brand: "Alfa Slab One", Georgia, serif;
 
   --r-sm: 6px;
   --r: 8px;
@@ -124,7 +131,7 @@ body {
 .brand { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 4px; }
 .brand-mark { display: inline-flex; }
 .brand-mark .mark { width: 26px; height: 26px; display: block; color: var(--accent); }
-.brand-name { font-family: var(--brand); font-size: 20px; font-weight: 700; line-height: 1; letter-spacing: -.01em; }
+.brand-name { font-family: var(--brand); font-size: 17px; font-weight: 400; line-height: 1; letter-spacing: .5px; text-transform: uppercase; }
 .topbar-right { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 
 .tabs { flex: 0 0 auto; display: flex; gap: 6px; }
