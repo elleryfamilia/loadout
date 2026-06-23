@@ -8,6 +8,16 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Docs
+
+- Trimmed the README by ~60% (691 → ~260 lines): the deep reference material
+  (templates, dynamic fragments, the full safety bullet list, audit, staleness)
+  now lives in `docs/` and the README links out to it. Reworked the copy around
+  the loadout framing — *equip the right context for the job* — and refreshed the
+  studio screenshot to the new branding.
+
 ## 0.8.0 — 2026-06-22
 
 **rosita is now Loadout, and the command is `load`.** This is a clean-break
