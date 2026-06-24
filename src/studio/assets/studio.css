@@ -417,9 +417,10 @@ body {
 .wf-card-blurb { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
 /* detail — the focused workflow filling the fixed spine */
 .wf-detail { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel-2); padding: 18px 20px; }
-.wf-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-.wf-process-lead { margin: 0 0 4px; font-size: 13px; color: var(--muted); }
-.wf-process-lead strong { color: var(--fg); font-weight: 600; }
+.wf-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.wf-legend { margin: 0 0 5px; font-size: 12.5px; line-height: 1.6; color: var(--muted); max-width: 62ch; }
+.wf-legend-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 999px; background: var(--accent-soft); border: 1px solid var(--accent-line); color: var(--accent); font-weight: 600; white-space: nowrap; }
+.wf-legend-chip .icon { width: 13px; height: 13px; }
 .wf-detail-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
 .wf-source { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); text-decoration: none; }
 .wf-source:hover { text-decoration: underline; }
@@ -436,15 +437,16 @@ body {
 .wf-slot-rail { width: 28px; flex: none; display: flex; justify-content: center; padding-top: 4px; }
 .wf-slot-dot { position: relative; z-index: 1; width: 11px; height: 11px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--panel-2); }
 .wf-slot.skipped .wf-slot-dot { background: var(--panel-2); box-shadow: inset 0 0 0 2px var(--border-strong), 0 0 0 4px var(--panel-2); }
-.wf-slot-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.wf-slot-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wf-slot-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding-top: 1px; }
 .wf-slot-cmd-lead { font-family: var(--mono); display: inline-flex; align-items: baseline; }
 .cmd-prefix { font-size: 12.5px; font-weight: 500; color: var(--muted); }
 .cmd-name { font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: -0.2px; }
 .wf-slot.skipped .cmd-prefix, .wf-slot.skipped .cmd-name { color: var(--faint); font-weight: 600; }
-.wf-slot-purpose { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
-.wf-slot-skip { color: var(--faint); font-style: italic; }
-.skip-tag { color: var(--faint); background: var(--elevated); }
+/* the workflow's contribution to a step — accent-marked so it's clearly the
+   variable part (the legend chip names which workflow is filling it) */
+.wf-fill { border-left: 2px solid var(--accent-line); padding-left: 11px; display: flex; flex-direction: column; gap: 5px; }
+.wf-fill-text { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--fg); }
+.wf-step-desc { font-size: 12px; line-height: 1.45; color: var(--faint); font-style: italic; }
 .wf-slot-io { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .stage-io { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--faint); }
 .stage-io .icon { width: 12px; height: 12px; }

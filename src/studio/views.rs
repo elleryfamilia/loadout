@@ -1004,11 +1004,16 @@ fn workflow_gallery_card(w: &WorkflowView, focused: bool) -> Markup {
 fn workflow_detail(w: &WorkflowView) -> Markup {
     html! {
         div class="wf-detail" {
-            // Slim header — the card already shows the name + blurb, so this only
-            // frames the spine ("the process, with X") + provenance + the action.
+            // The legend that makes the model legible: the steps are fixed
+            // scaffolding; the accent-marked text is what THIS workflow puts in
+            // each (the card already shows the name + blurb, so no repeat title).
             div class="wf-detail-head" {
                 div class="wf-detail-titles" {
-                    p class="wf-process-lead" { "Your agent's process, with " strong { (w.title) } }
+                    p class="wf-legend" {
+                        "The five steps are fixed. "
+                        span class="wf-legend-chip" { (icon(w.icon.as_deref().unwrap_or("git-branch"))) (w.title) }
+                        " fills the ones it uses — the marked text is what it does at each step. Greyed steps it skips. Pick another workflow above to change them."
+                    }
                     span class="wf-detail-meta muted" {
                         @if let Some(m) = &w.modeled_on { (m) }
                         @if let Some(s) = &w.source {
@@ -1045,10 +1050,12 @@ fn workflow_detail(w: &WorkflowView) -> Markup {
     }
 }
 
-/// One slot in the fixed spine: a rail dot, the slash command it maps to (a light
-/// `/loadout:` prefix + the bold step name), the workflow's take on the step (or
-/// the generic step when skipped), unpaired in/out chips, and the exit checklist.
-/// Handoffs between slots are drawn separately by [`workflow_connector`].
+/// One slot in the fixed spine: a rail dot + the slash command it maps to (a
+/// light `/loadout:` prefix + the bold step name). A *filled* slot then shows
+/// the workflow's contribution in an accent-marked `wf-fill` block (its take +
+/// handoff chips + exit checklist); a *skipped* slot greys out and shows only
+/// the generic step, so it's clear the workflow doesn't use it. Handoffs between
+/// slots are drawn separately by [`workflow_connector`].
 fn workflow_slot(s: &WorkflowSlotView) -> Markup {
     let cls = if s.filled {
         "wf-slot"
@@ -1059,32 +1066,30 @@ fn workflow_slot(s: &WorkflowSlotView) -> Markup {
         li class=(cls) {
             span class="wf-slot-rail" { span class="wf-slot-dot" {} }
             div class="wf-slot-body" {
-                div class="wf-slot-head" {
-                    code class="wf-slot-cmd-lead" {
-                        span class="cmd-prefix" { "/loadout:" }
-                        span class="cmd-name" { (s.command) }
-                    }
-                    @if s.gate { span class="tag gate-tag" { "gate" } }
-                    @if !s.filled { span class="tag skip-tag" { "skipped" } }
+                code class="wf-slot-cmd-lead" {
+                    span class="cmd-prefix" { "/loadout:" }
+                    span class="cmd-name" { (s.command) }
                 }
                 @match &s.purpose {
-                    // Filled: the workflow's own one-line take on this step.
-                    Some(p) => p class="wf-slot-purpose" { (p) },
-                    // Skipped: the generic step, greyed, so you see what's skipped.
-                    None => p class="wf-slot-purpose wf-slot-skip" { (s.step_desc) },
-                }
-                // Unpaired artifacts only — a file with no upstream writer
-                // (external input) or no downstream reader (terminal output).
-                @if s.needs.is_some() || s.produces.is_some() {
-                    div class="wf-slot-io" {
-                        @if let Some(r) = &s.needs { span class="stage-io" { (icon("arrow-right")) "needs " code { (r) } } }
-                        @if let Some(wr) = &s.produces { span class="stage-io" { (icon("arrow-right")) "outputs " code { (wr) } } }
-                    }
-                }
-                @if !s.exit.is_empty() {
-                    ul class="stage-exit" {
-                        @for item in &s.exit { li { (icon("check")) (item) } }
-                    }
+                    // Filled — the accent-marked block is the workflow's doing.
+                    Some(p) => div class="wf-fill" {
+                        p class="wf-fill-text" { (p) }
+                        // Unpaired artifacts only — a file with no upstream writer
+                        // (external input) or no downstream reader (terminal output).
+                        @if s.needs.is_some() || s.produces.is_some() {
+                            div class="wf-slot-io" {
+                                @if let Some(r) = &s.needs { span class="stage-io" { (icon("arrow-right")) "needs " code { (r) } } }
+                                @if let Some(wr) = &s.produces { span class="stage-io" { (icon("arrow-right")) "outputs " code { (wr) } } }
+                            }
+                        }
+                        @if !s.exit.is_empty() {
+                            ul class="stage-exit" {
+                                @for item in &s.exit { li { (icon("check")) (item) } }
+                            }
+                        }
+                    },
+                    // Skipped — just the generic step, greyed, so you know what it is.
+                    None => span class="wf-step-desc" { (s.step_desc) },
                 }
             }
         }
