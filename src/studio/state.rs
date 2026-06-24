@@ -6,6 +6,7 @@
 //! session mutex, release it, then assemble/render **outside** the lock — never
 //! hold the mutex across rendering, disk I/O, or probe execution.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::adapters;
@@ -200,14 +201,29 @@ pub struct WorkflowStageView {
     pub name: String,
     /// One-line contract for the stage.
     pub purpose: Option<String>,
-    /// Handoff artifact this stage reads (a bare filename).
-    pub reads: Option<String>,
-    /// Handoff artifact this stage writes (a bare filename).
-    pub writes: Option<String>,
+    /// An **external input**: a file this stage reads that no earlier stage
+    /// writes (so it isn't part of a handoff thread). Paired reads are drawn by
+    /// the [`WorkflowHandoffView`] connectors instead.
+    pub needs: Option<String>,
+    /// A **terminal output**: a file this stage writes that no later stage reads
+    /// (so it isn't part of a handoff thread). Paired writes are drawn by the
+    /// connectors instead.
+    pub produces: Option<String>,
     /// A review checkpoint stage.
     pub gate: bool,
     /// "Done when" checklist items.
     pub exit: Vec<String>,
+}
+
+/// A dataflow connector drawn *between* two slots in the spine: the handoff
+/// artifact(s) traveling from a writer at-or-above down to a reader at-or-below
+/// this boundary. One per boundary the file(s) cross, so a file read several
+/// stages after it's written draws a continuous thread down the spine.
+pub struct WorkflowHandoffView {
+    /// 0-based index of the slot this connector sits directly *below*.
+    pub after: usize,
+    /// The artifact filename(s) in flight across this boundary.
+    pub files: Vec<String>,
 }
 
 /// One workflow card for the Workflows tab.
@@ -229,6 +245,10 @@ pub struct WorkflowView {
     pub private: bool,
     /// The ordered stages.
     pub stages: Vec<WorkflowStageView>,
+    /// Dataflow connectors between slots — the handoff spine (which artifact
+    /// crosses each boundary). Parallel to `stages`; an entry's `after` is the
+    /// 0-based slot it sits below.
+    pub handoffs: Vec<WorkflowHandoffView>,
     /// Upstream source URL (the repo/writeup this is drawn from), for display.
     pub source: Option<String>,
     /// Distinct handoff artifacts the workflow passes between stages.
@@ -662,6 +682,49 @@ pub fn targets_view(snap: &Snapshot) -> TargetsView {
     TargetsView { targets }
 }
 
+/// Compute the dataflow spine for a workflow's stages: the connector(s) between
+/// slots and the set of artifact filenames that take part in a handoff thread.
+///
+/// A file *crosses* the boundary below slot `b` when it's written at-or-above
+/// `b` and read at-or-below `b+1` — i.e. `first_write(F) <= b` and
+/// `last_read(F) >= b+1`. A file written early and read late therefore crosses
+/// every boundary in between, drawing one continuous thread. Files that take
+/// part in any thread are "threaded"; a stage's read/write that is *not*
+/// threaded is an external input / terminal output the slot shows as a chip.
+fn workflow_handoffs(
+    stages: &[crate::workflow::WorkflowStage],
+) -> (Vec<WorkflowHandoffView>, HashSet<String>) {
+    // Earliest writer and latest reader index per file.
+    let mut first_write: HashMap<&str, usize> = HashMap::new();
+    let mut last_read: HashMap<&str, usize> = HashMap::new();
+    for (i, s) in stages.iter().enumerate() {
+        if let Some(w) = s.writes.as_deref() {
+            first_write.entry(w).or_insert(i);
+        }
+        if let Some(r) = s.reads.as_deref() {
+            last_read.insert(r, i);
+        }
+    }
+
+    let mut handoffs = Vec::new();
+    let mut threaded: HashSet<String> = HashSet::new();
+    for b in 0..stages.len().saturating_sub(1) {
+        let mut files: Vec<String> = first_write
+            .iter()
+            .filter_map(|(file, &fw)| {
+                let lr = *last_read.get(file)?;
+                (fw <= b && lr > b).then(|| (*file).to_string())
+            })
+            .collect();
+        files.sort();
+        if !files.is_empty() {
+            threaded.extend(files.iter().cloned());
+            handoffs.push(WorkflowHandoffView { after: b, files });
+        }
+    }
+    (handoffs, threaded)
+}
+
 /// Build the Workflows tab view: the curated catalog plus your own (the gallery
 /// cards), with the global active workflow flagged and one workflow `focus`ed
 /// (its slots shown below). `focus` is the card the user clicked; it falls back
@@ -694,14 +757,17 @@ pub fn workflows_view(snap: &Snapshot, focus: Option<&str>) -> WorkflowsView {
                 .filter(|(id, _)| id == &w.id)
                 .map(|(_, name)| name.clone())
                 .collect();
+            let (handoffs, threaded) = workflow_handoffs(&w.stages);
             let stages = w
                 .stages
                 .iter()
                 .map(|s| WorkflowStageView {
                     name: s.name.clone(),
                     purpose: s.purpose.clone(),
-                    reads: s.reads.clone(),
-                    writes: s.writes.clone(),
+                    // Only show a read/write inline when it's NOT carried by a
+                    // handoff connector (an external input or terminal output).
+                    needs: s.reads.clone().filter(|f| !threaded.contains(f)),
+                    produces: s.writes.clone().filter(|f| !threaded.contains(f)),
                     gate: s.gate,
                     exit: s.exit.clone(),
                 })
@@ -719,6 +785,7 @@ pub fn workflows_view(snap: &Snapshot, focus: Option<&str>) -> WorkflowsView {
                 source: w.source.clone(),
                 id: w.id,
                 stages,
+                handoffs,
                 artifacts,
                 bound_by,
                 problems,

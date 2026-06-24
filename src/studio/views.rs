@@ -53,6 +53,7 @@ fn icon(name: &str) -> Markup {
             r#"<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>"#
         }
         "arrow-right" => r#"<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>"#,
+        "arrow-down" => r#"<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>"#,
         "layers" => {
             r#"<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>"#
         }
@@ -1024,9 +1025,15 @@ fn workflow_detail(w: &WorkflowView) -> Markup {
                 }
             }
             @for prob in &w.problems { p class="flash flash-warn" { (icon("alert")) (prob) } }
-            // The slots — one box per stage, in order.
+            // The spine — one box per stage, in order, with a dataflow connector
+            // drawn in the gap wherever a handoff artifact crosses the boundary.
             ol class="wf-slots" {
-                @for (i, s) in w.stages.iter().enumerate() { (workflow_slot(i + 1, s)) }
+                @for (i, s) in w.stages.iter().enumerate() {
+                    (workflow_slot(i + 1, s))
+                    @if let Some(h) = w.handoffs.iter().find(|h| h.after == i) {
+                        (workflow_connector(h))
+                    }
+                }
             }
             div class="wf-detail-foot" {
                 @if !w.artifacts.is_empty() {
@@ -1046,8 +1053,10 @@ fn workflow_detail(w: &WorkflowView) -> Markup {
     }
 }
 
-/// One slot box in the focused workflow's spine: number, name, gate, purpose,
-/// handoff, exit checklist, and the slash command it generates.
+/// One slot box in the focused workflow's spine: number, the slash command it
+/// generates, gate, purpose, any unpaired external-input / terminal-output
+/// chips, and the exit checklist. Handoffs between slots are drawn separately by
+/// [`workflow_connector`].
 fn workflow_slot(n: usize, s: &crate::studio::state::WorkflowStageView) -> Markup {
     html! {
         li class="wf-slot" {
@@ -1057,15 +1066,34 @@ fn workflow_slot(n: usize, s: &crate::studio::state::WorkflowStageView) -> Marku
                 @if s.gate { span class="tag gate-tag" { "gate" } }
             }
             @if let Some(p) = &s.purpose { p class="wf-slot-purpose" { (p) } }
-            @if s.reads.is_some() || s.writes.is_some() {
+            // Unpaired artifacts only — a file with no upstream writer (external
+            // input) or no downstream reader (terminal output). The handoff
+            // connectors carry everything that flows between stages.
+            @if s.needs.is_some() || s.produces.is_some() {
                 div class="wf-slot-io" {
-                    @if let Some(r) = &s.reads { span class="stage-io" { (icon("arrow-right")) "reads " code { (r) } } }
-                    @if let Some(wr) = &s.writes { span class="stage-io" { (icon("arrow-right")) "writes " code { (wr) } } }
+                    @if let Some(r) = &s.needs { span class="stage-io" { (icon("arrow-right")) "needs " code { (r) } } }
+                    @if let Some(wr) = &s.produces { span class="stage-io" { (icon("arrow-right")) "outputs " code { (wr) } } }
                 }
             }
             @if !s.exit.is_empty() {
                 ul class="stage-exit" {
                     @for item in &s.exit { li { (icon("check")) (item) } }
+                }
+            }
+        }
+    }
+}
+
+/// The dataflow connector drawn in the gap between two slots: a down-arrow on the
+/// spine with the handoff artifact(s) crossing this boundary, so the file
+/// visibly travels from the writer above to the reader below.
+fn workflow_connector(h: &crate::studio::state::WorkflowHandoffView) -> Markup {
+    html! {
+        li class="wf-flow" {
+            span class="wf-flow-rail" { (icon("arrow-down")) }
+            span class="wf-flow-files" {
+                @for f in &h.files {
+                    span class="wf-flow-file" title="handed off to a later stage" { (icon("file")) code { (f) } }
                 }
             }
         }

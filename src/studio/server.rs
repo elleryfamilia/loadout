@@ -2072,6 +2072,16 @@ mod tests {
             sp.contains("Refine the rough idea"),
             "superpowers' slot purpose is shown when focused"
         );
+        // The handoff between slots is visualized as a dataflow connector, not
+        // plain "reads/writes" text: brainstorm hands design.md to plan, plan
+        // hands plan.md to implement.
+        assert!(sp.contains("wf-flow-file"), "handoff connector rendered");
+        assert!(sp.contains("design.md"), "design.md handoff shown");
+        assert!(sp.contains("plan.md"), "plan.md handoff shown");
+        assert!(
+            !sp.contains("reads ") && !sp.contains("writes "),
+            "paired handoffs are connectors, not inline reads/writes text"
+        );
 
         // Activating it stages the change (re-render confirms it's now active).
         let act = String::from_utf8(
