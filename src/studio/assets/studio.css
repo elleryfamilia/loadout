@@ -480,9 +480,26 @@ body {
 /* --- workflow editor (build-your-own / customize) -------------------------- */
 .wf-edit-meta { display: flex; flex-wrap: wrap; gap: 12px; }
 .wf-edit-lead { font-size: 12px; margin: 2px 0 0; line-height: 1.45; }
-.wf-edit-slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 10px; }
-.wf-edit-slot { display: flex; flex-direction: column; gap: 9px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r); background: var(--panel-2); }
-.wf-edit-slot textarea { resize: vertical; }
+/* the five steps as a CSS-only tab row + one big panel below: radios + their
+   labels (the tabs) and the panels are all siblings, flex `order` floats the
+   tabs above the active panel, and each checked radio reveals its own panel */
+.wf-steps { display: flex; flex-wrap: wrap; gap: 7px; }
+.wf-step-radio { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
+.wf-step-tab { order: 1; display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--panel-2); color: var(--muted); font-size: 13px; cursor: pointer; user-select: none; transition: border-color .12s, color .12s, background .12s; }
+.wf-step-tab:hover { border-color: var(--border-strong); color: var(--fg); }
+.wf-step-tab.filled { color: var(--fg); }
+.wf-step-tab-icon { display: inline-flex; }
+.wf-step-tab-icon .icon { width: 15px; height: 15px; }
+.wf-step-radio:checked + .wf-step-tab { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.wf-step-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.wf-step-panel { order: 2; flex-basis: 100%; display: none; flex-direction: column; gap: 10px; margin-top: 4px; padding: 14px; border: 1px solid var(--border); border-radius: var(--r); background: var(--panel-2); }
+#wfstep-explore:checked ~ #wfpanel-explore,
+#wfstep-brainstorm:checked ~ #wfpanel-brainstorm,
+#wfstep-plan:checked ~ #wfpanel-plan,
+#wfstep-implement:checked ~ #wfpanel-implement,
+#wfstep-verify:checked ~ #wfpanel-verify { display: flex; }
+.wf-step-panel-head { display: flex; align-items: center; gap: 10px; }
+.wf-step-textarea { width: 100%; min-height: 240px; resize: vertical; line-height: 1.5; }
 .wf-edit-extras { display: flex; flex-direction: column; gap: 8px; }
 .wf-edit-extras > summary { cursor: pointer; font-size: 13px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; user-select: none; }
 .wf-edit-extra { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; align-items: end; margin-top: 8px; }

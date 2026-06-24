@@ -1121,47 +1121,15 @@ fn workflow_slot(s: &WorkflowSlotView, wf_glyph: &str) -> Markup {
     }
 }
 
-/// Glyphs offered in the workflow icon picker — a small, workflow-flavored set.
-const WORKFLOW_GLYPHS: &[&str] = &[
-    "git-branch",
-    "bolt",
-    "rocket",
-    "book",
-    "refresh",
-    "package",
-    "flask",
-    "layers",
-    "wrench",
-    "grid",
-    "terminal",
-    "gear",
-];
-
-/// A compact glyph picker for a workflow's card icon (defaults to `git-branch`).
-fn workflow_icon_picker(current: Option<&str>) -> Markup {
-    let cur = current.map(str::trim).filter(|s| !s.is_empty());
-    html! {
-        div class="field icon-pick-field" {
-            span class="field-label" { "icon" span class="field-hint" { "shown on the card" } }
-            div class="icon-picker" {
-                @for &g in WORKFLOW_GLYPHS {
-                    @let gid = format!("wfic-{g}");
-                    input type="radio" name="icon" id=(gid) value=(g) checked[cur.map(|c| c == g).unwrap_or(g == "git-branch")];
-                    label class="icon-opt" for=(gid) title=(g) { (icon(g)) }
-                }
-            }
-        }
-    }
-}
-
 /// The workflow editor modal. `base` is the workflow it starts from (`None` for
 /// a blank one); `customize` means "duplicate `base` into a new workflow" (the
 /// original is left intact) rather than editing an owned one in place.
 ///
-/// A step is just markdown — one instructions box per fixed canonical slot, plus
-/// a few custom-step rows. The handoff files / checkpoint / checklist a built-in
-/// carries aren't edited here; they ride along from `base` when you save (see
-/// [`crate::studio::state::workflow_from_form`]).
+/// The five fixed steps are a tab row; selecting one opens a big instructions
+/// box for that step — a step is just markdown. The handoff files / checkpoint /
+/// checklist a built-in carries aren't edited here; they ride along from `base`
+/// when you save (see [`crate::studio::state::workflow_from_form`]). The card
+/// icon isn't chosen — it's inherited from the source (default glyph for new).
 pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool) -> String {
     use crate::studio::state::{slot_display_name, slot_icon, MAX_WORKFLOW_EXTRAS};
     use crate::workflow::{WorkflowStage, CANONICAL_SLOTS};
@@ -1227,27 +1195,37 @@ pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool
                             input type="text" name="description" value=(desc) placeholder="what this workflow is for";
                         }
                     }
-                    (workflow_icon_picker(base.and_then(|b| b.icon.as_deref())))
 
                     p class="wf-edit-lead muted" {
-                        "Each step is just instructions — write what the agent should do, in plain text. "
-                        "Leave a step blank to skip it. Handoff files between steps carry over from the original."
+                        "Pick a step, then write what the agent should do there — plain text is fine. "
+                        "Leave a step blank to skip it; handoff files between steps carry over from the original."
                     }
-                    div class="wf-edit-slots" {
+                    // The five fixed steps as a tab row (CSS-only): each radio's
+                    // label is a tab, and the matching panel below shows its big
+                    // instructions box. Every panel stays in the form, so all
+                    // steps submit regardless of which tab is open.
+                    div class="wf-steps" {
+                        @for (i, &(key, _desc)) in CANONICAL_SLOTS.iter().enumerate() {
+                            @let filled = stage_for(key).and_then(|s| s.purpose.as_deref()).map(|p| !p.trim().is_empty()).unwrap_or(false);
+                            input type="radio" name="wf_step" class="wf-step-radio" id=(format!("wfstep-{key}")) checked[i == 0];
+                            label class=(if filled { "wf-step-tab filled" } else { "wf-step-tab" }) for=(format!("wfstep-{key}")) {
+                                span class="wf-step-tab-icon" { (icon(slot_icon(key))) }
+                                span { (slot_display_name(key)) }
+                                @if filled { span class="wf-step-dot" title="has instructions" {} }
+                            }
+                        }
                         @for &(key, desc) in CANONICAL_SLOTS {
                             @let st = stage_for(key);
-                            div class="wf-edit-slot" {
-                                div class="wf-slot-head" {
+                            div class="wf-step-panel" id=(format!("wfpanel-{key}")) {
+                                div class="wf-step-panel-head" {
                                     span class="wf-slot-icon" { (icon(slot_icon(key))) }
                                     div class="wf-slot-titles" {
                                         span class="wf-slot-name" { (slot_display_name(key)) }
                                         code class="wf-slot-cmd" { span class="cmd-prefix" { "/loadout:" } span class="cmd-name" { (key) } }
                                     }
                                 }
-                                label class="field" {
-                                    textarea name=(format!("s_{key}_purpose")) rows="3" placeholder=(desc) {
-                                        (st.and_then(|s| s.purpose.as_deref()).unwrap_or(""))
-                                    }
+                                textarea name=(format!("s_{key}_purpose")) class="wf-step-textarea" placeholder=(desc) {
+                                    (st.and_then(|s| s.purpose.as_deref()).unwrap_or(""))
                                 }
                             }
                         }

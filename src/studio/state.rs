@@ -1362,7 +1362,9 @@ pub fn workflow_from_form(
         id,
         name: opt(value_of(pairs, "name")),
         description: opt(value_of(pairs, "description")),
-        icon: opt(value_of(pairs, "icon")),
+        // No icon picker: a customized/edited workflow keeps the source's glyph;
+        // a brand-new one has none (the gallery shows a default glyph).
+        icon: base.and_then(|b| b.icon.clone()),
         stages,
         modeled_on: base.and_then(|b| b.modeled_on.clone()),
         researched: base.and_then(|b| b.researched.clone()),
