@@ -2335,6 +2335,24 @@ mod tests {
             "stages as sub-tables"
         );
 
+        // The owned workflow's detail offers a Delete; a built-in's never does.
+        let mine = body_of(route(
+            &st,
+            &req("GET", "/workflows/my-flow", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            mine.contains(r#"hx-delete="/workflows/my-flow""#),
+            "custom workflow shows a Delete action"
+        );
+        let builtin = body_of(route(
+            &st,
+            &req("GET", "/workflows/lean", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            !builtin.contains(r#"hx-delete="/workflows/lean""#),
+            "a built-in is never deletable"
+        );
+
         // Customize a built-in: its editor opens as "Customize" and creates a
         // SEPARATE copy under a new id (the built-in `lean` is left intact).
         let ed = body_of(route(

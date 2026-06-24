@@ -182,6 +182,9 @@ body {
 .btn-ghost:hover { background: var(--panel-2); }
 .btn-danger { background: transparent; border-color: var(--danger); color: var(--danger); }
 .btn-danger:hover { background: var(--danger-soft); }
+/* subtle destructive secondary action: muted until hovered, then danger-toned */
+.btn-danger-ghost { background: transparent; color: var(--muted); }
+.btn-danger-ghost:hover { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); }
 
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;

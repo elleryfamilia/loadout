@@ -1033,12 +1033,15 @@ fn workflow_detail(w: &WorkflowView) -> Markup {
                 }
                 div class="wf-detail-actions" {
                     // Built-in → "Customize" (opens the editor prefilled; saving
-                    // makes an owned copy). Owned → "Edit". Secondary styling, so
-                    // the primary action stays "Use this workflow".
+                    // makes an owned copy). Owned → "Edit" + "Delete". Built-ins
+                    // are never removable. Secondary styling, so the primary
+                    // action stays "Use this workflow".
                     @if w.builtin {
                         button class="btn btn-ghost" hx-get=(format!("/workflows/{}/customize", enc(&w.id))) hx-target="#modal" title="Duplicate into a workflow you can edit" { (icon("copy")) "Customize" }
                     } @else {
                         button class="btn btn-ghost" hx-get=(format!("/workflows/{}/edit", enc(&w.id))) hx-target="#modal" { (icon("pencil")) "Edit" }
+                        button class="btn btn-danger-ghost" hx-delete=(format!("/workflows/{}", enc(&w.id))) hx-target="#main"
+                            hx-confirm=(format!("Delete your workflow “{}”? This stages its removal.", w.title)) title="Remove this custom workflow" { (icon("trash")) "Delete" }
                     }
                     @if w.active {
                         span class="tag rec-tag wf-active-pill" { (icon("check")) "active workflow" }
