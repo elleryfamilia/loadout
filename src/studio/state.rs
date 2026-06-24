@@ -1301,26 +1301,21 @@ pub fn target_from_form(
     })
 }
 
-/// How many custom (extra) stages the workflow editor form carries. Each is a
-/// fixed-index row (`x0_…`, `x1_…`); the editor renders the existing extras plus
-/// one blank, and the parser keeps the rows whose name is non-empty.
-pub const MAX_WORKFLOW_EXTRAS: usize = 4;
-
 /// Build a [`Workflow`](crate::workflow::Workflow) from the workflow editor form.
 ///
-/// Each step is just markdown: the form carries one `s_<slot>_purpose` per
-/// canonical slot (blank = the workflow skips that step) plus up to
-/// [`MAX_WORKFLOW_EXTRAS`] custom `x<i>` rows (name + purpose). The structured
-/// bits a built-in carries — handoff `reads`/`writes`, the `gate`, the `exit`
-/// checklist — aren't edited here; they **carry over** from `base` (the workflow
-/// being customized/edited) per step, so customizing keeps the handoffs without
-/// the user juggling fields. A brand-new step (no match in `base`) has none.
-/// `base` also supplies the provenance fields (`modeled_on`/`source`).
+/// The editor only edits the five fixed canonical steps — one `s_<slot>_purpose`
+/// per slot, blank = the workflow skips that step. Everything structural rides
+/// along from `base` (the workflow being customized/edited): each step keeps the
+/// source's handoff `reads`/`writes`, `gate`, and `exit` checklist (only the
+/// prose changes), and any **extra** steps a workflow declares beyond the five
+/// (e.g. compound's `compound` step) are carried over verbatim — there's no UI to
+/// add or drop them, so a customized workflow never silently loses one. `base`
+/// also supplies the provenance fields (`modeled_on`/`source`).
 pub fn workflow_from_form(
     base: Option<&crate::workflow::Workflow>,
     pairs: &[(String, String)],
 ) -> crate::Result<crate::workflow::Workflow> {
-    use crate::workflow::{Workflow, WorkflowStage, CANONICAL_SLOTS};
+    use crate::workflow::{canonical_slot, Workflow, WorkflowStage, CANONICAL_SLOTS};
 
     // Edit carries a fixed `id`; a new/customized workflow derives it from `name`.
     let id = opt(value_of(pairs, "id"))
@@ -1349,13 +1344,14 @@ pub fn workflow_from_form(
             stages.push(build_stage(key, purpose));
         }
     }
-    // Custom extra steps (name-gated, fixed indices).
-    for i in 0..MAX_WORKFLOW_EXTRAS {
-        let Some(name) = opt(value_of(pairs, &format!("x{i}_name"))) else {
-            continue;
-        };
-        let purpose = opt(value_of(pairs, &format!("x{i}_purpose"))).unwrap_or_default();
-        stages.push(build_stage(&name, purpose));
+    // Carry over any extra (non-canonical) steps the source declares verbatim —
+    // they aren't editable here, but customizing must not drop them.
+    if let Some(b) = base {
+        for s in &b.stages {
+            if canonical_slot(&s.name).is_none() {
+                stages.push(s.clone());
+            }
+        }
     }
 
     let wf = Workflow {
@@ -1568,6 +1564,38 @@ pub fn draft_profile_from_form(pairs: &[(String, String)]) -> LoadoutConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workflow_from_form_edits_prose_and_carries_structure_over() {
+        // Customize the compound built-in: the form only edits canonical-step
+        // prose, but the source's handoffs AND its extra `compound` step must
+        // survive — the editor has no UI for them, so they ride along from base.
+        let compound = crate::workflow::builtin_workflows()
+            .into_iter()
+            .find(|w| w.id == "compound")
+            .unwrap();
+        let pairs = parse_pairs(
+            "mode=new&from=compound&name=Compound+mine\
+             &s_brainstorm_purpose=My+own+brainstorm\
+             &s_plan_purpose=My+own+plan\
+             &s_implement_purpose=Build\
+             &s_verify_purpose=Review",
+        );
+        let wf = workflow_from_form(Some(&compound), &pairs).unwrap();
+        assert_eq!(wf.id, "compound-mine");
+        // The edited prose landed on the canonical plan step…
+        let plan = wf.stages.iter().find(|s| s.name == "plan").unwrap();
+        assert_eq!(plan.purpose.as_deref(), Some("My own plan"));
+        // …while plan's handoff carried over from compound untouched.
+        assert_eq!(plan.writes.as_deref(), Some("plan.md"));
+        // …and the extra `compound` step survived verbatim (not in the form).
+        let extra = wf.stages.iter().find(|s| s.name == "compound").unwrap();
+        assert!(crate::workflow::canonical_slot(&extra.name).is_none());
+        assert!(extra.purpose.as_deref().unwrap().contains("docs/solutions"));
+        // The card glyph is inherited (no picker), as is the provenance.
+        assert_eq!(wf.icon.as_deref(), Some("package"));
+        assert!(wf.source.is_some());
+    }
 
     #[test]
     fn parse_pairs_decodes() {

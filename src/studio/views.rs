@@ -1131,7 +1131,7 @@ fn workflow_slot(s: &WorkflowSlotView, wf_glyph: &str) -> Markup {
 /// when you save (see [`crate::studio::state::workflow_from_form`]). The card
 /// icon isn't chosen — it's inherited from the source (default glyph for new).
 pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool) -> String {
-    use crate::studio::state::{slot_display_name, slot_icon, MAX_WORKFLOW_EXTRAS};
+    use crate::studio::state::{slot_display_name, slot_icon};
     use crate::workflow::{WorkflowStage, CANONICAL_SLOTS};
 
     let layout = base.map(|b| b.canonical_layout());
@@ -1143,11 +1143,6 @@ pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool
                 .and_then(|s| s.stage)
         })
     };
-    let extras: Vec<&WorkflowStage> = layout
-        .as_ref()
-        .map(|l| l.extras.clone())
-        .unwrap_or_default();
-    let extra_rows = (extras.len() + 1).min(MAX_WORKFLOW_EXTRAS);
 
     // Edit (owned, in place) vs new/customize (creates a fresh workflow).
     let is_edit = base.is_some() && !customize;
@@ -1226,21 +1221,6 @@ pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool
                                 }
                                 textarea name=(format!("s_{key}_purpose")) class="wf-step-textarea" placeholder=(desc) {
                                     (st.and_then(|s| s.purpose.as_deref()).unwrap_or(""))
-                                }
-                            }
-                        }
-                    }
-
-                    details class="wf-edit-extras" {
-                        summary { "Custom steps " span class="field-hint" { "optional — beyond the five" } }
-                        @for i in 0..extra_rows {
-                            @let ex = extras.get(i).copied();
-                            div class="wf-edit-extra" {
-                                label class="field" { span class="field-label" { "name" }
-                                    input type="text" name=(format!("x{i}_name")) value=(ex.map(|s| s.name.as_str()).unwrap_or("")) placeholder="e.g. compound";
-                                }
-                                label class="field grow" { span class="field-label" { "instructions" }
-                                    input type="text" name=(format!("x{i}_purpose")) value=(ex.and_then(|s| s.purpose.as_deref()).unwrap_or("")) placeholder="what this step does";
                                 }
                             }
                         }
