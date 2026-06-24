@@ -4,8 +4,11 @@
 // same-origin fetch; hx-target selects where the returned fragment is swapped
 // (innerHTML); hx-trigger picks the event(s) (default: submit for forms, click
 // otherwise; `load` fires once; `delay:Nms` debounces); hx-confirm gates on a
-// window.confirm. Swapped-in content is re-processed so nested controls work.
-// Drop in real htmx later and the markup is unchanged.
+// window.confirm. A response may override the destination with an `HX-Retarget`
+// header (htmx-compatible) — used so a modal form's error renders inside the
+// modal instead of replacing the page behind it. Swapped-in content is
+// re-processed so nested controls work. Drop in real htmx later and the markup
+// is unchanged.
 (function () {
   "use strict";
 
@@ -66,9 +69,15 @@
       // on success the target is replaced (so the class goes with it), and the
       // finally cleans up on error or when the element survives the swap.
       el.classList.add("htmx-request");
+      var retarget = null;
       fetch(url, opts)
-        .then(function (r) { return r.text(); })
-        .then(function (t) { swap(target, t); })
+        .then(function (r) {
+          // A response can redirect its own swap (e.g. a validation error into
+          // the modal's error slot). Same-origin, so the header is readable.
+          retarget = r.headers.get("HX-Retarget");
+          return r.text();
+        })
+        .then(function (t) { swap(retarget || target, t); })
         .catch(function () { /* leave the last good fragment in place */ })
         .finally(function () { el.classList.remove("htmx-request"); });
     }

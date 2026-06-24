@@ -1354,6 +1354,11 @@ pub fn workflow_from_form(
         }
     }
 
+    // A friendlier message than validate()'s generic "has no stages".
+    if stages.is_empty() {
+        anyhow::bail!("write instructions for at least one step before saving");
+    }
+
     let wf = Workflow {
         id,
         name: opt(value_of(pairs, "name")),

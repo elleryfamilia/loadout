@@ -1177,6 +1177,9 @@ pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool
                     (close_btn())
                 }
                 div class="modal-body" {
+                    // Save errors land here (via HX-Retarget), so they show inside
+                    // the modal rather than behind it. Empty → hidden via CSS.
+                    div id="wf-editor-msg" class="wf-editor-msg" {}
                     // `mode` = edit (in place) or new (create). `from` names the
                     // workflow this one copies its handoffs/provenance from.
                     input type="hidden" name="mode" value=(if is_edit { "edit" } else { "new" });

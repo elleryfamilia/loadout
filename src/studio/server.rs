@@ -61,6 +61,15 @@ impl Resp {
             body: s.into().into_bytes(),
         }
     }
+    /// Like [`Resp::html`] but retargets the swap via htmx's `HX-Retarget` /
+    /// `HX-Reswap` headers, so a modal form's error lands inside the modal
+    /// (`target`) instead of replacing the page behind it.
+    fn html_retarget(s: impl Into<String>, target: &str) -> Resp {
+        let mut r = Resp::html(s);
+        r.headers.push(("HX-Retarget".into(), target.to_string()));
+        r.headers.push(("HX-Reswap".into(), "innerHTML".into()));
+        r
+    }
     fn asset(body: Vec<u8>, content_type: &str) -> Resp {
         Resp {
             status: 200,
@@ -676,12 +685,16 @@ fn handle_workflow_open(state: &Arc<Mutex<StudioState>>, id: &str, customize: bo
 /// Stage a create (new id) or edit/adopt (existing/built-in id) of an owned
 /// workflow from the editor form, then re-render the tab focused on it.
 fn handle_workflow_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+    // Errors from this modal form render INSIDE the editor (its `#wf-editor-msg`
+    // slot), not by replacing the tab behind the still-open modal.
+    let err = |msg: String| Resp::html_retarget(views::error_fragment(&msg), "#wf-editor-msg");
+
     let pairs = state::parse_pairs(&req.body);
     let is_new = field(&req.body, "mode") == "new";
     let snap = state.lock().unwrap().snapshot();
     let cfg = match state::staged_config(&snap) {
         Ok(c) => c,
-        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
+        Err(e) => return err(e.to_string()),
     };
     // The workflow this one starts from: `from` names it (the built-in being
     // customized, or the owned one being edited). It supplies the carried-over
@@ -693,7 +706,7 @@ fn handle_workflow_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         .flatten();
     let workflow = match state::workflow_from_form(base, &pairs) {
         Ok(w) => w,
-        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
+        Err(e) => return err(e.to_string()),
     };
     let id = workflow.id.clone();
 
@@ -701,9 +714,9 @@ fn handle_workflow_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         // A new workflow can't claim an id already in the catalog (owned or
         // built-in) — point the user at Customize for those instead.
         if effective.iter().any(|w| w.id == id) {
-            return Resp::html(views::error_fragment(&format!(
+            return err(format!(
                 "a workflow “{id}” already exists — open it and Customize instead"
-            )));
+            ));
         }
         StagedOp::CreateWorkflow {
             layer: Layer::Global,
@@ -718,13 +731,17 @@ fn handle_workflow_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     };
 
     if let Err(e) = state.lock().unwrap().session.stage(op) {
-        return Resp::html(views::error_fragment(&e.to_string()));
+        return err(e.to_string());
     }
+    // Success: re-render the tab focused on the new workflow and close the modal.
     let snap = state.lock().unwrap().snapshot();
-    Resp::html(views::workflows_result(
+    let mut resp = Resp::html(views::workflows_result(
         &state::workflows_view(&snap, Some(&id)),
         &format!("staged workflow “{id}” — Apply to save"),
-    ))
+    ));
+    resp.body
+        .extend_from_slice(views::modal_close_loader().as_bytes());
+    resp
 }
 
 /// Stage removal of an owned workflow (built-ins can't be deleted).
@@ -2419,6 +2436,36 @@ mod tests {
         assert!(
             nope.contains("built-ins can't be deleted"),
             "built-in delete refused"
+        );
+    }
+
+    #[test]
+    fn empty_workflow_save_errors_inside_the_modal() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        // A new workflow with a name but no step content is invalid (no stages).
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/workflows",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "mode=new&from=&name=Empty+Flow",
+            ),
+        );
+        let body = String::from_utf8(r.body.clone()).unwrap();
+        assert!(
+            body.contains("at least one step"),
+            "friendly validation error shown: {body}"
+        );
+        // HX-Retarget routes the error into the editor's slot, not #main behind it.
+        assert!(
+            r.headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case("HX-Retarget") && v == "#wf-editor-msg"),
+            "error retargeted into the modal, got headers {:?}",
+            r.headers
         );
     }
 

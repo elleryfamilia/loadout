@@ -503,6 +503,8 @@ body {
 #wfstep-verify:checked ~ #wfpanel-verify { display: flex; }
 .wf-step-panel-head { display: flex; align-items: center; gap: 10px; }
 .wf-step-textarea { width: 100%; min-height: 240px; resize: vertical; line-height: 1.5; }
+/* the editor's inline error slot — collapses to nothing until an error fills it */
+.wf-editor-msg:empty { display: none; }
 
 /* --- modal dialog ---------------------------------------------------------- */
 .modal-root { position: fixed; inset: 0; z-index: 50; display: none; }
