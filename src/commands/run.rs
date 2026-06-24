@@ -463,6 +463,7 @@ fn skill_blurb(id: &str) -> &'static str {
     match id {
         "loadout-migrate" => "imports an existing CLAUDE.md/AGENTS.md into loadout",
         "loadout-remember" => "saves durable preferences you state mid-session as loadout guidance",
+        "loadout-import-workflow" => "imports another repo's command suite as a loadout workflow",
         _ => "an agent skill shipped with loadout",
     }
 }

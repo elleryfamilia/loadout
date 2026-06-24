@@ -68,6 +68,29 @@ fn remember_skill_reference_toml_examples_are_valid_config() {
 }
 
 #[test]
+fn import_workflow_skill_reference_toml_examples_are_valid_config() {
+    let blocks = check_skill_reference("loadout-import-workflow");
+
+    // The worked example defines the `compound` workflow with all five steps —
+    // it must parse as a real `[[workflows]]` entry, not just look right.
+    let cfg = parse_global(&blocks[0]).unwrap();
+    let wf = cfg
+        .workflows
+        .iter()
+        .find(|w| w.id == "compound")
+        .expect("worked example defines the compound workflow");
+    assert_eq!(wf.stages.len(), 5);
+
+    // An activation snippet must set the global active workflow.
+    assert!(
+        blocks.iter().any(|b| parse_global(b)
+            .map(|c| c.default_workflow.as_deref() == Some("compound"))
+            .unwrap_or(false)),
+        "an activation example should set [defaults].workflow"
+    );
+}
+
+#[test]
 fn shipped_example_config_is_a_valid_global_config() {
     // `examples/config.toml` (+ the private `local.toml`) is the annotated
     // global config we point people at — it must stay valid as one.

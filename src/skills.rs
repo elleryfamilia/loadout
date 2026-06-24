@@ -81,9 +81,25 @@ pub const REMEMBER: Skill = Skill {
     ],
 };
 
+/// The `loadout-import-workflow` skill: maps another repo's command/skill suite
+/// onto loadout's fixed canonical spine and writes it as a `[[workflows]]` entry.
+pub const IMPORT_WORKFLOW: Skill = Skill {
+    id: "loadout-import-workflow",
+    files: &[
+        SkillFile {
+            relpath: "SKILL.md",
+            content: include_str!("../skills/loadout-import-workflow/SKILL.md"),
+        },
+        SkillFile {
+            relpath: "reference.md",
+            content: include_str!("../skills/loadout-import-workflow/reference.md"),
+        },
+    ],
+};
+
 /// Every skill shipped in this binary.
 pub fn all() -> &'static [Skill] {
-    &[MIGRATE, REMEMBER]
+    &[MIGRATE, REMEMBER, IMPORT_WORKFLOW]
 }
 
 /// Look up an embedded skill by id.
@@ -478,6 +494,82 @@ mod tests {
                 skill.id
             );
         }
+    }
+
+    #[test]
+    fn import_workflow_skill_is_registered_with_both_files() {
+        let skill = by_id("loadout-import-workflow").expect("skill registered");
+        assert_eq!(skill.files.len(), 2);
+        assert_eq!(skill.files[0].relpath, "SKILL.md");
+        assert_eq!(skill.files[1].relpath, "reference.md");
+        // The process file must teach the fixed-spine model, naming every slot.
+        let md = skill.files[0].content;
+        for slot in ["explore", "brainstorm", "plan", "implement", "verify"] {
+            assert!(md.contains(slot), "SKILL.md should name the {slot} slot");
+        }
+    }
+
+    #[test]
+    fn import_workflow_reference_example_parses_and_canonicalizes() {
+        use crate::workflow::Workflow;
+
+        #[derive(serde::Deserialize)]
+        struct Doc {
+            workflows: Vec<Workflow>,
+        }
+
+        // Pull the worked-example fenced ```toml block (the one defining the
+        // workflow) out of the shipped reference and parse it as real config, so
+        // the documented example can never drift from the strict parser/model.
+        let reference = IMPORT_WORKFLOW.files[1].content;
+        let block = fenced_toml_blocks(reference)
+            .into_iter()
+            .find(|b| b.contains("[[workflows]]"))
+            .expect("reference has a [[workflows]] example");
+        let doc: Doc = toml::from_str(&block).expect("example block is valid config");
+        let wf = doc.workflows.into_iter().next().expect("one workflow");
+
+        // It must itself be well-formed.
+        assert!(
+            wf.validate().is_empty(),
+            "example fails validate: {:?}",
+            wf.validate()
+        );
+
+        // And lay onto the spine exactly as documented: explore skipped; the
+        // `review` stage fills the `verify` slot; `compound` is the lone extra.
+        let steps: Vec<&str> = wf
+            .canonical_layout()
+            .steps()
+            .into_iter()
+            .map(|(command, _)| command)
+            .collect();
+        assert_eq!(
+            steps,
+            ["brainstorm", "plan", "implement", "verify", "compound"],
+            "example must canonicalize to four filled slots + the compound extra"
+        );
+    }
+
+    /// Collect the contents of every ```toml fenced block in a markdown string.
+    fn fenced_toml_blocks(md: &str) -> Vec<String> {
+        let mut blocks = Vec::new();
+        let mut current: Option<String> = None;
+        for line in md.lines() {
+            match &mut current {
+                Some(buf) if line.trim_start().starts_with("```") => {
+                    blocks.push(std::mem::take(buf));
+                    current = None;
+                }
+                Some(buf) => {
+                    buf.push_str(line);
+                    buf.push('\n');
+                }
+                None if line.trim_start() == "```toml" => current = Some(String::new()),
+                None => {}
+            }
+        }
+        blocks
     }
 
     #[test]
