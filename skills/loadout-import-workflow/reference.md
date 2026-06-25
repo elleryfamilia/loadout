@@ -59,7 +59,8 @@ The parser is strict (`deny_unknown_fields`). Top-level keys:
 | key | required | notes |
 |-----|----------|-------|
 | `name` | yes | the source step's name. Determines the slot via the table above; an unmatched name is an extra. |
-| `purpose` | no | the one-line contract rendered into the step (the author's framing, condensed). |
+| `purpose` | no | the one-line contract rendered into the step (the author's framing, condensed). The label shown everywhere — the always-on `## Workflow` context map, the command's frontmatter, and the studio card. |
+| `instructions` | no | the step's elaborate, multi-line body — the full prescriptive guidance. Injected **only** into the per-step `/loadout:<command>` file when that command runs, never into the always-on context map. This is where an import carries real substance; markdown, written as a TOML multi-line string (`"""…"""`). |
 | `reads` | no | a bare handoff filename it consumes, e.g. `plan.md` (lives under `.loadout/workflow/artifacts/`). |
 | `writes` | no | a bare handoff filename it produces, e.g. `plan.md`. |
 | `gate` | no | `true` marks a checkpoint the user reviews before moving on (guidance only). |
@@ -104,6 +105,14 @@ writes = "requirements.md"
 [[workflows.stages]]
 name = "plan"
 purpose = "Turn the requirements into a detailed implementation plan with safeguards. Planning is ~80% of the work."
+instructions = """
+Planning is where most of the work happens — treat a thin plan as the bug, not the implementation.
+
+- Turn each requirement into concrete, ordered tasks with the exact files and changes spelled out.
+- Build in safeguards: for every risky step, say how you'll know it worked and how you'd back it out.
+- Resolve unknowns here, in the plan, rather than leaving them for the implementer to improvise.
+- The plan you hand off should let a fresh agent build the whole thing without re-deriving the design.
+"""
 reads = "requirements.md"
 writes = "plan.md"
 

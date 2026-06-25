@@ -135,6 +135,12 @@ fn stage_body(
     if let Some(purpose) = &stage.purpose {
         let _ = writeln!(s, "{purpose}\n");
     }
+    // Elaborate, on-demand guidance (channel 2 only): the full prescriptive body
+    // lands in the per-step command file but never in the always-on `## Workflow`
+    // context section, so depth here costs nothing until the command is invoked.
+    if let Some(instructions) = &stage.instructions {
+        let _ = writeln!(s, "{}\n", instructions.trim());
+    }
     // `artifact_env_var` returns `None` for an unsafe name, so this both
     // validates the artifact and yields its `LOADOUT_<NAME>_PATH` env var.
     if let Some(reads) = &stage.reads {
@@ -263,6 +269,7 @@ mod tests {
         let stg = |name: &str, purpose: &str| WorkflowStage {
             name: name.into(),
             purpose: Some(purpose.into()),
+            instructions: None,
             reads: None,
             writes: None,
             gate: false,
@@ -327,6 +334,7 @@ mod tests {
             stages: vec![WorkflowStage {
                 name: "plan".into(),
                 purpose: Some("Write the \"spec\": be precise".into()),
+                instructions: None,
                 reads: None,
                 writes: None,
                 gate: false,
@@ -345,6 +353,70 @@ mod tests {
     }
 
     #[test]
+    fn instructions_land_in_the_command_body_not_the_frontmatter() {
+        // The elaborate `instructions` body rides in the command prompt (channel
+        // 2), while the one-line `purpose` stays the frontmatter description.
+        let wf = Workflow {
+            id: "x".into(),
+            name: Some("X".into()),
+            description: None,
+            icon: None,
+            stages: vec![WorkflowStage {
+                name: "plan".into(),
+                purpose: Some("Plan the work".into()),
+                instructions: Some(
+                    "INSTRUCTIONS-MARKER: right-size each task to a few minutes.".into(),
+                ),
+                reads: None,
+                writes: None,
+                gate: false,
+                exit: vec![],
+            }],
+            modeled_on: None,
+            researched: None,
+            source: None,
+            disabled: false,
+            origin: crate::fragment::Layer::Global,
+        };
+        let cmds = stage_commands(&wf, CommandFormat::Markdown);
+        let plan = &cmds[0];
+        // Body carries the elaborate instructions.
+        assert!(plan.content.contains("INSTRUCTIONS-MARKER"));
+        // Frontmatter description is the one-line purpose, not the instructions.
+        assert!(plan.content.contains(r#"description: "Plan the work""#));
+        let desc_line = plan
+            .content
+            .lines()
+            .find(|l| l.starts_with("description:"))
+            .unwrap();
+        assert!(!desc_line.contains("INSTRUCTIONS-MARKER"));
+        // Instructions render after the purpose summary in the body.
+        let purpose_at = plan.content.find("Plan the work").unwrap();
+        let instr_at = plan.content.find("INSTRUCTIONS-MARKER").unwrap();
+        assert!(instr_at > purpose_at, "instructions follow the purpose");
+    }
+
+    #[test]
+    fn superpowers_steps_carry_their_elaborate_instructions() {
+        // The built-in Superpowers workflow ships a full prescriptive body for
+        // each of its four active steps (channel 2). The `review` stage generates
+        // as the canonical `/loadout:verify` command.
+        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Markdown);
+        let plan = cmds.iter().find(|c| c.filename == "plan.md").unwrap();
+        // The real upstream writing-plans body lands in the command…
+        assert!(plan.content.contains("bite-sized tasks"));
+        // …with its loader-only YAML frontmatter stripped out.
+        assert!(!plan.content.contains("name: writing-plans"));
+        // …while the one-line summary stays the frontmatter description.
+        assert!(plan
+            .content
+            .contains(r#"description: "Break the approved design"#));
+        // The real requesting-code-review body lands on /loadout:verify.
+        let verify = cmds.iter().find(|c| c.filename == "verify.md").unwrap();
+        assert!(verify.content.contains("code reviewer subagent"));
+    }
+
+    #[test]
     fn unsafe_artifact_name_is_not_referenced() {
         // A hostile/malformed artifact name never becomes a path in the command.
         let wf = Workflow {
@@ -355,6 +427,7 @@ mod tests {
             stages: vec![WorkflowStage {
                 name: "plan".into(),
                 purpose: Some("do".into()),
+                instructions: None,
                 reads: None,
                 writes: Some("../escape.md".into()),
                 gate: false,

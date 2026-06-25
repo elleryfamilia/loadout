@@ -91,6 +91,13 @@ pub struct WorkflowStage {
     /// What this stage is for — the one-line contract rendered into the spine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
+    /// Elaborate, on-demand guidance for this stage — the full prescriptive
+    /// body baked into the per-step command file (channel 2) when
+    /// `/loadout:<command>` runs. The always-on `## Workflow` context section
+    /// (channel 1) keeps using only `purpose`, so depth here costs nothing
+    /// until the step is actually invoked. Markdown, injected verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
     /// Handoff artifact this stage reads: a bare filename under
     /// `.loadout/workflow/artifacts/` (e.g. `plan.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -408,6 +415,22 @@ pub fn resolve_workflow<'a>(
     (!chosen.disabled).then_some(chosen)
 }
 
+/// Strip a leading YAML frontmatter block (`---\n…\n---`) from a vendored skill
+/// file, returning the body. The vendored files under `vendored/` are kept
+/// byte-for-byte so the sync action can diff them against upstream; their
+/// frontmatter is loader metadata (name/description), just noise inside a
+/// rendered command, so it's dropped when the body becomes a step's
+/// `instructions`. No frontmatter → the input, trimmed.
+fn strip_frontmatter(s: &str) -> &str {
+    match s
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---"))
+    {
+        Some((_frontmatter, body)) => body.trim_start(),
+        None => s.trim_start(),
+    }
+}
+
 /// The shipped workflow catalog: read-only starting points you bind directly or
 /// **copy and hand-edit** (a user `[[workflows]]` of the same id shadows the
 /// built-in). Each is modeled on a real suite and stamped with provenance.
@@ -421,6 +444,7 @@ pub fn builtin_workflows() -> Vec<Workflow> {
         WorkflowStage {
             name: name.to_string(),
             purpose: Some(purpose.to_string()),
+            instructions: None,
             reads: None,
             writes: None,
             gate: false,
@@ -466,6 +490,15 @@ pub fn builtin_workflows() -> Vec<Workflow> {
             vec![
                 WorkflowStage {
                     writes: Some("design.md".to_string()),
+                    // The real upstream skill, vendored verbatim (see vendored/
+                    // superpowers + vendored/sources.toml). Loaded only into the
+                    // on-demand command body, never the always-on context map.
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/superpowers/brainstorming.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
                     ..stage(
                         "brainstorm",
                         "Refine the rough idea through questions, explore alternatives, and \
@@ -475,6 +508,12 @@ pub fn builtin_workflows() -> Vec<Workflow> {
                 WorkflowStage {
                     reads: Some("design.md".to_string()),
                     writes: Some("plan.md".to_string()),
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/superpowers/writing-plans.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
                     ..stage(
                         "plan",
                         "Break the approved design into bite-sized tasks — each a few \
@@ -483,6 +522,12 @@ pub fn builtin_workflows() -> Vec<Workflow> {
                 },
                 WorkflowStage {
                     reads: Some("plan.md".to_string()),
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/superpowers/subagent-driven-development.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
                     ..stage(
                         "implement",
                         "Dispatch a fresh subagent per task; work test-first and keep each \
@@ -495,6 +540,12 @@ pub fn builtin_workflows() -> Vec<Workflow> {
                         "each task reviewed for spec compliance".to_string(),
                         "then reviewed for code quality".to_string(),
                     ],
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/superpowers/requesting-code-review.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
                     ..stage(
                         "review",
                         "Two-stage review — does it match the spec, then is the code good \
@@ -796,6 +847,7 @@ mod tests {
             stages: vec![WorkflowStage {
                 name: "plan".into(),
                 purpose: None,
+                instructions: None,
                 reads: None,
                 writes: Some("plan.md".into()),
                 gate: false,
@@ -823,6 +875,7 @@ mod tests {
                 WorkflowStage {
                     name: "plan".into(),
                     purpose: None,
+                    instructions: None,
                     reads: None,
                     writes: None,
                     gate: false,
@@ -831,6 +884,7 @@ mod tests {
                 WorkflowStage {
                     name: "plan".into(),
                     purpose: None,
+                    instructions: None,
                     reads: None,
                     writes: None,
                     gate: false,
@@ -849,6 +903,7 @@ mod tests {
             stages: vec![WorkflowStage {
                 name: "x".into(),
                 purpose: None,
+                instructions: None,
                 reads: None,
                 writes: Some("../escape.md".into()),
                 gate: false,
@@ -881,6 +936,7 @@ mod tests {
         let stage = WorkflowStage {
             name: "plan".into(),
             purpose: None,
+            instructions: None,
             reads: None,
             writes: Some("plan.md".into()),
             gate: false,
@@ -928,6 +984,7 @@ mod tests {
             stages: vec![WorkflowStage {
                 name: "go".into(),
                 purpose: None,
+                instructions: None,
                 reads: None,
                 writes: None,
                 gate: false,

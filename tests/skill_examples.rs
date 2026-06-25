@@ -81,6 +81,19 @@ fn import_workflow_skill_reference_toml_examples_are_valid_config() {
         .expect("worked example defines the compound workflow");
     assert_eq!(wf.stages.len(), 5);
 
+    // The worked example shows the elaborate `instructions` body the import skill
+    // teaches — the plan stage carries one, parsed from a TOML multi-line string.
+    let plan = wf
+        .stages
+        .iter()
+        .find(|s| s.name == "plan")
+        .expect("worked example has a plan stage");
+    let instr = plan
+        .instructions
+        .as_deref()
+        .expect("the plan stage demonstrates an instructions body");
+    assert!(instr.contains("Planning is where most of the work happens"));
+
     // An activation snippet must set the global active workflow.
     assert!(
         blocks.iter().any(|b| parse_global(b)

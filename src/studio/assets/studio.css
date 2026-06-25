@@ -480,6 +480,8 @@ body {
 .stage-exit { margin: 1px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .stage-exit li { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--faint); }
 .stage-exit .icon { width: 11px; height: 11px; flex: none; color: var(--ok); }
+.wf-detail-mark { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; font-size: 10.5px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; color: var(--accent); }
+.wf-detail-mark .icon { width: 12px; height: 12px; }
 .wf-detail-foot { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .wf-foot-item { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--faint); }
 .wf-foot-item .icon { width: 13px; height: 13px; }

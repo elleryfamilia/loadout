@@ -214,6 +214,10 @@ pub struct WorkflowSlotView {
     /// The workflow's own one-line take on this step (the style), or `None` when
     /// skipped.
     pub purpose: Option<String>,
+    /// Whether this step carries an elaborate `instructions` body (channel 2),
+    /// shown as a small "details" marker on the card so users can see at a glance
+    /// which steps teach the agent more than the one-line purpose.
+    pub has_instructions: bool,
     /// Handoff artifact this slot reads (a bare filename), shown as a chip.
     pub reads: Option<String>,
     /// Handoff artifact this slot writes (a bare filename), shown as a chip.
@@ -746,6 +750,7 @@ fn workflow_slots(
                 step_desc: slot.desc.to_string(),
                 filled: false,
                 purpose: None,
+                has_instructions: false,
                 reads: None,
                 writes: None,
                 exit: Vec::new(),
@@ -755,6 +760,7 @@ fn workflow_slots(
                 Some(s) => WorkflowSlotView {
                     filled: true,
                     purpose: s.purpose.clone(),
+                    has_instructions: has_text(&s.instructions),
                     reads: s.reads.clone(),
                     writes: s.writes.clone(),
                     exit: s.exit.clone(),
@@ -776,6 +782,7 @@ fn workflow_slots(
             step_desc: String::new(),
             filled: true,
             purpose: s.purpose.clone(),
+            has_instructions: has_text(&s.instructions),
             reads: s.reads.clone(),
             writes: s.writes.clone(),
             exit: s.exit.clone(),
@@ -791,6 +798,7 @@ fn stage_content_differs(
     b: &crate::workflow::WorkflowStage,
 ) -> bool {
     a.purpose != b.purpose
+        || a.instructions != b.instructions
         || a.reads != b.reads
         || a.writes != b.writes
         || a.gate != b.gate
@@ -1185,6 +1193,11 @@ fn opt(s: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Whether an optional string holds non-whitespace text.
+fn has_text(s: &Option<String>) -> bool {
+    s.as_deref().map(|t| !t.trim().is_empty()).unwrap_or(false)
+}
+
 /// Which writable layer a form's `visibility` control selects. Fragments and
 /// profiles are global-only, so studio always authors into a global layer:
 /// `config.toml` (shared) or, when marked private, `local.toml` (real hostnames
@@ -1324,12 +1337,15 @@ pub fn workflow_from_form(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("a workflow needs a name"))?;
 
-    // A step keeps the source stage's handoff/gate/exit, replacing only the prose.
+    // A step keeps the source stage's handoff/gate/exit, replacing only the prose
+    // (the one-line `purpose` summary and the optional elaborate `instructions`
+    // body, both carried by the editor's per-step inputs).
     let build_stage = |name: &str, purpose: String| -> WorkflowStage {
         let src = base.and_then(|b| b.stage_for_command(name));
         WorkflowStage {
             name: name.to_string(),
             purpose: Some(purpose),
+            instructions: opt(value_of(pairs, &format!("s_{name}_instructions"))),
             reads: src.and_then(|s| s.reads.clone()),
             writes: src.and_then(|s| s.writes.clone()),
             gate: src.map(|s| s.gate).unwrap_or(false),
@@ -1603,6 +1619,30 @@ mod tests {
     }
 
     #[test]
+    fn workflow_from_form_round_trips_the_per_step_instructions() {
+        // Each step's elaborate `instructions` body comes from its own
+        // `s_<key>_instructions` textarea; a step with a summary but no
+        // instructions field carries `None`.
+        let pairs = parse_pairs(
+            "mode=new&name=My+flow\
+             &s_plan_purpose=Plan+it\
+             &s_plan_instructions=Right-size+each+task+to+a+few+minutes.\
+             &s_implement_purpose=Build+it",
+        );
+        let wf = workflow_from_form(None, &pairs).unwrap();
+        let plan = wf.stages.iter().find(|s| s.name == "plan").unwrap();
+        assert_eq!(plan.purpose.as_deref(), Some("Plan it"));
+        assert_eq!(
+            plan.instructions.as_deref(),
+            Some("Right-size each task to a few minutes.")
+        );
+        // The implement step had a summary but no instructions field → None.
+        let implement = wf.stages.iter().find(|s| s.name == "implement").unwrap();
+        assert_eq!(implement.purpose.as_deref(), Some("Build it"));
+        assert_eq!(implement.instructions, None);
+    }
+
+    #[test]
     fn parse_pairs_decodes() {
         let got = parse_pairs("lang=rust&agent=claude&q=a%20b");
         assert_eq!(got[0], ("lang".to_string(), "rust".to_string()));
@@ -1799,5 +1839,28 @@ mod tests {
             layer_from_form(&parse_pairs("scope=repo&visibility=private")),
             Layer::GlobalLocal
         );
+    }
+
+    #[test]
+    fn slot_view_flags_steps_that_carry_elaborate_instructions() {
+        let builtin = |id: &str| {
+            crate::workflow::builtin_workflows()
+                .into_iter()
+                .find(|w| w.id == id)
+                .unwrap()
+        };
+        // Superpowers ships an instructions body on every active step, so the
+        // card view flags each filled slot with the "details" marker.
+        let sp = builtin("superpowers");
+        let slots = workflow_slots(&sp, None);
+        let plan = slots.iter().find(|s| s.command == "plan").unwrap();
+        assert!(plan.filled);
+        assert!(plan.has_instructions, "superpowers plan carries a body");
+        // Lean is purpose-only, so its slots are filled but carry no marker.
+        let lean = builtin("lean");
+        let lean_slots = workflow_slots(&lean, None);
+        let lp = lean_slots.iter().find(|s| s.command == "plan").unwrap();
+        assert!(lp.filled);
+        assert!(!lp.has_instructions, "lean plan is purpose-only");
     }
 }

@@ -679,4 +679,38 @@ mod tests {
         edited.stages[0].purpose = Some("changed".into());
         assert_ne!(with, overlay_fingerprint(&ctx, &comp, Some(&edited)));
     }
+
+    #[test]
+    fn workflow_section_uses_purpose_not_the_elaborate_instructions() {
+        // Channel 1 (the always-on context map) must stay terse: it shows the
+        // one-line purpose but never the elaborate `instructions` body, which is
+        // reserved for the per-step command file (channel 2).
+        use crate::workflow::{Workflow, WorkflowStage};
+        let wf = Workflow {
+            id: "x".into(),
+            name: Some("X".into()),
+            description: None,
+            icon: None,
+            stages: vec![WorkflowStage {
+                name: "plan".into(),
+                purpose: Some("Plan the work".into()),
+                instructions: Some("INSTRUCTIONS-MARKER: the long prescriptive body.".into()),
+                reads: None,
+                writes: None,
+                gate: false,
+                exit: vec![],
+            }],
+            modeled_on: None,
+            researched: None,
+            source: None,
+            disabled: false,
+            origin: crate::fragment::Layer::default(),
+        };
+        let section = render_workflow_section(&wf);
+        assert!(section.contains("Plan the work"), "purpose is shown");
+        assert!(
+            !section.contains("INSTRUCTIONS-MARKER"),
+            "elaborate instructions stay out of the always-on section"
+        );
+    }
 }

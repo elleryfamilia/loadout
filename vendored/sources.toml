@@ -1,0 +1,43 @@
+# Upstream content vendored into loadout's built-in workflows.
+#
+# A built-in workflow that mirrors a real framework embeds that framework's
+# actual skill files (verbatim, minus their YAML frontmatter) as the per-step
+# `instructions` body — see the `include_str!` calls in `src/workflow.rs`. This
+# manifest is the contract for keeping those copies faithful: it records where
+# each file came from, the exact release it was pinned at, and which workflow
+# step it feeds. The weekly sync action diffs each pinned release and opens a
+# PR on drift; review + merge are handled downstream (Savio).
+#
+# Pin by the release's RESOLVED COMMIT, not a tag string — a project's release
+# name and its git tag can differ (e.g. CE releases as `compound-engineering-vX`
+# but tags as `vY`). `ref_strategy = "release"` means "track the latest GitHub
+# release"; use `"commit"` for repos that don't cut releases.
+
+[[source]]
+id = "superpowers"
+repo = "obra/superpowers"
+homepage = "https://github.com/obra/superpowers"
+license = "MIT"          # permits redistribution with the notice preserved (see vendored/superpowers/LICENSE)
+ref_strategy = "release"
+release = "v6.0.3"
+commit = "896224c4b1879920ab573417e68fd51d2ccc9072"
+
+[[source.files]]
+upstream = "skills/brainstorming/SKILL.md"
+vendored = "vendored/superpowers/brainstorming.SKILL.md"
+step = "brainstorm"
+
+[[source.files]]
+upstream = "skills/writing-plans/SKILL.md"
+vendored = "vendored/superpowers/writing-plans.SKILL.md"
+step = "plan"
+
+[[source.files]]
+upstream = "skills/subagent-driven-development/SKILL.md"
+vendored = "vendored/superpowers/subagent-driven-development.SKILL.md"
+step = "implement"
+
+[[source.files]]
+upstream = "skills/requesting-code-review/SKILL.md"
+vendored = "vendored/superpowers/requesting-code-review.SKILL.md"
+step = "verify"

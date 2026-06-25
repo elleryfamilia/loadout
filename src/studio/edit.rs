@@ -981,6 +981,7 @@ mod tests {
         let stage = |name: &str, purpose: &str| WorkflowStage {
             name: name.into(),
             purpose: Some(purpose.into()),
+            instructions: None,
             reads: None,
             writes: None,
             gate: false,

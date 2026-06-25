@@ -1104,6 +1104,11 @@ fn workflow_slot(s: &WorkflowSlotView, wf_glyph: &str) -> Markup {
                         }
                         div class="wf-value-body" {
                             p class="wf-value-text" { (p) }
+                            @if s.has_instructions {
+                                span class="wf-detail-mark" title="this step carries detailed instructions, loaded when its command runs" {
+                                    (icon("book")) "details"
+                                }
+                            }
                             @if s.reads.is_some() || s.writes.is_some() {
                                 div class="wf-slot-io" {
                                     @if let Some(r) = &s.reads { span class="stage-io" { (icon("file")) "reads " code { (r) } } }
@@ -1200,8 +1205,9 @@ pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool
                     }
 
                     p class="wf-edit-lead muted" {
-                        "Pick a step, then write what the agent should do there — plain text is fine. "
-                        "Leave a step blank to skip it; handoff files between steps carry over from the original."
+                        "Pick a step, give it a one-line summary, then optionally spell out the fuller "
+                        "instructions the agent follows when that step runs. "
+                        "Leave the summary blank to skip the step; handoff files between steps carry over from the original."
                     }
                     // The five fixed steps as a tab row (CSS-only): each radio's
                     // label is a tab, and the matching panel below shows its big
@@ -1214,7 +1220,7 @@ pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool
                             label class=(if filled { "wf-step-tab filled" } else { "wf-step-tab" }) for=(format!("wfstep-{key}")) {
                                 span class="wf-step-tab-icon" { (icon(slot_icon(key))) }
                                 span { (slot_display_name(key)) }
-                                @if filled { span class="wf-step-dot" title="has instructions" {} }
+                                @if filled { span class="wf-step-dot" title="step is active" {} }
                             }
                         }
                         @for &(key, desc) in CANONICAL_SLOTS {
@@ -1227,8 +1233,15 @@ pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool
                                         code class="wf-slot-cmd" { span class="cmd-prefix" { "/loadout:" } span class="cmd-name" { (key) } }
                                     }
                                 }
-                                textarea name=(format!("s_{key}_purpose")) class="wf-step-textarea" placeholder=(desc) {
-                                    (st.and_then(|s| s.purpose.as_deref()).unwrap_or(""))
+                                label class="field wf-step-summary" {
+                                    span class="field-label" { "summary" span class="field-hint" { "the one-line label shown everywhere" } }
+                                    input type="text" name=(format!("s_{key}_purpose")) value=(st.and_then(|s| s.purpose.as_deref()).unwrap_or("")) placeholder=(desc);
+                                }
+                                label class="field wf-step-instructions" {
+                                    span class="field-label" { "instructions" span class="field-hint" { "the fuller guidance, shown only when this step's command runs — optional" } }
+                                    textarea name=(format!("s_{key}_instructions")) class="wf-step-textarea" placeholder="Spell out how to do this step. Loaded on demand when its /loadout:… command runs, so detail here is free." {
+                                        (st.and_then(|s| s.instructions.as_deref()).unwrap_or(""))
+                                    }
                                 }
                             }
                         }
@@ -2379,6 +2392,52 @@ mod tests {
             init < css,
             "theme init must run before the stylesheet paints"
         );
+    }
+
+    #[test]
+    fn workflow_editor_splits_summary_from_instructions_and_prefills_both() {
+        let sp = crate::workflow::builtin_workflows()
+            .into_iter()
+            .find(|w| w.id == "superpowers")
+            .unwrap();
+        // Customize the built-in so the editor prefills from its stages.
+        let html = workflow_editor(Some(&sp), true);
+        // The one-line summary input and the big instructions textarea are
+        // separate fields with their own names.
+        assert!(html.contains(r#"name="s_plan_purpose""#));
+        assert!(html.contains(r#"name="s_plan_instructions""#));
+        // The instructions textarea prefills from the source stage's body
+        // (the real upstream writing-plans content).
+        assert!(html.contains("bite-sized tasks"));
+    }
+
+    #[test]
+    fn workflow_slot_card_marks_steps_that_carry_instructions() {
+        use crate::studio::state::WorkflowSlotView;
+        let with = WorkflowSlotView {
+            command: "plan".into(),
+            name: "Plan".into(),
+            icon: "bolt".into(),
+            step_desc: "Break it down.".into(),
+            filled: true,
+            purpose: Some("Plan the work".into()),
+            has_instructions: true,
+            reads: None,
+            writes: None,
+            exit: vec![],
+            edited: false,
+        };
+        assert!(workflow_slot(&with, "package")
+            .into_string()
+            .contains("wf-detail-mark"));
+        // No marker when the step is purpose-only.
+        let bare = WorkflowSlotView {
+            has_instructions: false,
+            ..with
+        };
+        assert!(!workflow_slot(&bare, "package")
+            .into_string()
+            .contains("wf-detail-mark"));
     }
 
     #[test]

@@ -72,8 +72,12 @@ already ships — they can bind it directly instead of importing a duplicate.
    - `skills/*/SKILL.md` — a skill per phase.
    - a plugin manifest (`plugin.json`, `.claude-plugin/`, `manifest.json`).
    - the `README` / docs describing the intended order.
-   Extract the ordered list of steps and, for each, a one-line purpose in the
-   author's own framing (condense; stay faithful).
+   Extract the ordered list of steps and, for each, **two things**: a one-line
+   `purpose` (the label, in the author's framing, condensed) **and** the step's
+   full prescriptive body — the actual rules, checklists, and gotchas the source
+   command/skill spells out — captured into `instructions`. The `purpose` is the
+   shape; the `instructions` are the substance. An import that only fills
+   `purpose` is just headings; capturing the body is what makes it teach.
 
 3. **Map each step onto a slot.** Use the slot↔synonym table in reference.md.
    A step that matches no slot becomes an extra (kept in order, after the five).
@@ -132,7 +136,13 @@ already ships — they can bind it directly instead of importing a duplicate.
 - **Additive and global-only.** Append to the global config; never write
   `[[workflows]]` into a repo's `.loadout/` (the loader ignores them there).
 - **Confirm before writing**, and back up `config.toml` first.
-- **Stay faithful.** Capture the source's actual process; condense, don't invent
-  steps or handoffs the source doesn't have.
+- **Capture the real content, not a summary.** Put each source step's **actual
+  body** into `instructions` — verbatim when the source's license allows it
+  (MIT/Apache/BSD and most permissive licenses do, as long as you keep the
+  notice). The point of the import is a faithful, switchable copy of the
+  workflow; a paraphrase that's "shorter or cleaner" defeats it. Only condense
+  when the license forbids redistribution, and then say so. Always credit via
+  `source`/`modeled_on`, and check the upstream LICENSE before copying. Never
+  invent steps, handoffs, or rules the source doesn't have.
 - **At least one stage**, and prefer filling canonical slots over inventing
   extras — extras are for genuinely distinct phases only.
