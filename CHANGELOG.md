@@ -8,7 +8,38 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased
+## 0.9.0 — 2026-06-25
+
+### Added
+
+- **Workflows** — a named development process (Anthropic's lean loop, Boris's
+  daily flow, spec-driven, the Ralph loop, Every's compound engineering) that
+  travels across every agent. loadout exposes one fixed five-command spine —
+  `/loadout:explore`, `brainstorm`, `plan`, `implement`, `verify` — and a
+  workflow changes what each step *means*, optionally handing a file (e.g.
+  `plan.md`) from one step to the next. Bind one globally with
+  `[defaults].workflow`, per-loadout, or per-run with `--workflow`. Ships six
+  built-ins plus a studio **Workflows** tab to browse, build, customize, and
+  edit your own.
+- **`loadout-import-workflow` skill** — turns another repo's command/skill suite
+  into a loadout workflow (`load skill install loadout-import-workflow`), mapping
+  its steps onto the canonical spine.
+
+### Changed
+
+- **The tool-managed config tolerates unknown keys instead of failing to
+  parse.** A config written by a newer loadout — a new `[defaults]` key, a new
+  top-level table — no longer bricks an older binary: unknown keys in
+  `[defaults]`/`[env]`/`[codex]`/`[sync]` (and at the top level) now warn and are
+  ignored rather than aborting the whole load. Hand-authored
+  `[[fragments]]`/`[[loadouts]]`/`[[targets]]`/`[[workflows]]` stay strict, so
+  typos there are still caught.
+
+### Fixed
+
+- **`load doctor` now flags a repo `.loadout/config.toml` that declares
+  `[[workflows]]`** — they're global-only and ignored there, matching the
+  existing warning for fragments, loadouts, and targets.
 
 ### Docs
 
