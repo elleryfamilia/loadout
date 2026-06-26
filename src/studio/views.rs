@@ -419,7 +419,13 @@ fn tab_bar(active: &str) -> Markup {
 /// handlers having to re-wrap anything. Pills swap `#main` with the chosen
 /// category body, which renders this same nav with its own pill marked active.
 fn library_nav(active: &str) -> Markup {
-    let cls = |name: &str| if name == active { "lib-cat active" } else { "lib-cat" };
+    let cls = |name: &str| {
+        if name == active {
+            "lib-cat active"
+        } else {
+            "lib-cat"
+        }
+    };
     html! {
         nav class="lib-cats" {
             button class=(cls("fragments")) hx-get="/library/fragments" hx-target="#main" { (icon("box")) "Fragments" }
@@ -881,7 +887,10 @@ fn board_section(
 fn board_applies(b: &BoardView, e: &str) -> Markup {
     if b.is_default {
         board_section(
-            "globe", "Applies to", None, "the default — applies when no other loadout matches",
+            "globe",
+            "Applies to",
+            None,
+            "the default — applies when no other loadout matches",
             None,
             html! {
                 div class="applies-default" {
@@ -895,8 +904,13 @@ fn board_applies(b: &BoardView, e: &str) -> Markup {
         )
     } else {
         board_section(
-            "target", "Applies to", Some(b.targets.len()), "repos this loadout is detected on",
-            Some(html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/targets/new")) hx-target="#modal" { (icon("plus")) "Add" } }),
+            "target",
+            "Applies to",
+            Some(b.targets.len()),
+            "repos this loadout is detected on",
+            Some(
+                html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/targets/new")) hx-target="#modal" { (icon("plus")) "Add" } },
+            ),
             html! {
                 div class="slot-row" {
                     @for t in &b.targets { (board_target_chip(e, t, b.target_remove_locked)) }
@@ -1026,7 +1040,11 @@ pub fn fragment_picker(name: &str, lib: &LibraryView, equipped: &[String]) -> St
 
 /// The workflow picker (a modal): the resolved workflow catalog (built-ins + your
 /// own), single-select. `current` marks the one already bound.
-pub fn workflow_picker(name: &str, options: &[(String, String, String)], current: Option<&str>) -> String {
+pub fn workflow_picker(
+    name: &str,
+    options: &[(String, String, String)],
+    current: Option<&str>,
+) -> String {
     let e = enc(name);
     html! {
         div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
