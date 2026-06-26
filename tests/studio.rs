@@ -192,8 +192,8 @@ fn studio_binds_and_serves_secured_spine() {
     );
     assert!(shell.contains("Loadout studio"), "shell renders the page");
     assert!(
-        shell.contains("Loadouts") && shell.contains("Fragments"),
-        "shell renders the Profiles/Fragments tabs"
+        shell.contains("Loadouts") && shell.contains("Library"),
+        "shell renders the two destinations: Loadouts | Library"
     );
 
     assert!(
@@ -373,11 +373,11 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
         "fresh config lands on the Profiles welcome; got head:\n{}",
         head(&shell)
     );
-    let (pi, fi) = (
+    let (pi, li) = (
         shell.find("data-tab=\"profiles\"").unwrap_or(usize::MAX),
-        shell.find("data-tab=\"fragments\"").unwrap_or(0),
+        shell.find("data-tab=\"library\"").unwrap_or(0),
     );
-    assert!(pi < fi, "Profiles tab comes before Fragments in the nav");
+    assert!(pi < li, "Loadouts comes before Library in the nav");
 
     // Beat 2: the friendly review, not the normal "staged the … pack" flash.
     assert!(

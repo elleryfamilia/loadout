@@ -138,9 +138,10 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => handle_shell(state),
         ("GET", "/tab/profiles") => handle_tab(state, "profiles"),
-        ("GET", "/tab/fragments") => handle_tab(state, "fragments"),
-        ("GET", "/tab/targets") => handle_tab(state, "targets"),
-        ("GET", "/tab/workflows") => handle_tab(state, "workflows"),
+        ("GET", "/tab/library") => handle_library(state, "fragments"),
+        ("GET", "/tab/fragments") => handle_library(state, "fragments"),
+        ("GET", "/tab/targets") => handle_library(state, "targets"),
+        ("GET", "/tab/workflows") => handle_library(state, "workflows"),
         ("GET", "/staged") => handle_staged(state),
         ("GET", "/close") => Resp::html(String::new()),
         ("GET", "/diff") => handle_diff(state),
@@ -169,6 +170,9 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
             Some((body, ct)) => Resp::asset(body, ct),
             None => Resp::not_found(),
         },
+        ("GET", p) if p.starts_with("/library/") => {
+            handle_library(state, p.strip_prefix("/library/").unwrap_or("fragments"))
+        }
         (_, p) if p.starts_with("/fragments/") => handle_fragment_param(state, req),
         (_, p) if p.starts_with("/targets/") => handle_target_param(state, req),
         (_, p) if p.starts_with("/workflows/") => handle_workflow_param(state, req),
@@ -243,25 +247,29 @@ fn handle_shell(state: &Arc<Mutex<StudioState>>) -> Resp {
     }
 }
 
+/// The Loadouts destination (the only one routed through here now). Library
+/// categories go through [`handle_library`].
 fn handle_tab(state: &Arc<Mutex<StudioState>>, tab: &str) -> Resp {
     state.lock().unwrap().active_tab = tab.to_string();
-    if tab == "profiles" {
-        return profiles_tab_resp(state, None, None, false);
-    }
-    if tab == "targets" {
-        let snap = state.lock().unwrap().snapshot();
-        return Resp::html(views::targets_tab_fragment(&state::targets_view(&snap)));
-    }
-    if tab == "workflows" {
-        let snap = state.lock().unwrap().snapshot();
-        return Resp::html(views::workflows_tab_fragment(&state::workflows_view(
-            &snap, None,
-        )));
-    }
+    profiles_tab_resp(state, None, None, false)
+}
+
+/// Render a Library category body (`fragments` | `targets` | `workflows`). Each
+/// body carries its own pill sub-nav (`library_nav`), so every render — full
+/// navigation or post-mutation refresh — keeps the Library chrome. `active_tab`
+/// stays `"library"` so the top-nav Library button remains lit while browsing.
+fn handle_library(state: &Arc<Mutex<StudioState>>, cat: &str) -> Resp {
+    state.lock().unwrap().active_tab = "library".to_string();
     let snap = state.lock().unwrap().snapshot();
-    match state::library_view(&snap) {
-        Ok(lib) => Resp::html(views::fragments_tab_fragment(&lib, None)),
-        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
+    match cat {
+        "targets" => Resp::html(views::targets_tab_fragment(&state::targets_view(&snap))),
+        "workflows" => {
+            Resp::html(views::workflows_tab_fragment(&state::workflows_view(&snap, None)))
+        }
+        _ => match state::library_view(&snap) {
+            Ok(lib) => Resp::html(views::fragments_tab_fragment(&lib, None)),
+            Err(e) => Resp::html(views::error_fragment(&e.to_string())),
+        },
     }
 }
 
@@ -1987,9 +1995,10 @@ mod tests {
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Loadout studio"));
-        // The shell renders the Profiles tab (dashboard) by default.
+        // The shell renders the Loadouts tab by default; the top nav is the two
+        // destinations Loadouts | Library.
         assert!(body.contains("Loadouts"));
-        assert!(body.contains("Fragments"));
+        assert!(body.contains("Library"));
     }
 
     #[test]

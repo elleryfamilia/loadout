@@ -395,19 +395,32 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str) -> String {
     .into_string()
 }
 
+/// Top nav: two destinations. **Loadouts** is where you assemble a loadout;
+/// **Library** is the shared catalog of gear a loadout binds (fragments, targets,
+/// workflows). Anything reached *inside* the Library keeps `active_tab ==
+/// "library"`, so the Library button stays lit while you browse its categories.
 fn tab_bar(active: &str) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
         nav class="tabs" {
-            span class="tab-group tab-group-primary" {
-                button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
-                button class=(cls("workflows")) data-tab="workflows" hx-get="/tab/workflows" hx-target="#main" { (icon("git-branch")) "Workflows" }
-            }
-            span class="tab-divider" {}
-            span class="tab-group tab-group-secondary" {
-                button class=(cls("fragments")) data-tab="fragments" hx-get="/tab/fragments" hx-target="#main" { (icon("box")) "Fragments" }
-                button class=(cls("targets")) data-tab="targets" hx-get="/tab/targets" hx-target="#main" { (icon("target")) "Targets" }
-            }
+            button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
+            button class=(cls("library")) data-tab="library" hx-get="/tab/library" hx-target="#main" { (icon("book")) "Library" }
+        }
+    }
+}
+
+/// The Library's category sub-nav (a pill row). Baked into the top of every
+/// category body (`fragments_tab`/`targets_tab`/`workflows_tab`), so it survives
+/// every re-render — full navigation *and* post-mutation refresh — without the
+/// handlers having to re-wrap anything. Pills swap `#main` with the chosen
+/// category body, which renders this same nav with its own pill marked active.
+fn library_nav(active: &str) -> Markup {
+    let cls = |name: &str| if name == active { "lib-cat active" } else { "lib-cat" };
+    html! {
+        nav class="lib-cats" {
+            button class=(cls("fragments")) hx-get="/library/fragments" hx-target="#main" { (icon("box")) "Fragments" }
+            button class=(cls("targets")) hx-get="/library/targets" hx-target="#main" { (icon("target")) "Targets" }
+            button class=(cls("workflows")) hx-get="/library/workflows" hx-target="#main" { (icon("git-branch")) "Workflows" }
         }
     }
 }
@@ -863,6 +876,7 @@ fn profile_pick_prompt() -> Markup {
 pub fn fragments_tab(lib: &LibraryView, flash: Option<&str>) -> Markup {
     html! {
         div class="tab-fragments" {
+            (library_nav("fragments"))
             div class="dash-head" {
                 h1 { "Fragments" }
                 div class="head-actions" {
@@ -906,6 +920,7 @@ pub fn fragments_tab_fragment(lib: &LibraryView, flash: Option<&str>) -> String 
 pub fn targets_tab(view: &TargetsView, flash: Option<&str>) -> Markup {
     html! {
         div class="tab-targets" {
+            (library_nav("targets"))
             div class="dash-head" {
                 h1 { "Targets" }
                 div class="head-actions" {
@@ -941,6 +956,7 @@ pub fn workflows_tab(view: &WorkflowsView, flash: Option<&str>) -> Markup {
         .and_then(|id| view.workflows.iter().find(|w| w.id == id));
     html! {
         div class="tab-workflows" {
+            (library_nav("workflows"))
             div class="dash-head" {
                 h1 { "Workflows" }
             }
