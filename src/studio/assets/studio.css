@@ -282,6 +282,18 @@ body {
 .target-chip .tx:hover { color: var(--danger); background: var(--danger-soft); }
 .target-chip .tx .icon { width: 12px; height: 12px; }
 
+/* paged fragments — a fixed 3-column grid; studio.js shows 3 rows per page and
+   pins the height (`min-height`) so flipping pages never shifts the layout. */
+.frag-paged { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+  grid-auto-rows: 42px; align-content: start; }
+.frag-paged .frag-chip { width: 100%; }
+.frag-paged .frag-chip .cn { overflow: hidden; text-overflow: ellipsis; }
+.frag-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; }
+.frag-pager .icon-btn { width: 26px; height: 26px; font-size: 16px; line-height: 1; }
+.pg-dots { display: inline-flex; gap: 6px; align-items: center; }
+.pg-dot { width: 7px; height: 7px; padding: 0; border: none; border-radius: 50%; background: var(--border-strong); cursor: pointer; }
+.pg-dot.on { background: var(--accent); }
+
 /* compact fragment chip — title only, ✕ on hover */
 .frag-chip { display: inline-flex; align-items: center; gap: 9px; padding: 6px 9px 6px 7px;
   border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--panel-2); transition: border-color .12s; }

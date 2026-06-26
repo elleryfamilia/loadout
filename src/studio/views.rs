@@ -799,9 +799,14 @@ pub fn loadout_board(b: &BoardView) -> Markup {
                     "box", "Fragments", Some(b.fragments.len()), "the guidance it composes",
                     Some(html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/fragments/new")) hx-target="#modal" { (icon("plus")) "Equip" } }),
                     html! {
-                        div class="slot-row" {
-                            @for f in &b.fragments { (board_frag_chip(&e, f)) }
-                            @if b.fragments.is_empty() { span class="muted small" { "No fragments yet — Equip one from the library." } }
+                        @if b.fragments.is_empty() {
+                            div class="slot-row" { span class="muted small" { "No fragments yet — Equip one from the library." } }
+                        } @else {
+                            // A fixed 3×3 grid; studio.js paginates (and pins the
+                            // height) when there are more than one page of chips.
+                            div class="frag-paged" data-page-size="9" {
+                                @for f in &b.fragments { (board_frag_chip(&e, f)) }
+                            }
                         }
                     },
                 ))

@@ -26,6 +26,7 @@
     el.innerHTML = html;
     process(el);
     enhanceCode(el);
+    enhancePager(el);
   }
 
   function methodOf(el) {
@@ -247,6 +248,70 @@
     });
   }
 
+  // --- fragment pager --------------------------------------------------------
+  // The board's Fragments section renders all chips into a fixed 3-column grid;
+  // here we page them 9 (3 rows) at a time when there's more than one page, and
+  // pin the grid height so flipping pages never shifts the Workflow section
+  // below. Pure show/hide — no innerHTML, so nothing untrusted is injected.
+  function enhancePager(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll(".frag-paged").forEach(function (grid) {
+      if (grid.dataset.pagerBound) return;
+      grid.dataset.pagerBound = "1";
+      var size = parseInt(grid.getAttribute("data-page-size") || "9", 10);
+      var chips = [].slice.call(grid.children).filter(function (c) {
+        return c.classList.contains("frag-chip");
+      });
+      var pages = Math.ceil(chips.length / size);
+      if (pages <= 1) return; // everything fits — no pager, natural height
+      // 3 rows: 42px auto-rows + 8px gaps. Pin it so short pages don't collapse.
+      grid.style.minHeight = 42 * 3 + 8 * 2 + "px";
+      var cur = 0;
+      var pager = document.createElement("div");
+      pager.className = "frag-pager";
+      var prev = document.createElement("button");
+      prev.type = "button";
+      prev.className = "icon-btn";
+      prev.textContent = "‹";
+      prev.setAttribute("aria-label", "Previous page");
+      var dots = document.createElement("span");
+      dots.className = "pg-dots";
+      var next = document.createElement("button");
+      next.type = "button";
+      next.className = "icon-btn";
+      next.textContent = "›";
+      next.setAttribute("aria-label", "Next page");
+      var dotEls = [];
+      for (var i = 0; i < pages; i++) {
+        (function (idx) {
+          var d = document.createElement("button");
+          d.type = "button";
+          d.className = "pg-dot";
+          d.setAttribute("aria-label", "Page " + (idx + 1));
+          d.addEventListener("click", function () { cur = idx; render(); });
+          dots.appendChild(d);
+          dotEls.push(d);
+        })(i);
+      }
+      prev.addEventListener("click", function () { cur = (cur - 1 + pages) % pages; render(); });
+      next.addEventListener("click", function () { cur = (cur + 1) % pages; render(); });
+      pager.appendChild(prev);
+      pager.appendChild(dots);
+      pager.appendChild(next);
+      grid.parentNode.insertBefore(pager, grid.nextSibling);
+      function render() {
+        for (var i = 0; i < chips.length; i++) {
+          var show = i >= cur * size && i < cur * size + size;
+          chips[i].style.display = show ? "" : "none";
+        }
+        for (var j = 0; j < dotEls.length; j++) {
+          dotEls[j].classList.toggle("on", j === cur);
+        }
+      }
+      render();
+    });
+  }
+
   // --- theme toggle ----------------------------------------------------------
   // Preference (auto/light/dark) lives in localStorage; the inline <head> script
   // already stamped <html data-theme/-pref> to avoid a flash. Here we cycle the
@@ -300,5 +365,6 @@
     wireActiveGroups();
     wireTheme();
     enhanceCode(document.body);
+    enhancePager(document.body);
   });
 })();
