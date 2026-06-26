@@ -95,6 +95,8 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     check_dangling_fragment_refs(&mut c, &prep.config);
     // Profiles binding an unknown workflow, and malformed user workflows.
     check_workflows(&mut c, &prep.config);
+    // The single-default invariant (one no-targets catch-all loadout).
+    check_default_loadout(&mut c, &prep.config);
     // Allowlist/denylist consistency.
     check_env_policy(&mut c, &prep.config);
     // Private-data leak lint over public config layers.
@@ -408,6 +410,36 @@ fn check_public_leaks(c: &mut Checks, prep: &super::Prepared) {
 /// for that entry (compose silently skips it). Surface the dangling reference —
 /// it usually means a fragment was hand-deleted without cleaning up the
 /// profile (studio's delete does this cleanup automatically).
+/// The single-default invariant: exactly one enabled loadout with no targets is
+/// the catch-all that applies when nothing else matches (in any project or none).
+/// Zero ⇒ unmatched contexts get no loadout; more than one ⇒ ambiguous.
+fn check_default_loadout(c: &mut Checks, cfg: &config::Config) {
+    let defaults: Vec<&str> = cfg
+        .profiles
+        .iter()
+        .filter(|p| !p.disabled && p.targets.is_empty())
+        .map(|p| p.name.as_str())
+        .collect();
+    match defaults.len() {
+        1 => c.line(
+            Status::Ok,
+            format!("default loadout: '{}' (applies everywhere nothing else matches)", defaults[0]),
+        ),
+        0 => c.line(
+            Status::Warn,
+            "no default loadout — nothing applies in a project that matches no loadout (or outside a project). In `load studio`, clear a loadout's targets to make it the default.",
+        ),
+        _ => c.line(
+            Status::Warn,
+            format!(
+                "{} default loadouts ({}) — only one loadout should have no targets; give the others a target so selection isn't ambiguous",
+                defaults.len(),
+                defaults.join(", ")
+            ),
+        ),
+    }
+}
+
 fn check_dangling_fragment_refs(c: &mut Checks, cfg: &config::Config) {
     let known: std::collections::HashSet<&str> =
         cfg.fragments.iter().map(|x| x.id.as_str()).collect();

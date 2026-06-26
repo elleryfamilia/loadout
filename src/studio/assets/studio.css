@@ -280,7 +280,13 @@ body {
 .target-chip .tx { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
   margin-left: 3px; padding: 0; border: none; background: transparent; color: var(--faint); cursor: pointer; border-radius: 4px; }
 .target-chip .tx:hover { color: var(--danger); background: var(--danger-soft); }
+.target-chip .tx.disabled { opacity: .3; cursor: not-allowed; }
 .target-chip .tx .icon { width: 12px; height: 12px; }
+
+/* the pinned default loadout in the rail */
+.rail-item.default { border-color: var(--accent-line); background: var(--accent-wash); }
+.rail-item.default.active { border-color: var(--accent); border-left-color: var(--accent); background: var(--elevated); }
+.rail-sep { margin: 3px 2px 5px; height: 1px; background: var(--border); }
 
 /* paged fragments — a fixed 3-column grid; studio.js shows 3 rows per page and
    pins the height (`min-height`) so flipping pages never shifts the layout. */

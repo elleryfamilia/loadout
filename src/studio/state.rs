@@ -304,6 +304,10 @@ pub struct BoardView {
     pub workflow: Option<BoardWorkflow>,
     /// A plain-language "where this applies" line for the readout.
     pub where_summary: String,
+    /// True when this loadout has exactly one target *and* another no-targets
+    /// default already exists — so removing it (which would make a second
+    /// default) is blocked. Drives the disabled remove-✕ on the lone chip.
+    pub target_remove_locked: bool,
 }
 
 /// Build the board for the loadout named `name` from the staged config. Fragment
@@ -380,6 +384,13 @@ pub fn board_view(snap: &Snapshot, name: &str) -> crate::Result<BoardView> {
     } else {
         format!("any {} repo", p.targets.join(" / "))
     };
+    // The single-default invariant: you can't remove a loadout's last target
+    // once some other loadout is already the no-targets default.
+    let target_remove_locked = p.targets.len() == 1
+        && cfg
+            .profiles
+            .iter()
+            .any(|q| q.name != name && !q.disabled && q.targets.is_empty());
     Ok(BoardView {
         name: name.to_string(),
         disabled: p.disabled,
@@ -388,6 +399,7 @@ pub fn board_view(snap: &Snapshot, name: &str) -> crate::Result<BoardView> {
         fragments,
         workflow,
         where_summary,
+        target_remove_locked,
     })
 }
 

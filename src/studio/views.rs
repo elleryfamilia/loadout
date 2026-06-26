@@ -519,8 +519,13 @@ pub fn profiles_tab(
                 @if lib.profiles.is_empty() {
                     p class="rail-empty muted" { "No loadouts yet." }
                 } @else {
+                    // The no-targets default is pinned to the top, above a divider.
+                    @let (defaults, rest): (Vec<&ProfileView>, Vec<&ProfileView>) =
+                        lib.profiles.iter().partition(|p| p.targets.is_empty());
                     nav class="rail-list" {
-                        @for p in &lib.profiles { (profile_rail_item(p, sel_name == Some(p.name.as_str()))) }
+                        @for p in &defaults { (profile_rail_item(p, sel_name == Some(p.name.as_str()))) }
+                        @if !defaults.is_empty() && !rest.is_empty() { div class="rail-sep" {} }
+                        @for p in &rest { (profile_rail_item(p, sel_name == Some(p.name.as_str()))) }
                     }
                 }
             }
@@ -667,7 +672,11 @@ pub fn welcome_fragment(o: &Onboarding, packs: &[PackView]) -> String {
 fn profile_rail_item(p: &ProfileView, active: bool) -> Markup {
     let name = p.name.as_str();
     let e = enc(name);
+    let is_default = p.targets.is_empty();
     let mut cls = String::from("rail-item");
+    if is_default {
+        cls.push_str(" default");
+    }
     if active {
         cls.push_str(" active");
     }
@@ -680,8 +689,12 @@ fn profile_rail_item(p: &ProfileView, active: bool) -> Markup {
             span class="rail-top" {
                 span class="rail-name" { (name) }
                 @if p.disabled { span class="tag off-tag" { "off" } }
-                // Target icons (no labels) cluster at the card's top-right.
-                @if !p.targets.is_empty() {
+                @if is_default { span class="tag rec-tag" { "Default" } }
+                // Target icons (no labels) cluster at the card's top-right — or a
+                // globe for the catch-all default.
+                @if is_default {
+                    span class="rail-icons" { span class="rail-icon" title="applies everywhere" { (icon("globe")) } }
+                } @else if !p.targets.is_empty() {
                     span class="rail-icons" { @for t in &p.targets { (target_icon_only(&t.id, t.icon.as_deref())) } }
                 }
             }
@@ -780,9 +793,11 @@ pub fn loadout_board(b: &BoardView) -> Markup {
                         hx-post=(format!("/profiles/{e}/disable")) hx-target="#main" {
                         span class=(if b.disabled { "switch off" } else { "switch on" }) {}
                     }
-                    button class="icon-btn" title="Rename" aria-label=(format!("Rename {}", b.name))
-                        hx-get=(format!("/profiles/{e}/edit")) hx-target="#main" { (icon("pencil")) }
+                    // The default loadout is always-present: not renamable (its
+                    // name/targets are fixed) and not deletable.
                     @if !b.is_default {
+                        button class="icon-btn" title="Rename" aria-label=(format!("Rename {}", b.name))
+                            hx-get=(format!("/profiles/{e}/edit")) hx-target="#main" { (icon("pencil")) }
                         button class="icon-btn danger" title="Delete" aria-label=(format!("Delete {}", b.name))
                             hx-delete=(format!("/profiles/{e}")) hx-target="#main"
                             hx-confirm=(format!("Stage deletion of loadout \"{}\"?", b.name)) { (icon("trash")) }
@@ -880,7 +895,7 @@ fn board_applies(b: &BoardView, e: &str) -> Markup {
             Some(html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/targets/new")) hx-target="#modal" { (icon("plus")) "Add" } }),
             html! {
                 div class="slot-row" {
-                    @for t in &b.targets { (board_target_chip(e, t)) }
+                    @for t in &b.targets { (board_target_chip(e, t, b.target_remove_locked)) }
                     @if b.targets.is_empty() { span class="target-chip muted" { "no targets yet — Add one" } }
                 }
             },
@@ -888,13 +903,18 @@ fn board_applies(b: &BoardView, e: &str) -> Markup {
     }
 }
 
-fn board_target_chip(e: &str, t: &TargetChip) -> Markup {
+fn board_target_chip(e: &str, t: &TargetChip, locked: bool) -> Markup {
     let ti = resolve_target_icon(t.icon.as_deref(), &t.id);
     html! {
         span class="target-chip" {
             (target_icon_markup(&ti)) (t.id)
-            button class="tx" type="button" title="Remove target" aria-label=(format!("Remove target {}", t.id))
-                hx-delete=(format!("/profiles/{e}/targets/{}", enc(&t.id))) hx-target="#profile-main" { (icon("x")) }
+            @if locked {
+                // Can't drop the last target while another default exists.
+                span class="tx disabled" title="a loadout needs at least one target (a default already exists)" { (icon("x")) }
+            } @else {
+                button class="tx" type="button" title="Remove target" aria-label=(format!("Remove target {}", t.id))
+                    hx-delete=(format!("/profiles/{e}/targets/{}", enc(&t.id))) hx-target="#profile-main" { (icon("x")) }
+            }
         }
     }
 }

@@ -325,6 +325,25 @@ fn handle_profile_target_add(state: &Arc<Mutex<StudioState>>, name: &str, id: &s
 }
 
 fn handle_profile_target_remove(state: &Arc<Mutex<StudioState>>, name: &str, id: &str) -> Resp {
+    // Guard the single-default invariant (the UI also disables the ✕): dropping
+    // the last target would make a second no-targets default.
+    {
+        let snap = state.lock().unwrap().snapshot();
+        if let Ok(cfg) = state::staged_config(&snap) {
+            if let Some(p) = cfg.profiles.iter().find(|p| p.name == name) {
+                let last = p.targets.len() == 1 && p.targets.iter().any(|t| t == id);
+                let other_default = cfg
+                    .profiles
+                    .iter()
+                    .any(|q| q.name != name && !q.disabled && q.targets.is_empty());
+                if last && other_default {
+                    return Resp::html(views::error_fragment(
+                        "a loadout needs at least one target — a default loadout already exists",
+                    ));
+                }
+            }
+        }
+    }
     let r = {
         let mut s = state.lock().unwrap();
         state::edit_profile(&mut s.session, name, |p| p.targets.retain(|t| t != id))
@@ -1382,6 +1401,25 @@ fn handle_profile_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
             &pairs,
             &format!("a loadout named “{name}” already exists — choose another name"),
         );
+    }
+    // Single-default invariant: at most one no-targets default loadout. A new (or
+    // renamed) loadout with no targets is refused when another default exists.
+    if profile.targets.is_empty() {
+        let snap = state.lock().unwrap().snapshot();
+        let other_default = state::staged_config(&snap)
+            .map(|cfg| {
+                cfg.profiles
+                    .iter()
+                    .any(|p| p.targets.is_empty() && !p.disabled && Some(p.name.as_str()) != original)
+            })
+            .unwrap_or(false);
+        if other_default {
+            return profile_editor_with_error(
+                state,
+                &pairs,
+                "a default loadout (no targets) already exists — give this one at least one target",
+            );
+        }
     }
     let key = original.unwrap_or(name.as_str()).to_string();
     // Profiles are global-only — always authored into the global config.
@@ -3356,6 +3394,69 @@ mod tests {
             .status,
             403
         );
+    }
+
+    #[test]
+    fn default_loadout_is_pinned_and_locked() {
+        // `base` has no targets → the catch-all default; `rust` is targeted.
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\
+             \n[[loadouts]]\nname = \"base\"\nfragments = [\"rc\"]\n\
+             \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+
+        // The default's board: locked "Applies to", a Default badge, and no
+        // rename/delete (it's always-present).
+        let base = body_of(route(
+            &st,
+            &req("GET", "/profiles/base/select", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(base.contains("Applies everywhere"));
+        assert!(base.contains("chip-default"));
+        assert!(!base.contains("/profiles/base/edit"), "default isn't renamable");
+        assert!(!base.contains("hx-delete=\"/profiles/base\""), "default isn't deletable");
+
+        // The rail pins the default (its own class) above a separator.
+        let tab = body_of(route(
+            &st,
+            &req("GET", "/tab/profiles", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(tab.contains("rail-item default"));
+        assert!(tab.contains("rail-sep"));
+
+        // `rust`'s lone target can't be removed while a default exists: the ✕ is
+        // disabled in the UI, and a direct DELETE is refused.
+        let rustb = body_of(route(
+            &st,
+            &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(rustb.contains("tx disabled"));
+        let blocked = body_of(route(
+            &st,
+            &req("DELETE", "/profiles/rust/targets/rust", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        assert!(blocked.contains("at least one target"));
+    }
+
+    #[test]
+    fn last_target_clears_to_create_the_default_when_none_exists() {
+        // No default yet → clearing rust's only target converts it to the default.
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\
+             \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+        // The lone target's ✕ is enabled (no default exists to conflict).
+        let before = body_of(route(
+            &st,
+            &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(!before.contains("tx disabled"));
+        // Remove it → rust becomes the no-targets default (locked Applies-to).
+        let after = body_of(route(
+            &st,
+            &req("DELETE", "/profiles/rust/targets/rust", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        assert!(after.contains("Applies everywhere"));
     }
 
     #[test]
