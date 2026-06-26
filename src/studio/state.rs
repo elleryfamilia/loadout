@@ -1190,6 +1190,22 @@ pub fn staged_summary(session: &Session) -> StagedSummary {
 /// Everything is staged — the user reviews the diff and Applies like any edit.
 /// Used by both the gallery's per-pack Apply and the recommended-pack quick start.
 pub fn apply_pack(session: &mut Session, pack: &Pack) -> crate::Result<()> {
+    // Single-default invariant: the everyday pack is the no-targets default, so
+    // applying it when a different default already exists would make a second one.
+    if pack.targets.is_empty() {
+        if let Ok(cfg) = session.staged_config() {
+            if let Some(existing) = cfg
+                .profiles
+                .iter()
+                .find(|p| p.targets.is_empty() && !p.disabled && p.name != pack.profile_name)
+            {
+                return Err(anyhow::anyhow!(
+                    "a default loadout ('{}') already exists — only one loadout can be the no-targets default",
+                    existing.name
+                ));
+            }
+        }
+    }
     let owned: std::collections::HashSet<String> = session
         .staged_config()
         .map(|cfg| cfg.fragments.iter().map(|c| c.id.clone()).collect())

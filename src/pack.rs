@@ -29,12 +29,18 @@ pub struct Pack {
     pub recommended_for: &'static [&'static str],
     /// The name of the profile this pack creates.
     pub profile_name: &'static str,
-    /// The created profile's selection targets.
+    /// The created profile's selection targets. Empty ⇒ the no-targets catch-all
+    /// **default** loadout (the everyday pack); a stack pack always targets its
+    /// stack.
     pub targets: &'static [&'static str],
     /// The palette fragment ids this pack duplicates into the library *and*
     /// composes into the profile, in this order. Every id must exist in
     /// [`palette`](crate::fragment::palette) — guarded by a test.
     pub fragments: &'static [&'static str],
+    /// The workflow this pack's loadout binds (a built-in id), or `None`. Shipped
+    /// packs bind the house workflow so a fresh loadout has one — there's no
+    /// global default workflow to fall back on.
+    pub workflow: Option<&'static str>,
 }
 
 impl Pack {
@@ -49,7 +55,7 @@ impl Pack {
                 .iter()
                 .map(|s| FragmentRef::Id(s.to_string()))
                 .collect(),
-            workflow: None,
+            workflow: self.workflow.map(|s| s.to_string()),
             template: None,
             disabled: false,
         }
@@ -204,8 +210,11 @@ pub fn packs() -> Vec<Pack> {
             icon: "shield",
             recommended_for: &["machine"],
             profile_name: "everyday",
-            targets: &["machine"],
+            // No targets ⇒ the catch-all default loadout (applies everywhere
+            // nothing else matches). Studio pins + locks it.
+            targets: &[],
             fragments: EVERYDAY,
+            workflow: Some("superpowers"),
         },
         Pack {
             id: "rust",
@@ -218,6 +227,7 @@ pub fn packs() -> Vec<Pack> {
             profile_name: "rust",
             targets: &["rust"],
             fragments: RUST,
+            workflow: Some("superpowers"),
         },
         Pack {
             id: "node",
@@ -230,6 +240,7 @@ pub fn packs() -> Vec<Pack> {
             profile_name: "node",
             targets: &["node"],
             fragments: NODE,
+            workflow: Some("superpowers"),
         },
         Pack {
             id: "bun",
@@ -242,6 +253,7 @@ pub fn packs() -> Vec<Pack> {
             profile_name: "bun",
             targets: &["bun"],
             fragments: BUN,
+            workflow: Some("superpowers"),
         },
         Pack {
             id: "nextjs",
@@ -254,6 +266,7 @@ pub fn packs() -> Vec<Pack> {
             profile_name: "nextjs",
             targets: &["nextjs"],
             fragments: NEXTJS,
+            workflow: Some("superpowers"),
         },
         Pack {
             id: "go",
@@ -266,6 +279,7 @@ pub fn packs() -> Vec<Pack> {
             profile_name: "go",
             targets: &["go"],
             fragments: GO,
+            workflow: Some("superpowers"),
         },
         Pack {
             id: "python",
@@ -278,6 +292,7 @@ pub fn packs() -> Vec<Pack> {
             profile_name: "python",
             targets: &["python"],
             fragments: PYTHON,
+            workflow: Some("superpowers"),
         },
     ]
 }
@@ -345,15 +360,36 @@ mod tests {
     }
 
     #[test]
+    fn every_pack_binds_the_house_workflow() {
+        // No global default workflow exists anymore, so each pack's loadout must
+        // ship the house workflow itself.
+        for p in packs() {
+            assert_eq!(
+                p.profile().workflow.as_deref(),
+                Some("superpowers"),
+                "pack {} should bind the house workflow",
+                p.id
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_everyday_pack_is_the_no_targets_default() {
+        for p in packs() {
+            let empty = p.profile().targets.is_empty();
+            if p.id == "everyday" {
+                assert!(empty, "the everyday pack is the no-targets default");
+            } else {
+                assert!(!empty, "stack pack {} must target its stack", p.id);
+            }
+        }
+    }
+
+    #[test]
     fn pack_profile_composes_exactly_its_caps() {
         for p in packs() {
             let prof = p.profile();
             assert_eq!(prof.name, p.profile_name);
-            assert!(
-                !prof.targets.is_empty(),
-                "pack {} profile has no targets",
-                p.id
-            );
             let prof_caps: Vec<&str> = prof.fragments.iter().map(|r| r.id()).collect();
             let pack_caps: Vec<&str> = p.fragments.to_vec();
             assert_eq!(
