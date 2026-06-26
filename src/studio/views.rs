@@ -54,6 +54,7 @@ fn icon(name: &str) -> Markup {
             r#"<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>"#
         }
         "arrow-right" => r#"<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>"#,
+        "arrow-left" => r#"<path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>"#,
         "arrow-down" => r#"<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>"#,
         "layers" => {
             r#"<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>"#
@@ -726,6 +727,9 @@ pub fn profile_detail(d: &ProfileDetail) -> Markup {
                     @if d.disabled { span class="tag off-tag" { "disabled" } }
                 }
                 div class="detail-actions" {
+                    // Preview is reached from the board; offer the way back.
+                    button class="btn btn-ghost btn-sm" title="Back to the loadout board"
+                        hx-get=(format!("/profiles/{e}/select")) hx-target="#profile-main" { (icon("arrow-left")) "Board" }
                     @if !p.agent.is_empty() { span class="chip chip-agent" title="rendered for this agent" { (p.agent.as_str()) } }
                     button class="toggle" title=(if d.disabled { "Enable loadout" } else { "Disable loadout" }) aria-label="Toggle loadout"
                         hx-post=(format!("/profiles/{e}/disable")) hx-target="#main" {
