@@ -210,13 +210,174 @@ fn handle_fragment_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
 
 fn handle_profile_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let (name, action) = id_and_action(&req.path, "/profiles/");
-    match (req.method.as_str(), action) {
-        ("GET", "edit") => handle_profile_edit(state, &name),
-        ("GET", "select") => handle_profile_select(state, &name),
-        ("POST", "disable") => handle_profile_disable(state, &name),
-        ("POST", "run") => handle_profile_run(state, &name),
-        ("DELETE", "") => handle_profile_delete(state, &name),
+    let (head, rest) = action.split_once('/').unwrap_or((action, ""));
+    match (req.method.as_str(), head, rest) {
+        ("GET", "edit", "") => handle_profile_edit(state, &name),
+        // `select` renders the Create-a-Loadout board; `preview` swaps in the
+        // composed-document view (the rendered guidance).
+        ("GET", "select", "") => board_resp(state, &name),
+        ("GET", "preview", "") => handle_profile_select(state, &name),
+        ("POST", "disable", "") => handle_profile_disable(state, &name),
+        ("POST", "run", "") => handle_profile_run(state, &name),
+        ("DELETE", "", "") => handle_profile_delete(state, &name),
+        // Applies-to (targets) slot.
+        ("GET", "targets", "new") => handle_target_picker(state, &name),
+        ("POST", "targets", id) if !id.is_empty() => {
+            handle_profile_target_add(state, &name, &state::percent_decode(id))
+        }
+        ("DELETE", "targets", id) if !id.is_empty() => {
+            handle_profile_target_remove(state, &name, &state::percent_decode(id))
+        }
+        // Fragments slots.
+        ("GET", "fragments", "new") => handle_fragment_picker(state, &name),
+        ("POST", "fragments", id) if !id.is_empty() => {
+            handle_profile_fragment_add(state, &name, &state::percent_decode(id))
+        }
+        ("DELETE", "fragments", id) if !id.is_empty() => {
+            handle_profile_fragment_remove(state, &name, &state::percent_decode(id))
+        }
+        // Workflow slot (one per loadout).
+        ("GET", "workflow", "new") => handle_workflow_picker(state, &name),
+        ("POST", "workflow", id) if !id.is_empty() => {
+            handle_profile_workflow_set(state, &name, &state::percent_decode(id))
+        }
+        ("DELETE", "workflow", "") => handle_profile_workflow_clear(state, &name),
         _ => Resp::not_found(),
+    }
+}
+
+/// Re-render the board into `#profile-main` after a slot edit, closing any open
+/// picker modal and refreshing the staged-changes indicator.
+fn board_resp(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
+    let snap = state.lock().unwrap().snapshot();
+    match state::board_view(&snap, name) {
+        Ok(b) => {
+            let mut html = views::loadout_board_fragment(&b);
+            html.push_str(&views::modal_close_loader());
+            html.push_str(&views::staged_indicator_loader());
+            Resp::html(html)
+        }
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
+    }
+}
+
+/// Current targets / fragment ids / workflow of the staged loadout `name`.
+fn staged_profile<T>(
+    state: &Arc<Mutex<StudioState>>,
+    name: &str,
+    f: impl FnOnce(&crate::profile::LoadoutConfig) -> T,
+    default: T,
+) -> T {
+    let snap = state.lock().unwrap().snapshot();
+    state::staged_config(&snap)
+        .ok()
+        .and_then(|c| c.profiles.into_iter().find(|p| p.name == name).map(|p| f(&p)))
+        .unwrap_or(default)
+}
+
+fn handle_target_picker(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
+    let snap = state.lock().unwrap().snapshot();
+    let lib = match state::library_view(&snap) {
+        Ok(l) => l,
+        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
+    };
+    let current = staged_profile(state, name, |p| p.targets.clone(), Vec::new());
+    let options: Vec<_> = lib
+        .targets
+        .into_iter()
+        .filter(|t| !current.iter().any(|c| c == &t.id))
+        .collect();
+    Resp::html(views::target_picker(name, &options))
+}
+
+fn handle_fragment_picker(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
+    let snap = state.lock().unwrap().snapshot();
+    let lib = match state::library_view(&snap) {
+        Ok(l) => l,
+        Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
+    };
+    let equipped = staged_profile(
+        state,
+        name,
+        |p| p.fragments.iter().map(|fr| fr.id().to_string()).collect(),
+        Vec::new(),
+    );
+    Resp::html(views::fragment_picker(name, &lib, &equipped))
+}
+
+fn handle_workflow_picker(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
+    let snap = state.lock().unwrap().snapshot();
+    let options = state::board_workflow_options(&snap);
+    let current = staged_profile(state, name, |p| p.workflow.clone(), None);
+    Resp::html(views::workflow_picker(name, &options, current.as_deref()))
+}
+
+fn handle_profile_target_add(state: &Arc<Mutex<StudioState>>, name: &str, id: &str) -> Resp {
+    let r = {
+        let mut s = state.lock().unwrap();
+        state::edit_profile(&mut s.session, name, |p| {
+            if !p.targets.iter().any(|t| t == id) {
+                p.targets.push(id.to_string());
+            }
+        })
+    };
+    finish_slot_edit(state, name, r)
+}
+
+fn handle_profile_target_remove(state: &Arc<Mutex<StudioState>>, name: &str, id: &str) -> Resp {
+    let r = {
+        let mut s = state.lock().unwrap();
+        state::edit_profile(&mut s.session, name, |p| p.targets.retain(|t| t != id))
+    };
+    finish_slot_edit(state, name, r)
+}
+
+fn handle_profile_fragment_add(state: &Arc<Mutex<StudioState>>, name: &str, id: &str) -> Resp {
+    let r = {
+        let mut s = state.lock().unwrap();
+        state::edit_profile(&mut s.session, name, |p| {
+            if !p.fragments.iter().any(|fr| fr.id() == id) {
+                p.fragments
+                    .push(crate::profile::FragmentRef::Id(id.to_string()));
+            }
+        })
+    };
+    finish_slot_edit(state, name, r)
+}
+
+fn handle_profile_fragment_remove(state: &Arc<Mutex<StudioState>>, name: &str, id: &str) -> Resp {
+    let r = {
+        let mut s = state.lock().unwrap();
+        state::edit_profile(&mut s.session, name, |p| p.fragments.retain(|fr| fr.id() != id))
+    };
+    finish_slot_edit(state, name, r)
+}
+
+fn handle_profile_workflow_set(state: &Arc<Mutex<StudioState>>, name: &str, id: &str) -> Resp {
+    let r = {
+        let mut s = state.lock().unwrap();
+        state::edit_profile(&mut s.session, name, |p| p.workflow = Some(id.to_string()))
+    };
+    finish_slot_edit(state, name, r)
+}
+
+fn handle_profile_workflow_clear(state: &Arc<Mutex<StudioState>>, name: &str) -> Resp {
+    let r = {
+        let mut s = state.lock().unwrap();
+        state::edit_profile(&mut s.session, name, |p| p.workflow = None)
+    };
+    finish_slot_edit(state, name, r)
+}
+
+/// Re-render the board on a successful slot edit, or surface the staging error.
+fn finish_slot_edit(
+    state: &Arc<Mutex<StudioState>>,
+    name: &str,
+    r: crate::Result<()>,
+) -> Resp {
+    match r {
+        Ok(()) => board_resp(state, name),
+        Err(e) => Resp::html(views::error_fragment(&e.to_string())),
     }
 }
 
@@ -2579,11 +2740,12 @@ mod tests {
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
-        // Selecting a profile renders the detail: one expandable card per
-        // composed fragment, each carrying its rendered guidance.
+        // Preview renders the composed document: one expandable card per
+        // composed fragment, each carrying its rendered guidance. (Plain select
+        // renders the board; Preview is the composed-doc view.)
         let body = body_of(route(
             &st,
-            &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
+            &req("GET", "/profiles/rust/preview", "", &[HOST, COOKIE], ""),
         ));
         assert!(body.contains("<h1>rust</h1>")); // the detail names the profile
         assert!(body.contains("fragment-detail")); // expandable cards
@@ -2777,7 +2939,7 @@ mod tests {
         let st = state_for(d.path(), Some(cfg));
         let body = body_of(route(
             &st,
-            &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
+            &req("GET", "/profiles/rust/preview", "", &[HOST, COOKIE], ""),
         ));
         assert!(body.contains("fragment-detail"), "renders the card");
         assert!(
@@ -3123,12 +3285,77 @@ mod tests {
         assert!(body.contains("Select a loadout to see what it composes."));
         assert!(!body.contains("fragment-detail"));
         assert!(!body.contains("<h1>rust</h1>"));
-        // Explicitly selecting one still renders its detail.
+        // Explicitly selecting one renders its board (Applies to / Fragments /
+        // Workflow slots), not the composed-document cards.
         let detail = body_of(route(
             &st,
             &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
         ));
-        assert!(detail.contains("<h1>rust</h1>") && detail.contains("fragment-detail"));
+        assert!(detail.contains("<h1>rust</h1>") && detail.contains("lo-board"));
+        assert!(detail.contains("Applies to") && detail.contains("Workflow"));
+        assert!(!detail.contains("fragment-detail"));
+    }
+
+    #[test]
+    fn board_inline_edits_stage_changes() {
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\
+             \n[[fragments]]\nid = \"tc\"\nguidance = \"y\"\n\
+             \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+
+        // Select renders the board: the three slot sections + the one equipped
+        // fragment (with its remove control).
+        let board = body_of(route(
+            &st,
+            &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(board.contains("lo-board"));
+        assert!(board.contains("Applies to") && board.contains("Fragments") && board.contains("Workflow"));
+        assert!(board.contains("/profiles/rust/fragments/rc")); // rc chip's remove
+
+        // Equip the second fragment → it stages and the readout counts both.
+        let after = body_of(route(
+            &st,
+            &req("POST", "/profiles/rust/fragments/tc", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        assert!(after.contains("/profiles/rust/fragments/tc"));
+        assert!(after.contains("2 fragments"));
+
+        // Bind a workflow (a plain string ref; resolution is lazy) → slot fills.
+        let bound = body_of(route(
+            &st,
+            &req("POST", "/profiles/rust/workflow/superpowers", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        assert!(bound.contains("superpowers"), "workflow slot fills; got:\n{bound}");
+        // Clear it → the empty "Equip a workflow" slot returns.
+        let cleared = body_of(route(
+            &st,
+            &req("DELETE", "/profiles/rust/workflow", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        assert!(cleared.contains("Equip a workflow"));
+
+        // Add then remove a target.
+        let added = body_of(route(
+            &st,
+            &req("POST", "/profiles/rust/targets/go", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        assert!(added.contains("/profiles/rust/targets/go"));
+        let removed = body_of(route(
+            &st,
+            &req("DELETE", "/profiles/rust/targets/go", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        assert!(!removed.contains("/profiles/rust/targets/go"));
+
+        // State-changing slot edits are CSRF-guarded (no Origin → rejected).
+        assert_eq!(
+            route(
+                &st,
+                &req("POST", "/profiles/rust/fragments/tc", "", &[HOST, COOKIE], "")
+            )
+            .status,
+            403
+        );
     }
 
     #[test]
@@ -3230,7 +3457,7 @@ mod tests {
         let st = state_for(d.path(), Some(cfg));
         let body = body_of(route(
             &st,
-            &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
+            &req("GET", "/profiles/rust/preview", "", &[HOST, COOKIE], ""),
         ));
         assert!(body.contains("fragment-detail")); // the card is present
         assert!(body.contains("fragment-run-prompt") && body.contains("Run script")); // centered prompt
@@ -3248,7 +3475,7 @@ mod tests {
         // Read-only preview: a run prompt, no real output yet.
         let before = body_of(route(
             &st,
-            &req("GET", "/profiles/m/select", "", &[HOST, COOKIE], ""),
+            &req("GET", "/profiles/m/preview", "", &[HOST, COOKIE], ""),
         ));
         assert!(before.contains("fragment-run-prompt") && !before.contains("fragment-output"));
 

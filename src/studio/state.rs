@@ -275,6 +275,165 @@ pub fn staged_config(snap: &Snapshot) -> crate::Result<Config> {
     Config::from_layer_strs(snap.layer_texts.clone())
 }
 
+// --- the Create-a-Loadout board ---------------------------------------------
+
+/// One equipped fragment chip on the board.
+pub struct BoardFrag {
+    pub id: String,
+    pub title: String,
+    pub kind: &'static str,
+}
+
+/// The loadout's single workflow slot, when bound.
+pub struct BoardWorkflow {
+    pub id: String,
+    /// The filled stage spine (`Brainstorm → Plan → …`), for the slot subtitle.
+    pub spine: String,
+}
+
+/// Everything the board needs to render one loadout as slots: its targets
+/// ("Applies to"), equipped fragments, and the single workflow binding. Built
+/// from the *staged* config so it reflects unsaved edits.
+pub struct BoardView {
+    pub name: String,
+    pub disabled: bool,
+    /// No targets ⇒ the catch-all default loadout (locked "Applies to").
+    pub is_default: bool,
+    pub targets: Vec<TargetChip>,
+    pub fragments: Vec<BoardFrag>,
+    pub workflow: Option<BoardWorkflow>,
+    /// A plain-language "where this applies" line for the readout.
+    pub where_summary: String,
+}
+
+/// Build the board for the loadout named `name` from the staged config. Fragment
+/// titles/kinds come from the library view; target icons from the catalog; the
+/// workflow spine from the resolved workflow catalog.
+pub fn board_view(snap: &Snapshot, name: &str) -> crate::Result<BoardView> {
+    let cfg = staged_config(snap)?;
+    let p = cfg
+        .profiles
+        .iter()
+        .find(|p| p.name == name)
+        .ok_or_else(|| anyhow::anyhow!("unknown loadout '{name}'"))?;
+    let lib = library_view(snap)?;
+    let meta = |id: &str| {
+        lib.yours
+            .iter()
+            .chain(lib.palette.iter())
+            .find(|f| f.id == id)
+    };
+    let fragments = p
+        .fragments
+        .iter()
+        .map(|fr| {
+            let id = fr.id();
+            match meta(id) {
+                Some(f) => BoardFrag {
+                    id: id.to_string(),
+                    title: f.title.clone(),
+                    kind: f.kind,
+                },
+                None => BoardFrag {
+                    id: id.to_string(),
+                    title: id.to_string(),
+                    kind: "unknown",
+                },
+            }
+        })
+        .collect();
+    let targets = p
+        .targets
+        .iter()
+        .map(|t| TargetChip {
+            id: t.clone(),
+            icon: lib
+                .targets
+                .iter()
+                .find(|c| &c.id == t)
+                .and_then(|c| c.icon.clone())
+                .or_else(|| crate::target::builtin_icon(t).map(str::to_string)),
+        })
+        .collect::<Vec<_>>();
+    let workflow = p.workflow.as_ref().map(|id| {
+        let spine = workflows_view(snap, None)
+            .workflows
+            .iter()
+            .find(|w| &w.id == id)
+            .map(|w| {
+                w.slots
+                    .iter()
+                    .filter(|s| s.filled)
+                    .map(|s| s.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(" → ")
+            })
+            .unwrap_or_default();
+        BoardWorkflow {
+            id: id.clone(),
+            spine,
+        }
+    });
+    let is_default = p.targets.is_empty();
+    let where_summary = if is_default {
+        "everywhere — the catch-all".to_string()
+    } else {
+        format!("any {} repo", p.targets.join(" / "))
+    };
+    Ok(BoardView {
+        name: name.to_string(),
+        disabled: p.disabled,
+        is_default,
+        targets,
+        fragments,
+        workflow,
+        where_summary,
+    })
+}
+
+/// The workflows a loadout can equip (the resolved catalog), as `(id, title,
+/// spine)` rows for the workflow picker.
+pub fn board_workflow_options(snap: &Snapshot) -> Vec<(String, String, String)> {
+    workflows_view(snap, None)
+        .workflows
+        .into_iter()
+        .map(|w| {
+            let spine = w
+                .slots
+                .iter()
+                .filter(|s| s.filled)
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>()
+                .join(" → ");
+            (w.id, w.title, spine)
+        })
+        .collect()
+}
+
+/// Stage an edit to a single field of the loadout named `name`: load it from the
+/// staged config, mutate it in `f`, and stage the whole profile back as an
+/// `EditProfile`. The board's inline edits (equip a fragment, add a target, bind
+/// a workflow) all go through here.
+pub fn edit_profile<F: FnOnce(&mut LoadoutConfig)>(
+    session: &mut Session,
+    name: &str,
+    f: F,
+) -> crate::Result<()> {
+    let cfg = session.staged_config()?;
+    let mut p = cfg
+        .profiles
+        .iter()
+        .find(|p| p.name == name)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("unknown loadout '{name}'"))?;
+    f(&mut p);
+    session.stage(StagedOp::EditProfile {
+        layer: Layer::Global,
+        name: name.to_string(),
+        profile: Box::new(p),
+    })
+}
+
 /// Select the profile for `(cfg, ctx)` honoring the on-disk binding. `select`
 /// also resolves the no-targets catch-all default, so the preview reflects what
 /// a real render would apply.

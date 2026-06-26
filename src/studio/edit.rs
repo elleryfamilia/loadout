@@ -597,6 +597,10 @@ fn profile_table(p: &LoadoutConfig) -> Result<Table> {
         let caps = toml::Value::try_from(&p.fragments).context("serializing profile fragments")?;
         t["fragments"] = to_edit_item(&caps);
     }
+    // The single per-loadout workflow binding (the board's Workflow slot).
+    if let Some(wf) = &p.workflow {
+        t["workflow"] = value(wf.as_str());
+    }
     if let Some(tmpl) = &p.template {
         t["template"] = value(tmpl.as_str());
     }

@@ -257,6 +257,75 @@ body {
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #fff; transition: transform .15s; }
 .switch.on::after { transform: translateX(13px); }
 
+/* --- the Create-a-Loadout board ------------------------------------------- */
+.lo-board { display: flex; flex-direction: column; gap: 16px; max-width: 60rem; }
+.detail-sub { color: var(--muted); font-size: 12.5px; margin: 2px 0 6px; }
+
+/* each slot section is its own framed block with a bigger header */
+.slot-section { border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--panel); padding: 15px 18px; display: flex; flex-direction: column; gap: 14px; }
+.slot-head { display: flex; align-items: center; gap: 12px; }
+.slot-head-icon { flex: none; width: 32px; height: 32px; border-radius: var(--r-sm);
+  background: var(--elevated); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; }
+.slot-head-icon .icon { width: 17px; height: 17px; }
+.slot-head-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.slot-head-title { font-size: 15.5px; font-weight: 600; color: var(--fg); display: flex; align-items: center; gap: 9px; line-height: 1.2; }
+.slot-head-hint { font-size: 11.5px; color: var(--faint); }
+.slot-count { font-size: 11px; font-weight: 600; color: var(--muted); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+.slot-head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+.slot-row { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+/* removable target chip: the existing chip + a hover ✕ */
+.target-chip .tx { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
+  margin-left: 3px; padding: 0; border: none; background: transparent; color: var(--faint); cursor: pointer; border-radius: 4px; }
+.target-chip .tx:hover { color: var(--danger); background: var(--danger-soft); }
+.target-chip .tx .icon { width: 12px; height: 12px; }
+
+/* compact fragment chip — title only, ✕ on hover */
+.frag-chip { display: inline-flex; align-items: center; gap: 9px; padding: 6px 9px 6px 7px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--panel-2); transition: border-color .12s; }
+.frag-chip:hover { border-color: var(--accent-line); }
+.frag-chip .cg { flex: none; width: 26px; height: 26px; border-radius: 6px; background: var(--accent-soft);
+  color: var(--accent); display: inline-flex; align-items: center; justify-content: center; }
+.frag-chip .cg.warm { background: var(--caution-soft); color: var(--caution); }
+.frag-chip .cg .icon { width: 15px; height: 15px; }
+.frag-chip .cn { font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.frag-chip .cx { flex: none; opacity: 0; width: 18px; height: 18px; padding: 0; border: none;
+  background: transparent; color: var(--faint); cursor: pointer; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; }
+.frag-chip:hover .cx { opacity: 1; }
+.frag-chip .cx:hover { color: var(--danger); background: var(--danger-soft); }
+.frag-chip .cx .icon { width: 13px; height: 13px; }
+
+/* the single workflow slot */
+.slot { display: flex; align-items: center; gap: 11px; padding: 10px 12px; min-width: 320px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--panel-2); transition: border-color .12s; }
+.slot:hover { border-color: var(--accent-line); }
+.slot-single { min-width: 320px; }
+.slot-glyph { flex: none; width: 32px; height: 32px; border-radius: var(--r-sm); display: inline-flex;
+  align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); }
+.slot-glyph .icon { width: 17px; height: 17px; }
+.slot-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.slot-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
+.slot-sub { font-size: 11px; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 26rem; }
+.slot-x { flex: none; width: 22px; height: 22px; } .slot-x .icon { width: 14px; height: 14px; }
+.slot-empty { border-style: dashed; color: var(--muted); cursor: pointer; background: transparent; }
+.slot-empty:hover { border-color: var(--accent); color: var(--accent); }
+.slot-empty .slot-glyph { background: transparent; color: inherit; border: 1px dashed var(--border-strong); }
+.slot-empty:hover .slot-glyph { border-color: var(--accent); }
+
+/* the default loadout's locked "Applies to" explainer */
+.applies-default { display: flex; align-items: center; gap: 11px; padding: 12px 14px;
+  border: 1px dashed var(--border-strong); border-radius: var(--r); background: var(--panel-2); }
+.applies-default .ad-glyph { flex: none; width: 32px; height: 32px; border-radius: var(--r-sm);
+  background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; }
+.applies-default .ad-text { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.applies-default .ad-text strong { color: var(--fg); font-weight: 600; }
+
+.chip-default { color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line); }
+.pick-group { padding: 8px 4px 2px; }
+.pick-current { margin-left: auto; color: var(--accent); display: inline-flex; }
+
 /* detail (selected profile) */
 .profile-main { min-width: 0; }
 .detail { display: flex; flex-direction: column; gap: 14px; }

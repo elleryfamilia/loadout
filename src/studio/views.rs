@@ -19,9 +19,9 @@ use crate::fragment::{Fragment, Layer};
 use crate::profile::LoadoutConfig;
 use crate::studio::edit::FileDiff;
 use crate::studio::state::{
-    AtomDot, AtomState, FragmentView, LibraryView, Onboarding, PackView, PreviewCap,
-    PreviewOutcome, ProfileView, TargetView, TargetsView, WorkflowSlotView, WorkflowView,
-    WorkflowsView,
+    AtomDot, AtomState, BoardFrag, BoardView, FragmentView, LibraryView, Onboarding, PackView,
+    PreviewCap, PreviewOutcome, ProfileView, TargetChip, TargetView, TargetsView, WorkflowSlotView,
+    WorkflowView, WorkflowsView,
 };
 use crate::target::{TargetDef, TargetRule};
 
@@ -68,6 +68,9 @@ fn icon(name: &str) -> Markup {
             r#"<path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>"#
         }
         "check" => r#"<path d="M20 6 9 17l-5-5"/>"#,
+        "swap" => {
+            r#"<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>"#
+        }
         "x" => r#"<path d="M18 6 6 18M6 6l12 12"/>"#,
         "chevron-down" => r#"<path d="m6 9 6 6 6-6"/>"#,
         "power" => r#"<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/>"#,
@@ -752,6 +755,274 @@ pub fn profile_detail(d: &ProfileDetail) -> Markup {
 
 pub fn profile_detail_fragment(d: &ProfileDetail) -> String {
     profile_detail(d).into_string()
+}
+
+// --- the Create-a-Loadout board ---------------------------------------------
+
+/// The board: the selected loadout shown as editable slots — Applies to
+/// (targets), Fragments, and a single Workflow — plus a readout. Fills
+/// `#profile-main` (the rail's select renders this). A "Preview" action swaps in
+/// the composed-document view ([`profile_detail`]).
+pub fn loadout_board(b: &BoardView) -> Markup {
+    let e = enc(&b.name);
+    html! {
+        div class="detail" {
+            div class="detail-head" {
+                div class="detail-title" {
+                    h1 { (b.name) }
+                    @if b.is_default { span class="chip chip-default" { (icon("globe")) "Default" } }
+                    @if b.disabled { span class="tag off-tag" { "disabled" } }
+                }
+                div class="detail-actions" {
+                    button class="btn btn-ghost btn-sm" title="Preview the composed guidance"
+                        hx-get=(format!("/profiles/{e}/preview")) hx-target="#profile-main" { (icon("eye")) "Preview" }
+                    button class="toggle" title=(if b.disabled { "Enable loadout" } else { "Disable loadout" }) aria-label="Toggle loadout"
+                        hx-post=(format!("/profiles/{e}/disable")) hx-target="#main" {
+                        span class=(if b.disabled { "switch off" } else { "switch on" }) {}
+                    }
+                    button class="icon-btn" title="Rename" aria-label=(format!("Rename {}", b.name))
+                        hx-get=(format!("/profiles/{e}/edit")) hx-target="#main" { (icon("pencil")) }
+                    @if !b.is_default {
+                        button class="icon-btn danger" title="Delete" aria-label=(format!("Delete {}", b.name))
+                            hx-delete=(format!("/profiles/{e}")) hx-target="#main"
+                            hx-confirm=(format!("Stage deletion of loadout \"{}\"?", b.name)) { (icon("trash")) }
+                    }
+                }
+            }
+            p class="detail-sub" {
+                @if b.is_default { "The always-on baseline — carried everywhere, beneath whatever else matches." }
+                @else { "Configure this loadout — the gear it carries into a matching repo." }
+            }
+            div class="lo-board" {
+                (board_applies(b, &e))
+                (board_section(
+                    "box", "Fragments", Some(b.fragments.len()), "the guidance it composes",
+                    Some(html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/fragments/new")) hx-target="#modal" { (icon("plus")) "Equip" } }),
+                    html! {
+                        div class="slot-row" {
+                            @for f in &b.fragments { (board_frag_chip(&e, f)) }
+                            @if b.fragments.is_empty() { span class="muted small" { "No fragments yet — Equip one from the library." } }
+                        }
+                    },
+                ))
+                (board_section(
+                    "git-branch", "Workflow", None, "a single multi-step process, optional",
+                    None, board_workflow_slot(b, &e),
+                ))
+                div class="provenance" {
+                    span class="prov-node" { (b.fragments.len()) " " (if b.fragments.len() == 1 { "fragment" } else { "fragments" }) }
+                    @if let Some(w) = &b.workflow {
+                        span class="prov-arrow" { (icon("plus")) }
+                        span class="prov-node" { (w.id) }
+                    }
+                    span class="prov-arrow" { (icon("arrow-right")) }
+                    span { (b.where_summary) }
+                }
+            }
+        }
+    }
+}
+
+pub fn loadout_board_fragment(b: &BoardView) -> String {
+    loadout_board(b).into_string()
+}
+
+/// One framed board section: an icon tile + bold title + optional count + hint,
+/// optional header actions, then the body.
+fn board_section(
+    icon_name: &str,
+    title: &str,
+    count: Option<usize>,
+    hint: &str,
+    actions: Option<Markup>,
+    body: Markup,
+) -> Markup {
+    html! {
+        div class="slot-section" {
+            div class="slot-head" {
+                span class="slot-head-icon" { (icon(icon_name)) }
+                div class="slot-head-text" {
+                    span class="slot-head-title" { (title) @if let Some(n) = count { span class="slot-count" { (n) } } }
+                    span class="slot-head-hint" { (hint) }
+                }
+                @if let Some(a) = actions { div class="slot-head-actions" { (a) } }
+            }
+            (body)
+        }
+    }
+}
+
+/// The "Applies to" section — a locked explainer for the default loadout, or the
+/// editable target chips + Add for a targeted one.
+fn board_applies(b: &BoardView, e: &str) -> Markup {
+    if b.is_default {
+        board_section(
+            "globe", "Applies to", None, "the default — applies when no other loadout matches",
+            None,
+            html! {
+                div class="applies-default" {
+                    span class="ad-glyph" { (icon("globe")) }
+                    span class="ad-text" {
+                        strong { "Applies everywhere." }
+                        " This is the default loadout — it’s used whenever no other loadout matches, in any project or none at all, so there are no targets to set."
+                    }
+                }
+            },
+        )
+    } else {
+        board_section(
+            "target", "Applies to", Some(b.targets.len()), "repos this loadout is detected on",
+            Some(html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/targets/new")) hx-target="#modal" { (icon("plus")) "Add" } }),
+            html! {
+                div class="slot-row" {
+                    @for t in &b.targets { (board_target_chip(e, t)) }
+                    @if b.targets.is_empty() { span class="target-chip muted" { "no targets yet — Add one" } }
+                }
+            },
+        )
+    }
+}
+
+fn board_target_chip(e: &str, t: &TargetChip) -> Markup {
+    let ti = resolve_target_icon(t.icon.as_deref(), &t.id);
+    html! {
+        span class="target-chip" {
+            (target_icon_markup(&ti)) (t.id)
+            button class="tx" type="button" title="Remove target" aria-label=(format!("Remove target {}", t.id))
+                hx-delete=(format!("/profiles/{e}/targets/{}", enc(&t.id))) hx-target="#profile-main" { (icon("x")) }
+        }
+    }
+}
+
+fn board_frag_chip(e: &str, f: &BoardFrag) -> Markup {
+    let warm = matches!(f.kind, "command" | "provider");
+    html! {
+        span class="frag-chip" {
+            span class=(if warm { "cg warm" } else { "cg" }) { (icon(if warm { "terminal" } else { "box" })) }
+            span class="cn" { (f.title) }
+            button class="cx" type="button" title="Remove fragment" aria-label=(format!("Remove fragment {}", f.id))
+                hx-delete=(format!("/profiles/{e}/fragments/{}", enc(&f.id))) hx-target="#profile-main" { (icon("x")) }
+        }
+    }
+}
+
+fn board_workflow_slot(b: &BoardView, e: &str) -> Markup {
+    match &b.workflow {
+        Some(w) => html! {
+            div class="slot slot-single" {
+                span class="slot-glyph" { (icon("git-branch")) }
+                div class="slot-body" {
+                    span class="slot-name" { (w.id) }
+                    @if !w.spine.is_empty() { span class="slot-sub" { (w.spine) } }
+                }
+                button class="icon-btn slot-x" type="button" title="Swap workflow"
+                    hx-get=(format!("/profiles/{e}/workflow/new")) hx-target="#modal" { (icon("swap")) }
+                button class="icon-btn slot-x" type="button" title="Remove workflow"
+                    hx-delete=(format!("/profiles/{e}/workflow")) hx-target="#profile-main" { (icon("x")) }
+            }
+        },
+        None => html! {
+            div class="slot slot-single slot-empty" role="button" tabindex="0"
+                hx-get=(format!("/profiles/{e}/workflow/new")) hx-target="#modal" {
+                span class="slot-glyph" { (icon("plus")) }
+                div class="slot-body" {
+                    span class="slot-name" { "Equip a workflow" }
+                    span class="slot-sub" { "optional · one per loadout" }
+                }
+            }
+        },
+    }
+}
+
+/// The target picker (a modal): the catalog targets not already on this loadout.
+pub fn target_picker(name: &str, options: &[TargetChip]) -> String {
+    let e = enc(name);
+    html! {
+        div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
+        div class="modal" {
+            div class="modal-head" { h2 { "Add a target" } (close_btn()) }
+            div class="modal-body" {
+                div class="pick-list" {
+                    @if options.is_empty() { p class="muted" { "Every target is already on this loadout." } }
+                    @for t in options {
+                        div class="pick" role="button" tabindex="0"
+                            hx-post=(format!("/profiles/{e}/targets/{}", enc(&t.id))) hx-target="#profile-main" {
+                            span class="pick-glyph" { (target_icon_markup(&resolve_target_icon(t.icon.as_deref(), &t.id))) }
+                            span class="pick-main" { span class="pick-title" { (t.id) } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    .into_string()
+}
+
+/// The fragment picker (a modal): your owned fragments not already equipped,
+/// grouped by category (the same grouping the Library uses).
+pub fn fragment_picker(name: &str, lib: &LibraryView, equipped: &[String]) -> String {
+    let e = enc(name);
+    let is_equipped = |id: &str| equipped.iter().any(|x| x == id);
+    let groups = group_fragments(&lib.yours);
+    let any = lib.yours.iter().any(|f| !is_equipped(&f.id));
+    html! {
+        div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
+        div class="modal" {
+            div class="modal-head" { h2 { "Equip a fragment" } (close_btn()) }
+            div class="modal-body" {
+                @if !any { p class="muted" { "Every fragment in your library is already equipped. Create more in the Library." } }
+                div class="pick-list" {
+                    @for (label, frags) in &groups {
+                        @let avail: Vec<&&FragmentView> = frags.iter().filter(|f| !is_equipped(&f.id)).collect();
+                        @if !avail.is_empty() {
+                            div class="frag-group-head pick-group" { (label) }
+                            @for f in avail {
+                                div class="pick" role="button" tabindex="0"
+                                    hx-post=(format!("/profiles/{e}/fragments/{}", enc(&f.id))) hx-target="#profile-main" {
+                                    span class="pick-glyph" { (icon(if matches!(f.kind, "command" | "provider") { "terminal" } else { "box" })) }
+                                    span class="pick-main" {
+                                        span class="pick-title" { (f.title) }
+                                        span class="pick-id" { (f.id) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    .into_string()
+}
+
+/// The workflow picker (a modal): the resolved workflow catalog (built-ins + your
+/// own), single-select. `current` marks the one already bound.
+pub fn workflow_picker(name: &str, options: &[(String, String, String)], current: Option<&str>) -> String {
+    let e = enc(name);
+    html! {
+        div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
+        div class="modal" {
+            div class="modal-head" { h2 { "Equip a workflow" } (close_btn()) }
+            div class="modal-body" {
+                div class="pick-list" {
+                    @for (id, title, spine) in options {
+                        div class="pick" role="button" tabindex="0"
+                            hx-post=(format!("/profiles/{e}/workflow/{}", enc(id))) hx-target="#profile-main" {
+                            span class="pick-glyph" { (icon("git-branch")) }
+                            span class="pick-main" {
+                                span class="pick-title" { (title) }
+                                @if !spine.is_empty() { span class="pick-id" { (spine) } }
+                            }
+                            @if current == Some(id.as_str()) {
+                                span class="pick-current" { (icon("check")) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    .into_string()
 }
 
 /// One collapsible fragment section inside the profile "document": a compact
