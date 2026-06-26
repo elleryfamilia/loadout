@@ -1,6 +1,6 @@
 [package]
 name = "loadout"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Inject global context into your AI coding agents: detect the project, select the loadout that fits, and render an agent-specific instruction overlay."

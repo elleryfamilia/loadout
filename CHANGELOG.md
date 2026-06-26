@@ -8,6 +8,50 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.11.0 — 2026-06-26
+
+### Added
+
+- **Create-a-Loadout board** — selecting a loadout in `load studio` now opens an
+  editable board of slots instead of a read-only document: **Applies to**
+  (targets), **Fragments**, and a single **Workflow** slot, plus a one-line
+  readout of what it renders and where. Each slot edits in place (add/remove a
+  target, equip/remove a fragment from a category-grouped picker, bind/swap/clear
+  the workflow). The composed-guidance view moves behind a **Preview** action
+  (with a "← Board" button back).
+- **Per-loadout workflow, in the UI** — a loadout's workflow binding
+  (`Profile.workflow`) is now first-class: equip one in the board's Workflow
+  slot. (It was always in the model but had no UI — and a write bug meant it
+  never persisted; see Fixed.)
+- **Paged fragments** — the board's Fragments section pages a long list 9 at a
+  time in a fixed 3×3 grid, so a big loadout no longer sprawls and flipping pages
+  never shifts the layout.
+- **Single canonical default loadout** — the no-targets catch-all is now *the*
+  default: pinned to the top of the rail with a Default badge, a locked "Applies
+  to", and no rename/delete. Every other loadout needs ≥1 target. `load doctor`
+  warns when there are zero or more than one. Starter packs reflect this — the
+  **everyday** pack is the default (no targets), and every pack now binds the
+  house workflow (`superpowers`).
+
+### Changed
+
+- **Studio top nav is now two destinations: Loadouts | Library.** Fragments,
+  Targets, and Workflows moved into the Library (a pill sub-nav) — they're the
+  shared gear a loadout binds, not peers of a loadout.
+
+### Removed
+
+- **The global active workflow (`[defaults].workflow`) is gone (breaking).** A
+  workflow is bound per-loadout only (equip it in the Workflow slot; use the
+  default loadout for "everywhere"). A leftover `[defaults].workflow` is
+  tolerated and ignored. The studio's "active workflow" / "Use this workflow"
+  activation is replaced by per-loadout binding.
+
+### Fixed
+
+- The studio wrote profiles without their `workflow` field, so a per-loadout
+  workflow binding never persisted. It does now.
+
 ## 0.10.0 — 2026-06-26
 
 ### Added
