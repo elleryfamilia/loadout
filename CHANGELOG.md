@@ -8,6 +8,40 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.10.0 — 2026-06-26
+
+### Added
+
+- **Per-step instructions** — a workflow step can now carry the full
+  prescriptive guidance, not just a one-line summary. It rides in that step's
+  `/loadout:<step>` command and loads only when you run the step, so the
+  always-on workflow map stays terse. The studio step editor splits into a
+  one-line summary plus an instructions body, and a step that carries one shows
+  a "details" marker on its card.
+- **`/loadout:ship`** — a sixth canonical command for the finish-and-ship phase
+  (commit, push, open the PR). The spine is now explore → brainstorm → plan →
+  implement → verify → ship. `commit`/`ship`/`pr` map to `ship` instead of
+  folding into `verify`, so a workflow with both a review step and a commit step
+  keeps both as distinct commands.
+
+### Changed
+
+- **Built-in workflows now ship their frameworks' real content, verbatim.**
+  Superpowers, spec-driven, and compound embed the actual upstream skill/command
+  files — vendored from each project's MIT-licensed repo and pinned by release
+  in `vendored/sources.toml` — instead of loadout's own summaries, so binding
+  one gives you that framework's real guidance. The `loadout-import-workflow`
+  skill now captures a source step's full body the same way.
+
+### Removed
+
+- **Dropped the `boris`, `lean`, and `loop` built-ins.** Each was only a prose
+  summary of a methodology with no upstream repo to copy faithfully (Boris's
+  site, an Anthropic article, the Ralph blog), so it misrepresented what it
+  named. A profile still bound to one now renders no workflow (and `load doctor`
+  flags the dangling binding) — rebind to `superpowers`, `spec-driven`, or
+  `compound`, or import the source with `loadout-import-workflow`.
+
 ## 0.9.0 — 2026-06-25
 
 ### Added
