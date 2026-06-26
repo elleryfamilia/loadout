@@ -271,7 +271,12 @@ fn staged_profile<T>(
     let snap = state.lock().unwrap().snapshot();
     state::staged_config(&snap)
         .ok()
-        .and_then(|c| c.profiles.into_iter().find(|p| p.name == name).map(|p| f(&p)))
+        .and_then(|c| {
+            c.profiles
+                .into_iter()
+                .find(|p| p.name == name)
+                .map(|p| f(&p))
+        })
         .unwrap_or(default)
 }
 
@@ -367,7 +372,9 @@ fn handle_profile_fragment_add(state: &Arc<Mutex<StudioState>>, name: &str, id: 
 fn handle_profile_fragment_remove(state: &Arc<Mutex<StudioState>>, name: &str, id: &str) -> Resp {
     let r = {
         let mut s = state.lock().unwrap();
-        state::edit_profile(&mut s.session, name, |p| p.fragments.retain(|fr| fr.id() != id))
+        state::edit_profile(&mut s.session, name, |p| {
+            p.fragments.retain(|fr| fr.id() != id)
+        })
     };
     finish_slot_edit(state, name, r)
 }
@@ -389,11 +396,7 @@ fn handle_profile_workflow_clear(state: &Arc<Mutex<StudioState>>, name: &str) ->
 }
 
 /// Re-render the board on a successful slot edit, or surface the staging error.
-fn finish_slot_edit(
-    state: &Arc<Mutex<StudioState>>,
-    name: &str,
-    r: crate::Result<()>,
-) -> Resp {
+fn finish_slot_edit(state: &Arc<Mutex<StudioState>>, name: &str, r: crate::Result<()>) -> Resp {
     match r {
         Ok(()) => board_resp(state, name),
         Err(e) => Resp::html(views::error_fragment(&e.to_string())),
@@ -443,9 +446,9 @@ fn handle_library(state: &Arc<Mutex<StudioState>>, cat: &str) -> Resp {
     let snap = state.lock().unwrap().snapshot();
     match cat {
         "targets" => Resp::html(views::targets_tab_fragment(&state::targets_view(&snap))),
-        "workflows" => {
-            Resp::html(views::workflows_tab_fragment(&state::workflows_view(&snap, None)))
-        }
+        "workflows" => Resp::html(views::workflows_tab_fragment(&state::workflows_view(
+            &snap, None,
+        ))),
         _ => match state::library_view(&snap) {
             Ok(lib) => Resp::html(views::fragments_tab_fragment(&lib, None)),
             Err(e) => Resp::html(views::error_fragment(&e.to_string())),
@@ -1384,9 +1387,9 @@ fn handle_profile_save(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         let snap = state.lock().unwrap().snapshot();
         let other_default = state::staged_config(&snap)
             .map(|cfg| {
-                cfg.profiles
-                    .iter()
-                    .any(|p| p.targets.is_empty() && !p.disabled && Some(p.name.as_str()) != original)
+                cfg.profiles.iter().any(|p| {
+                    p.targets.is_empty() && !p.disabled && Some(p.name.as_str()) != original
+                })
             })
             .unwrap_or(false);
         if other_default {
@@ -2343,7 +2346,10 @@ mod tests {
         );
         // The bound workflow shows an "equipped on a loadout" marker — there's no
         // global "active workflow" concept anymore.
-        assert!(body.contains("equipped on"), "binding marker for spec-driven");
+        assert!(
+            body.contains("equipped on"),
+            "binding marker for spec-driven"
+        );
         assert!(
             body.contains(r#"<span class="cmd-name">explore</span>"#),
             "the canonical `explore` slot command is shown"
@@ -2359,7 +2365,10 @@ mod tests {
             .body,
         )
         .unwrap();
-        assert!(!sp.contains("Use this workflow"), "no global activate action");
+        assert!(
+            !sp.contains("Use this workflow"),
+            "no global activate action"
+        );
         for (cmd, name) in [
             ("explore", "Explore"),
             ("brainstorm", "Brainstorm"),
@@ -2377,8 +2386,14 @@ mod tests {
                 "slot shows its step name `{name}`"
             );
         }
-        assert!(sp.contains("skipped"), "an unfilled canonical slot is skipped");
-        assert!(sp.contains("wf-value-mark"), "workflow icon marks the value");
+        assert!(
+            sp.contains("skipped"),
+            "an unfilled canonical slot is skipped"
+        );
+        assert!(
+            sp.contains("wf-value-mark"),
+            "workflow icon marks the value"
+        );
         assert!(
             sp.contains("Refine the rough idea"),
             "superpowers' take on the brainstorm slot is shown when focused"
@@ -2403,7 +2418,13 @@ mod tests {
         assert_eq!(
             route(
                 &st,
-                &req("POST", "/workflows/superpowers/activate", "", &[HOST, COOKIE, ORIGIN], "")
+                &req(
+                    "POST",
+                    "/workflows/superpowers/activate",
+                    "",
+                    &[HOST, COOKIE, ORIGIN],
+                    ""
+                )
             )
             .status,
             404
@@ -3300,13 +3321,23 @@ mod tests {
             &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
         ));
         assert!(board.contains("lo-board"));
-        assert!(board.contains("Applies to") && board.contains("Fragments") && board.contains("Workflow"));
+        assert!(
+            board.contains("Applies to")
+                && board.contains("Fragments")
+                && board.contains("Workflow")
+        );
         assert!(board.contains("/profiles/rust/fragments/rc")); // rc chip's remove
 
         // Equip the second fragment → it stages and the readout counts both.
         let after = body_of(route(
             &st,
-            &req("POST", "/profiles/rust/fragments/tc", "", &[HOST, COOKIE, ORIGIN], ""),
+            &req(
+                "POST",
+                "/profiles/rust/fragments/tc",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
         ));
         assert!(after.contains("/profiles/rust/fragments/tc"));
         assert!(after.contains("2 fragments"));
@@ -3314,25 +3345,52 @@ mod tests {
         // Bind a workflow (a plain string ref; resolution is lazy) → slot fills.
         let bound = body_of(route(
             &st,
-            &req("POST", "/profiles/rust/workflow/superpowers", "", &[HOST, COOKIE, ORIGIN], ""),
+            &req(
+                "POST",
+                "/profiles/rust/workflow/superpowers",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
         ));
-        assert!(bound.contains("superpowers"), "workflow slot fills; got:\n{bound}");
+        assert!(
+            bound.contains("superpowers"),
+            "workflow slot fills; got:\n{bound}"
+        );
         // Clear it → the empty "Equip a workflow" slot returns.
         let cleared = body_of(route(
             &st,
-            &req("DELETE", "/profiles/rust/workflow", "", &[HOST, COOKIE, ORIGIN], ""),
+            &req(
+                "DELETE",
+                "/profiles/rust/workflow",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
         ));
         assert!(cleared.contains("Equip a workflow"));
 
         // Add then remove a target.
         let added = body_of(route(
             &st,
-            &req("POST", "/profiles/rust/targets/go", "", &[HOST, COOKIE, ORIGIN], ""),
+            &req(
+                "POST",
+                "/profiles/rust/targets/go",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
         ));
         assert!(added.contains("/profiles/rust/targets/go"));
         let removed = body_of(route(
             &st,
-            &req("DELETE", "/profiles/rust/targets/go", "", &[HOST, COOKIE, ORIGIN], ""),
+            &req(
+                "DELETE",
+                "/profiles/rust/targets/go",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
         ));
         assert!(!removed.contains("/profiles/rust/targets/go"));
 
@@ -3340,7 +3398,13 @@ mod tests {
         assert_eq!(
             route(
                 &st,
-                &req("POST", "/profiles/rust/fragments/tc", "", &[HOST, COOKIE], "")
+                &req(
+                    "POST",
+                    "/profiles/rust/fragments/tc",
+                    "",
+                    &[HOST, COOKIE],
+                    ""
+                )
             )
             .status,
             403
@@ -3364,8 +3428,14 @@ mod tests {
         ));
         assert!(base.contains("Applies everywhere"));
         assert!(base.contains("chip-default"));
-        assert!(!base.contains("/profiles/base/edit"), "default isn't renamable");
-        assert!(!base.contains("hx-delete=\"/profiles/base\""), "default isn't deletable");
+        assert!(
+            !base.contains("/profiles/base/edit"),
+            "default isn't renamable"
+        );
+        assert!(
+            !base.contains("hx-delete=\"/profiles/base\""),
+            "default isn't deletable"
+        );
 
         // The rail pins the default (its own class) above a separator.
         let tab = body_of(route(
@@ -3384,7 +3454,13 @@ mod tests {
         assert!(rustb.contains("tx disabled"));
         let blocked = body_of(route(
             &st,
-            &req("DELETE", "/profiles/rust/targets/rust", "", &[HOST, COOKIE, ORIGIN], ""),
+            &req(
+                "DELETE",
+                "/profiles/rust/targets/rust",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
         ));
         assert!(blocked.contains("at least one target"));
     }
@@ -3405,7 +3481,13 @@ mod tests {
         // Remove it → rust becomes the no-targets default (locked Applies-to).
         let after = body_of(route(
             &st,
-            &req("DELETE", "/profiles/rust/targets/rust", "", &[HOST, COOKIE, ORIGIN], ""),
+            &req(
+                "DELETE",
+                "/profiles/rust/targets/rust",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
         ));
         assert!(after.contains("Applies everywhere"));
     }
