@@ -231,13 +231,19 @@ mod tests {
 
     #[test]
     fn markdown_command_uses_canonical_names_args_and_handoff() {
-        let cmds = stage_commands(&builtin("lean"), CommandFormat::Markdown);
-        // One file per generated step, named by the *canonical* command — lean's
-        // `commit` stage lands on `verify`, matching the studio and the spine.
+        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Markdown);
+        // One file per generated step, named by the *canonical* command —
+        // Superpowers' `review` stage lands on `verify`, matching the spine.
         let names: Vec<&str> = cmds.iter().map(|c| c.filename.as_str()).collect();
         assert_eq!(
             names,
-            vec!["explore.md", "plan.md", "implement.md", "verify.md"]
+            vec![
+                "brainstorm.md",
+                "plan.md",
+                "implement.md",
+                "verify.md",
+                "ship.md"
+            ]
         );
 
         let plan = cmds.iter().find(|c| c.filename == "plan.md").unwrap();
@@ -252,20 +258,20 @@ mod tests {
         assert!(implement.content.contains("read the handoff"));
         assert!(implement.content.contains("plan.md"));
 
-        // Lean's `commit` stage generates as `verify`: a gate with an exit
-        // checklist, and the heading shows the canonical name, not `commit`.
+        // Superpowers' `review` stage generates as `verify`: a gate with an exit
+        // checklist, and the heading shows the canonical name, not `review`.
         let verify = cmds.iter().find(|c| c.filename == "verify.md").unwrap();
         assert!(verify.content.contains("checkpoint"));
         assert!(verify.content.contains("Done when:"));
         assert!(verify.content.contains("**verify** stage"));
-        assert!(!verify.content.contains("**commit** stage"));
+        assert!(!verify.content.contains("**review** stage"));
     }
 
     #[test]
-    fn colliding_stages_generate_one_command_per_slot() {
-        // Two stages mapping to the same canonical slot (`verify`) collapse to a
-        // single `/loadout:verify` — first claimant wins. A stage matching no
-        // canonical phase (`retro`) is kept as a custom extra, after the spine.
+    fn review_and_commit_land_in_separate_slots_extras_after() {
+        // `review` → verify and `commit` → ship are now distinct phases (each its
+        // own command), while two stages that truly collide on a slot collapse to
+        // one (first wins), and a non-canonical name (`retro`) becomes an extra.
         let stg = |name: &str, purpose: &str| WorkflowStage {
             name: name.into(),
             purpose: Some(purpose.into()),
@@ -281,8 +287,9 @@ mod tests {
             description: None,
             icon: None,
             stages: vec![
-                stg("verify", "check the work"),
-                stg("ship", "commit and push"),
+                stg("review", "check the work"),
+                stg("commit", "commit and push"),
+                stg("qa", "second verify claimant — folds into review"),
                 stg("retro", "capture lessons"),
             ],
             modeled_on: None,
@@ -293,10 +300,13 @@ mod tests {
         };
         let cmds = stage_commands(&wf, CommandFormat::Markdown);
         let names: Vec<&str> = cmds.iter().map(|c| c.filename.as_str()).collect();
-        assert_eq!(names, vec!["verify.md", "retro.md"]);
+        // review→verify, commit→ship (separate!), qa folds into verify, retro=extra.
+        assert_eq!(names, vec!["verify.md", "ship.md", "retro.md"]);
         let verify = cmds.iter().find(|c| c.filename == "verify.md").unwrap();
-        assert!(verify.content.contains("check the work")); // first claimant's purpose
-        assert!(!verify.content.contains("commit and push")); // ship folded away
+        assert!(verify.content.contains("check the work")); // first verify claimant
+        assert!(!verify.content.contains("second verify claimant")); // qa folded away
+        let ship = cmds.iter().find(|c| c.filename == "ship.md").unwrap();
+        assert!(ship.content.contains("commit and push")); // commit kept its own slot
     }
 
     #[test]
@@ -307,9 +317,10 @@ mod tests {
         let v: toml::Value = toml::from_str(&plan.content).expect("valid TOML");
         assert!(v.get("description").and_then(|d| d.as_str()).is_some());
         let prompt = v.get("prompt").and_then(|p| p.as_str()).unwrap();
-        // Gemini's placeholder, not Claude's.
+        // loadout's own arg placeholder is Gemini's `{{args}}`, not `$ARGUMENTS`.
+        // (Vendored upstream content may itself contain `$ARGUMENTS` — that's the
+        // source's text, not loadout's placeholder, so we don't assert its absence.)
         assert!(prompt.contains("{{args}}"), "gemini arg placeholder");
-        assert!(!prompt.contains("$ARGUMENTS"));
         // spec's plan reads spec.md and writes plan.md.
         assert!(prompt.contains("spec.md"));
         assert!(prompt.contains("plan.md"));

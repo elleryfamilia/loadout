@@ -44,7 +44,7 @@ pub struct Workflow {
     /// Stable id referenced by `loadouts[].workflow` (e.g. `spec-driven`).
     pub id: String,
     /// Display name shown on the gallery card and as the rendered section
-    /// heading (e.g. `Superpowers`, `Boris's workflow`). Falls back to
+    /// heading (e.g. `Superpowers`, `Spec-driven`). Falls back to
     /// `description`, then `id`. Set on the curated built-ins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -193,11 +193,11 @@ impl Workflow {
         out
     }
 
-    /// Lay this workflow's stages onto the fixed canonical spine: the five
+    /// Lay this workflow's stages onto the fixed canonical spine: the six
     /// canonical slots in order (each filled by the first stage that claims it,
     /// or left empty), then any custom stages that match no canonical phase. The
     /// first stage to claim a slot wins, so a workflow that names two stages onto
-    /// the same phase (e.g. `verify` and `ship` both → `verify`) keeps only the
+    /// the same phase (e.g. `review` and `qa` both → `verify`) keeps only the
     /// first — exactly one `/loadout:<command>` per slot. This is the single
     /// source of truth shared by the command channel, the context section, and
     /// the studio slot reader.
@@ -268,21 +268,26 @@ pub const CANONICAL_SLOTS: &[(&str, &str)] = &[
     ("brainstorm", "Shape the idea — the design or the spec."),
     ("plan", "Break it into an ordered task list."),
     ("implement", "Build it."),
-    ("verify", "Check the result — tests, review, commit."),
+    ("verify", "Check the result — tests, review, quality."),
+    ("ship", "Commit, push, and open the PR."),
 ];
 
 /// Map a free-string stage name to the canonical slot it fills, or `None` for a
 /// custom stage that matches no known phase (shown after the fixed spine).
 /// Matching is case-insensitive on common synonyms — a workflow can name its
 /// stages naturally (`research`, `specify`, `review`, `iterate`, `commit`) and
-/// still land in the right slot.
+/// still land in the right slot. Note `commit`/`ship`/`pr` land in **`ship`**,
+/// not `verify`: finishing-and-shipping is its own phase, so a framework that
+/// separates review from commit keeps both.
 pub fn canonical_slot(stage_name: &str) -> Option<&'static str> {
     let slot = match stage_name.trim().to_ascii_lowercase().as_str() {
         "explore" | "research" | "investigate" | "understand" | "scope" => "explore",
         "brainstorm" | "specify" | "spec" | "design" | "ideate" | "discovery" => "brainstorm",
         "plan" | "planning" | "decompose" => "plan",
         "implement" | "iterate" | "code" | "build" | "execute" | "develop" => "implement",
-        "verify" | "review" | "commit" | "test" | "validate" | "ship" | "qa" => "verify",
+        "verify" | "review" | "test" | "validate" | "qa" => "verify",
+        "ship" | "commit" | "pr" | "push" | "deliver" | "release" | "deploy" | "merge"
+        | "finish" | "finishing" => "ship",
         _ => return None,
     };
     Some(slot)
@@ -302,12 +307,12 @@ pub struct LaidSlot<'a> {
     pub stage: Option<&'a WorkflowStage>,
 }
 
-/// A workflow laid onto the canonical spine: the five fixed slots in order
+/// A workflow laid onto the canonical spine: the six fixed slots in order
 /// (each filled or skipped), plus any custom stages that match no canonical
 /// phase (kept in declaration order, rendered after the spine).
 #[derive(Debug, Clone)]
 pub struct CanonicalLayout<'a> {
-    /// The five canonical slots, in spine order.
+    /// The six canonical slots, in spine order.
     pub slots: Vec<LaidSlot<'a>>,
     /// Stages that matched no canonical slot (a hand-authored extra step).
     pub extras: Vec<&'a WorkflowStage>,
@@ -433,12 +438,12 @@ fn strip_frontmatter(s: &str) -> &str {
 
 /// The shipped workflow catalog: read-only starting points you bind directly or
 /// **copy and hand-edit** (a user `[[workflows]]` of the same id shadows the
-/// built-in). Each is modeled on a real suite and stamped with provenance.
-///
-/// Three opinionated spines covering the common shapes:
-/// - `lean` — Anthropic's explore → plan → code → commit.
-/// - `spec-driven` — write-the-spec-first (GitHub Spec Kit, AWS Kiro).
-/// - `loop` — a single-prompt backlog loop (the "Ralph" technique).
+/// built-in). Each mirrors a real, permissively-licensed framework whose actual
+/// skill/command files are vendored verbatim (see `vendored/` + `sources.toml`)
+/// — a built-in only ships if there's real upstream content to copy faithfully:
+/// - `superpowers` — obra/superpowers (MIT).
+/// - `spec-driven` — github/spec-kit (MIT).
+/// - `compound` — Every's compound-engineering-plugin (MIT).
 pub fn builtin_workflows() -> Vec<Workflow> {
     fn stage(name: &str, purpose: &str) -> WorkflowStage {
         WorkflowStage {
@@ -485,8 +490,9 @@ pub fn builtin_workflows() -> Vec<Workflow> {
             "bolt",
             "obra/superpowers (Jesse Vincent)",
             "https://github.com/obra/superpowers",
-            "The biggest community Claude Code skills framework (~41k★): refine the idea, \
-             write a tight plan of tiny tasks, then execute with fresh subagents + review.",
+            "The biggest community Claude Code skills framework (238k★): refine the idea, \
+             write a tight plan of tiny tasks, execute with fresh subagents + review, \
+             then finish and ship the branch.",
             vec![
                 WorkflowStage {
                     writes: Some("design.md".to_string()),
@@ -552,100 +558,21 @@ pub fn builtin_workflows() -> Vec<Workflow> {
                          — before merging.",
                     )
                 },
-            ],
-        ),
-        // --- boris — how Claude Code's creator works -----------------------
-        wf(
-            "boris",
-            "Boris's workflow",
-            "The workflow Claude Code's creator uses daily.",
-            "rocket",
-            "Boris Cherny (Claude Code's creator)",
-            "https://howborisusesclaudecode.com/",
-            "Nail the plan in plan-mode, let it implement in one pass, lean hard on a \
-             verify loop, then /commit-push-pr.",
-            vec![
                 WorkflowStage {
-                    writes: Some("plan.md".to_string()),
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/superpowers/finishing-a-development-branch.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
                     ..stage(
-                        "plan",
-                        "Work in plan mode; iterate on the plan until it's right before \
-                         touching code.",
-                    )
-                },
-                WorkflowStage {
-                    reads: Some("plan.md".to_string()),
-                    ..stage(
-                        "implement",
-                        "Switch to auto-accept and let it execute the whole plan in one pass.",
-                    )
-                },
-                WorkflowStage {
-                    gate: true,
-                    exit: vec![
-                        "the agent verified its own work (tests / browser)".to_string(),
-                        "the behavior and UX actually check out".to_string(),
-                        "then commit, push, and open the PR (Boris's /commit-push-pr, \
-                         run dozens of times a day)"
-                            .to_string(),
-                    ],
-                    ..stage(
-                        "verify",
-                        "Give the agent a way to check its own work — run tests, open the \
-                         browser, iterate until it's right (the biggest quality lever) — then \
-                         commit, push, and open the PR in one step.",
+                        "ship",
+                        "Finish the branch: get to green, then commit, push, and open the PR.",
                     )
                 },
             ],
         ),
-        // --- lean — Anthropic explore-plan-code-commit ---------------------
-        wf(
-            "lean",
-            "Lean",
-            "Anthropic's recommended starting point.",
-            "git-branch",
-            "Anthropic explore-plan-code-commit",
-            "https://www.anthropic.com/engineering/claude-code-best-practices",
-            "Anthropic's agent best-practices loop: read first, plan on paper, then build.",
-            vec![
-                stage(
-                    "explore",
-                    "Read the code paths and tests involved before changing anything. \
-                     Don't write code yet — build a map of what's there.",
-                ),
-                WorkflowStage {
-                    writes: Some("plan.md".to_string()),
-                    exit: vec![
-                        "objective stated in one sentence".to_string(),
-                        "approach and key risks listed".to_string(),
-                        "validation steps named".to_string(),
-                    ],
-                    ..stage(
-                        "plan",
-                        "Write a short plan: objective, approach, risks, and how you'll validate.",
-                    )
-                },
-                WorkflowStage {
-                    reads: Some("plan.md".to_string()),
-                    ..stage(
-                        "implement",
-                        "Build the change following the plan; keep edits focused and matched to \
-                         the surrounding code.",
-                    )
-                },
-                WorkflowStage {
-                    gate: true,
-                    exit: vec![
-                        "build, tests, and linter pass".to_string(),
-                        "commit message follows Conventional Commits".to_string(),
-                    ],
-                    ..stage(
-                        "commit",
-                        "Run the build, tests, and linter, then commit at a logical checkpoint.",
-                    )
-                },
-            ],
-        ),
+        // --- spec-driven — github/spec-kit (spec-first development) --------
         wf(
             "spec-driven",
             "Spec-driven",
@@ -656,21 +583,24 @@ pub fn builtin_workflows() -> Vec<Workflow> {
             "Spec-driven development: a written spec is the source of truth that the plan, \
              implementation, and verification all answer to.",
             vec![
-                stage(
-                    "research",
-                    "Gather the context and constraints; note open questions and unknowns.",
-                ),
                 WorkflowStage {
                     writes: Some("spec.md".to_string()),
+                    instructions: Some(
+                        strip_frontmatter(include_str!("../vendored/spec-kit/specify.md"))
+                            .to_string(),
+                    ),
                     ..stage(
                         "specify",
-                        "Write what to build and why — requirements and acceptance criteria, \
+                        "Write what to build and why — the spec is the source of truth, \
                          not implementation detail.",
                     )
                 },
                 WorkflowStage {
                     reads: Some("spec.md".to_string()),
                     writes: Some("plan.md".to_string()),
+                    instructions: Some(
+                        strip_frontmatter(include_str!("../vendored/spec-kit/plan.md")).to_string(),
+                    ),
                     ..stage(
                         "plan",
                         "Turn the spec into a technical plan and an ordered task list.",
@@ -678,6 +608,10 @@ pub fn builtin_workflows() -> Vec<Workflow> {
                 },
                 WorkflowStage {
                     reads: Some("plan.md".to_string()),
+                    instructions: Some(
+                        strip_frontmatter(include_str!("../vendored/spec-kit/implement.md"))
+                            .to_string(),
+                    ),
                     ..stage("implement", "Work the plan task by task, in order.")
                 },
                 WorkflowStage {
@@ -685,46 +619,16 @@ pub fn builtin_workflows() -> Vec<Workflow> {
                     gate: true,
                     exit: vec![
                         "every acceptance criterion in the spec is met".to_string(),
-                        "no known regressions".to_string(),
+                        "no cross-artifact inconsistencies".to_string(),
                     ],
+                    instructions: Some(
+                        strip_frontmatter(include_str!("../vendored/spec-kit/analyze.md"))
+                            .to_string(),
+                    ),
                     ..stage(
                         "verify",
-                        "Check the result against the spec's acceptance criteria.",
-                    )
-                },
-            ],
-        ),
-        wf(
-            "loop",
-            "Ralph loop",
-            "The viral 'Ralph' loop for long autonomous runs.",
-            "refresh",
-            "the Ralph single-prompt loop",
-            "https://ghuntley.com/ralph/",
-            "The Ralph technique: keep a durable backlog and repeatedly take the next item, \
-             so a long task survives across many short agent runs.",
-            vec![
-                WorkflowStage {
-                    writes: Some("backlog.md".to_string()),
-                    ..stage(
-                        "plan",
-                        "Break the work into a checklist of small, independently shippable items.",
-                    )
-                },
-                WorkflowStage {
-                    reads: Some("backlog.md".to_string()),
-                    writes: Some("backlog.md".to_string()),
-                    ..stage(
-                        "iterate",
-                        "Take the next unchecked item, implement it, verify it, then check it \
-                         off. Repeat until the backlog is clear.",
-                    )
-                },
-                WorkflowStage {
-                    gate: true,
-                    ..stage(
-                        "verify",
-                        "Run the full build and test suite; confirm nothing regressed.",
+                        "Check the result against the spec — cross-artifact consistency and \
+                         coverage.",
                     )
                 },
             ],
@@ -743,6 +647,12 @@ pub fn builtin_workflows() -> Vec<Workflow> {
             vec![
                 WorkflowStage {
                     writes: Some("requirements.md".to_string()),
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/compound-engineering/ce-brainstorm.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
                     ..stage(
                         "brainstorm",
                         "Interactive Q&A to pin down requirements — produce a right-sized \
@@ -752,6 +662,12 @@ pub fn builtin_workflows() -> Vec<Workflow> {
                 WorkflowStage {
                     reads: Some("requirements.md".to_string()),
                     writes: Some("plan.md".to_string()),
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/compound-engineering/ce-plan.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
                     ..stage(
                         "plan",
                         "Turn the requirements into a detailed implementation plan with \
@@ -760,10 +676,16 @@ pub fn builtin_workflows() -> Vec<Workflow> {
                 },
                 WorkflowStage {
                     reads: Some("plan.md".to_string()),
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/compound-engineering/ce-work.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
                     ..stage(
                         "implement",
-                        "Execute the plan in a worktree, tracking each task, then simplify the \
-                         new code for clarity and reuse.",
+                        "Execute the plan against its guardrails — tests passing, behind a \
+                         clean PR.",
                     )
                 },
                 WorkflowStage {
@@ -773,16 +695,42 @@ pub fn builtin_workflows() -> Vec<Workflow> {
                         "reviewed against the plan by independent agents".to_string(),
                         "issues fixed before merging".to_string(),
                     ],
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/compound-engineering/ce-code-review.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
                     ..stage(
                         "review",
-                        "Multi-agent review against the plan before merging.",
+                        "Tiered persona review of the diff before merging.",
                     )
                 },
-                stage(
-                    "compound",
-                    "Capture what you learned into docs/solutions/ so the next cycle starts \
-                     ahead — the step that compounds.",
-                ),
+                WorkflowStage {
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/compound-engineering/ce-commit-push-pr.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
+                    ..stage(
+                        "ship",
+                        "Commit, push, and open a clean PR with a clear description.",
+                    )
+                },
+                WorkflowStage {
+                    instructions: Some(
+                        strip_frontmatter(include_str!(
+                            "../vendored/compound-engineering/ce-compound.SKILL.md"
+                        ))
+                        .to_string(),
+                    ),
+                    ..stage(
+                        "compound",
+                        "Capture what you learned into docs/solutions/ so the next cycle \
+                         starts ahead — the step that compounds.",
+                    )
+                },
             ],
         ),
     ]
@@ -815,26 +763,30 @@ mod tests {
                 w.validate()
             );
         }
-        // The curated gallery: the recognizable named ones + the generic spines.
-        for needed in ["superpowers", "boris", "lean", "spec-driven", "loop"] {
+        // The curated gallery: only frameworks with a real, vendorable upstream
+        // repo ship (boris/lean/loop were dropped — no content to copy faithfully).
+        for needed in ["superpowers", "spec-driven", "compound"] {
             assert!(ids.contains(needed), "missing built-in workflow {needed}");
+        }
+        for gone in ["boris", "lean", "loop"] {
+            assert!(!ids.contains(gone), "dropped built-in {gone} still present");
         }
     }
 
     #[test]
-    fn lean_has_the_plan_implement_handoff() {
+    fn superpowers_has_the_plan_implement_handoff() {
         // The load-bearing part: the plan stage writes plan.md and the implement
         // stage reads it. Without this handoff the feature is just headings.
-        let lean = builtin_workflows()
+        let wf = builtin_workflows()
             .into_iter()
-            .find(|w| w.id == "lean")
+            .find(|w| w.id == "superpowers")
             .unwrap();
-        let plan = lean.stages.iter().find(|s| s.name == "plan").unwrap();
-        let implement = lean.stages.iter().find(|s| s.name == "implement").unwrap();
+        let plan = wf.stages.iter().find(|s| s.name == "plan").unwrap();
+        let implement = wf.stages.iter().find(|s| s.name == "implement").unwrap();
         assert_eq!(plan.writes.as_deref(), Some("plan.md"));
         assert_eq!(implement.reads.as_deref(), Some("plan.md"));
         // plan.md is surfaced once in the workflow's artifact set.
-        assert_eq!(lean.artifacts(), vec!["plan.md".to_string()]);
+        assert!(wf.artifacts().contains(&"plan.md".to_string()));
     }
 
     #[test]
@@ -969,17 +921,17 @@ mod tests {
         let builtins = builtin_workflows();
         // A built-in resolves directly (bind without copying).
         assert_eq!(
-            resolve_workflow("lean", &[], &builtins).map(|w| w.id.as_str()),
-            Some("lean")
+            resolve_workflow("spec-driven", &[], &builtins).map(|w| w.id.as_str()),
+            Some("spec-driven")
         );
         // Unknown id → None (dangling binding degrades).
         assert!(resolve_workflow("nope", &[], &builtins).is_none());
 
         // A user workflow shadows a built-in of the same id.
         let user = vec![Workflow {
-            id: "lean".into(),
+            id: "spec-driven".into(),
             name: None,
-            description: Some("my lean".into()),
+            description: Some("my spec".into()),
             icon: None,
             stages: vec![WorkflowStage {
                 name: "go".into(),
@@ -997,8 +949,8 @@ mod tests {
             origin: Layer::Global,
         }];
         assert_eq!(
-            resolve_workflow("lean", &user, &builtins).map(|w| w.description.clone()),
-            Some(Some("my lean".into()))
+            resolve_workflow("spec-driven", &user, &builtins).map(|w| w.description.clone()),
+            Some(Some("my spec".into()))
         );
 
         // A disabled user copy shadows AND suppresses the built-in (off means off).
@@ -1006,14 +958,14 @@ mod tests {
             disabled: true,
             ..user[0].clone()
         }];
-        assert!(resolve_workflow("lean", &disabled, &builtins).is_none());
+        assert!(resolve_workflow("spec-driven", &disabled, &builtins).is_none());
     }
 
     #[test]
     fn content_hash_is_stable_and_tracks_edits() {
         let mut w = builtin_workflows()
             .into_iter()
-            .find(|w| w.id == "lean")
+            .find(|w| w.id == "spec-driven")
             .unwrap();
         let base = w.content_hash();
         assert_eq!(base, w.content_hash(), "deterministic for the same content");

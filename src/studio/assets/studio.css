@@ -498,7 +498,7 @@ body {
 /* --- workflow editor (build-your-own / customize) -------------------------- */
 .wf-edit-meta { display: flex; flex-wrap: wrap; gap: 12px; }
 .wf-edit-lead { font-size: 12px; margin: 2px 0 0; line-height: 1.45; }
-/* the five steps as a CSS-only tab row + one big panel below: radios + their
+/* the six steps as a CSS-only tab row + one big panel below: radios + their
    labels (the tabs) and the panels are all siblings, flex `order` floats the
    tabs above the active panel, and each checked radio reveals its own panel */
 .wf-steps { display: flex; flex-wrap: wrap; gap: 7px; }

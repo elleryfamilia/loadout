@@ -692,6 +692,7 @@ pub(crate) fn slot_icon(command: &str) -> &'static str {
         "plan" => "layers",
         "implement" => "code",
         "verify" => "shield",
+        "ship" => "git-branch",
         "compound" => "database",
         _ => "terminal",
     }
@@ -706,7 +707,7 @@ pub(crate) fn slot_display_name(command: &str) -> String {
     }
 }
 
-/// Lay a workflow's stages onto the fixed canonical spine: the five canonical
+/// Lay a workflow's stages onto the fixed canonical spine: the six canonical
 /// slots in order (each filled by the matching stage, or shown skipped/greyed),
 /// then any custom stages that match no canonical phase. The first stage to
 /// claim a canonical slot wins (the curated built-ins never collide).
@@ -1316,11 +1317,11 @@ pub fn target_from_form(
 
 /// Build a [`Workflow`](crate::workflow::Workflow) from the workflow editor form.
 ///
-/// The editor only edits the five fixed canonical steps — one `s_<slot>_purpose`
+/// The editor only edits the six fixed canonical steps — one `s_<slot>_purpose`
 /// per slot, blank = the workflow skips that step. Everything structural rides
 /// along from `base` (the workflow being customized/edited): each step keeps the
 /// source's handoff `reads`/`writes`, `gate`, and `exit` checklist (only the
-/// prose changes), and any **extra** steps a workflow declares beyond the five
+/// prose changes), and any **extra** steps a workflow declares beyond the six
 /// (e.g. compound's `compound` step) are carried over verbatim — there's no UI to
 /// add or drop them, so a customized workflow never silently loses one. `base`
 /// also supplies the provenance fields (`modeled_on`/`source`).
@@ -1354,7 +1355,7 @@ pub fn workflow_from_form(
     };
 
     let mut stages: Vec<WorkflowStage> = Vec::new();
-    // The five canonical slots, in spine order; a blank box skips the step.
+    // The six canonical slots, in spine order; a blank box skips the step.
     for (key, _desc) in CANONICAL_SLOTS {
         if let Some(purpose) = opt(value_of(pairs, &format!("s_{key}_purpose"))) {
             stages.push(build_stage(key, purpose));
@@ -1856,11 +1857,30 @@ mod tests {
         let plan = slots.iter().find(|s| s.command == "plan").unwrap();
         assert!(plan.filled);
         assert!(plan.has_instructions, "superpowers plan carries a body");
-        // Lean is purpose-only, so its slots are filled but carry no marker.
-        let lean = builtin("lean");
-        let lean_slots = workflow_slots(&lean, None);
-        let lp = lean_slots.iter().find(|s| s.command == "plan").unwrap();
-        assert!(lp.filled);
-        assert!(!lp.has_instructions, "lean plan is purpose-only");
+        // A purpose-only workflow fills its slots but carries no "details" marker.
+        let bare = crate::workflow::Workflow {
+            id: "bare".into(),
+            name: Some("Bare".into()),
+            description: None,
+            icon: None,
+            stages: vec![crate::workflow::WorkflowStage {
+                name: "plan".into(),
+                purpose: Some("Plan it".into()),
+                instructions: None,
+                reads: None,
+                writes: None,
+                gate: false,
+                exit: vec![],
+            }],
+            modeled_on: None,
+            researched: None,
+            source: None,
+            disabled: false,
+            origin: Layer::Global,
+        };
+        let bare_slots = workflow_slots(&bare, None);
+        let bp = bare_slots.iter().find(|s| s.command == "plan").unwrap();
+        assert!(bp.filled);
+        assert!(!bp.has_instructions, "purpose-only plan carries no marker");
     }
 }

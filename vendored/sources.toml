@@ -1,12 +1,19 @@
 # Upstream content vendored into loadout's built-in workflows.
 #
 # A built-in workflow that mirrors a real framework embeds that framework's
-# actual skill files (verbatim, minus their YAML frontmatter) as the per-step
-# `instructions` body — see the `include_str!` calls in `src/workflow.rs`. This
-# manifest is the contract for keeping those copies faithful: it records where
-# each file came from, the exact release it was pinned at, and which workflow
-# step it feeds. The weekly sync action diffs each pinned release and opens a
-# PR on drift; review + merge are handled downstream (Savio).
+# actual skill/command files (verbatim, minus their YAML frontmatter) as the
+# per-step `instructions` body — see the `include_str!` calls in
+# `src/workflow.rs`. This manifest is the contract for keeping those copies
+# faithful: it records where each file came from, the exact release it was
+# pinned at, and which workflow step it feeds. The weekly sync action diffs each
+# pinned release and opens a PR on drift; review + merge are handled downstream
+# (Savio).
+#
+# A built-in only exists if there is a real, permissively-licensed repo to
+# vendor from. Workflows that are only described in a blog post or on a personal
+# site (e.g. Boris's workflow, the Anthropic explore-plan-code-commit article,
+# the Ralph technique) are intentionally NOT shipped — there is no content to
+# copy faithfully, and paraphrasing a named workflow misrepresents it.
 #
 # Pin by the release's RESOLVED COMMIT, not a tag string — a project's release
 # name and its git tag can differ (e.g. CE releases as `compound-engineering-vX`
@@ -41,3 +48,76 @@ step = "implement"
 upstream = "skills/requesting-code-review/SKILL.md"
 vendored = "vendored/superpowers/requesting-code-review.SKILL.md"
 step = "verify"
+
+[[source.files]]
+upstream = "skills/finishing-a-development-branch/SKILL.md"
+vendored = "vendored/superpowers/finishing-a-development-branch.SKILL.md"
+step = "ship"
+
+[[source]]
+id = "spec-kit"
+repo = "github/spec-kit"
+homepage = "https://github.com/github/spec-kit"
+license = "MIT"
+ref_strategy = "release"
+release = "v0.11.8"
+commit = "92fb6e8edaf61834376754a84282705e45369000"
+
+[[source.files]]
+upstream = "templates/commands/specify.md"
+vendored = "vendored/spec-kit/specify.md"
+step = "brainstorm"
+
+[[source.files]]
+upstream = "templates/commands/plan.md"
+vendored = "vendored/spec-kit/plan.md"
+step = "plan"
+
+[[source.files]]
+upstream = "templates/commands/implement.md"
+vendored = "vendored/spec-kit/implement.md"
+step = "implement"
+
+[[source.files]]
+upstream = "templates/commands/analyze.md"
+vendored = "vendored/spec-kit/analyze.md"
+step = "verify"
+
+[[source]]
+id = "compound-engineering"
+repo = "EveryInc/compound-engineering-plugin"
+homepage = "https://github.com/EveryInc/compound-engineering-plugin"
+license = "MIT"
+ref_strategy = "release"
+release = "compound-engineering-v3.14.3"
+commit = "e176a6db46b3de9c4e724a3ab5d7dd1d0bf60a33"
+
+[[source.files]]
+upstream = "skills/ce-brainstorm/SKILL.md"
+vendored = "vendored/compound-engineering/ce-brainstorm.SKILL.md"
+step = "brainstorm"
+
+[[source.files]]
+upstream = "skills/ce-plan/SKILL.md"
+vendored = "vendored/compound-engineering/ce-plan.SKILL.md"
+step = "plan"
+
+[[source.files]]
+upstream = "skills/ce-work/SKILL.md"
+vendored = "vendored/compound-engineering/ce-work.SKILL.md"
+step = "implement"
+
+[[source.files]]
+upstream = "skills/ce-code-review/SKILL.md"
+vendored = "vendored/compound-engineering/ce-code-review.SKILL.md"
+step = "verify"
+
+[[source.files]]
+upstream = "skills/ce-commit-push-pr/SKILL.md"
+vendored = "vendored/compound-engineering/ce-commit-push-pr.SKILL.md"
+step = "ship"
+
+[[source.files]]
+upstream = "skills/ce-compound/SKILL.md"
+vendored = "vendored/compound-engineering/ce-compound.SKILL.md"
+step = "compound (extra)"

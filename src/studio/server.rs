@@ -2139,30 +2139,25 @@ mod tests {
         let st = state_for(
             d.path(),
             Some(
-                "[defaults]\nworkflow = \"lean\"\n\n\
+                "[defaults]\nworkflow = \"compound\"\n\n\
                  [[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
                  [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"spec-driven\"\n",
             ),
         );
 
-        // The tab: a gallery of named cards; the active one (lean) is focused.
+        // The tab: a gallery of named cards; the active one (compound) is focused.
         let r = route(&st, &req("GET", "/tab/workflows", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Workflows"), "tab heading");
-        // The gallery cards show the display names.
-        for name in [
-            "Superpowers",
-            "Boris's workflow",
-            "Lean",
-            "Spec-driven",
-            "Ralph loop",
-        ] {
+        // The gallery cards show the display names (only frameworks with a real
+        // vendorable repo ship).
+        for name in ["Superpowers", "Spec-driven", "Compound engineering"] {
             assert!(body.contains(name), "gallery lists '{name}'");
         }
         // …with a marketing blurb on each.
         assert!(
-            body.contains("Anthropic's recommended starting point."),
+            body.contains("Every's loop where each cycle makes the next one easier."),
             "card blurb shown"
         );
         assert!(body.contains("active workflow"), "active marker");
@@ -2192,6 +2187,7 @@ mod tests {
             ("plan", "Plan"),
             ("implement", "Implement"),
             ("verify", "Verify"),
+            ("ship", "Ship"),
         ] {
             assert!(
                 sp.contains(&format!(r#"<span class="cmd-name">{cmd}</span>"#)),
@@ -2363,20 +2359,29 @@ mod tests {
         );
         let builtin = body_of(route(
             &st,
-            &req("GET", "/workflows/lean", "", &[HOST, COOKIE], ""),
+            &req("GET", "/workflows/spec-driven", "", &[HOST, COOKIE], ""),
         ));
         assert!(
-            !builtin.contains(r#"hx-delete="/workflows/lean""#),
+            !builtin.contains(r#"hx-delete="/workflows/spec-driven""#),
             "a built-in is never deletable"
         );
 
         // Customize a built-in: its editor opens as "Customize" and creates a
-        // SEPARATE copy under a new id (the built-in `lean` is left intact).
+        // SEPARATE copy under a new id (the built-in `spec-driven` is left intact).
         let ed = body_of(route(
             &st,
-            &req("GET", "/workflows/lean/customize", "", &[HOST, COOKIE], ""),
+            &req(
+                "GET",
+                "/workflows/spec-driven/customize",
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
         ));
-        assert!(ed.contains("Customize Lean"), "built-in opens as Customize");
+        assert!(
+            ed.contains("Customize Spec-driven"),
+            "built-in opens as Customize"
+        );
         let saved = body_of(route(
             &st,
             &req(
@@ -2384,10 +2389,10 @@ mod tests {
                 "/workflows",
                 "",
                 &[HOST, COOKIE, ORIGIN],
-                // New id ("Lean copy" → lean-copy); `from=lean` carries the
-                // handoffs over. Only the plan prose changes.
-                "mode=new&from=lean&name=Lean+copy\
-                 &s_explore_purpose=Read+first\
+                // New id ("Spec-driven copy" → spec-driven-copy); `from=spec-driven`
+                // carries the handoffs over. Only the prose changes.
+                "mode=new&from=spec-driven&name=Spec-driven+copy\
+                 &s_brainstorm_purpose=Spec+first\
                  &s_plan_purpose=My+own+take+on+planning\
                  &s_implement_purpose=Build+it&s_verify_purpose=Check+it",
             ),
@@ -2403,12 +2408,12 @@ mod tests {
         ));
         let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
         assert!(
-            on_disk.contains("id = \"lean-copy\""),
+            on_disk.contains("id = \"spec-driven-copy\""),
             "copy created under a new id: {on_disk}"
         );
         assert!(
             on_disk.contains("writes = \"plan.md\""),
-            "plan's handoff carried over from lean without re-entry"
+            "plan's handoff carried over from spec-driven without re-entry"
         );
 
         // Delete the owned workflow (built-ins refuse).

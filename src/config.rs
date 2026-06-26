@@ -1398,7 +1398,7 @@ mod tests {
         // None (the renderer/doctor then simply render no workflow section).
         let mut base = RawConfig::default();
         let overlay: RawConfig = toml::from_str(
-            "[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nworkflow = \"lean\"\n\n\
+            "[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nworkflow = \"spec-driven\"\n\n\
              [[loadouts]]\nname = \"plain\"\ntargets = [\"go\"]\n\n\
              [[loadouts]]\nname = \"bad\"\ntargets = [\"py\"]\nworkflow = \"nope\"\n",
         )
@@ -1407,7 +1407,7 @@ mod tests {
         let c = base.finalize(vec![]);
         assert_eq!(
             c.workflow_for_profile(Some("rust")).map(|w| w.id),
-            Some("lean".to_string()),
+            Some("spec-driven".to_string()),
             "built-in workflow resolves from the binding"
         );
         assert!(
@@ -1428,29 +1428,29 @@ mod tests {
         // per-loadout binding at all. An override and a binding still win over it.
         let mut base = RawConfig::default();
         let overlay: RawConfig = toml::from_str(
-            "[defaults]\nworkflow = \"lean\"\n\n\
+            "[defaults]\nworkflow = \"superpowers\"\n\n\
              [[loadouts]]\nname = \"plain\"\ntargets = [\"rust\"]\n\n\
-             [[loadouts]]\nname = \"bound\"\ntargets = [\"go\"]\nworkflow = \"loop\"\n",
+             [[loadouts]]\nname = \"bound\"\ntargets = [\"go\"]\nworkflow = \"compound\"\n",
         )
         .unwrap();
         base.merge(overlay);
         let c = base.finalize(vec![]);
-        assert_eq!(c.default_workflow.as_deref(), Some("lean"));
+        assert_eq!(c.default_workflow.as_deref(), Some("superpowers"));
 
         // No binding, no override → the global default applies.
         assert_eq!(
             c.resolve_active_workflow(None, Some("plain")).map(|w| w.id),
-            Some("lean".to_string())
+            Some("superpowers".to_string())
         );
         // Off any loadout (profile = None) it still applies — same everywhere.
         assert_eq!(
             c.resolve_active_workflow(None, None).map(|w| w.id),
-            Some("lean".to_string())
+            Some("superpowers".to_string())
         );
         // A per-loadout binding wins over the global default.
         assert_eq!(
             c.resolve_active_workflow(None, Some("bound")).map(|w| w.id),
-            Some("loop".to_string())
+            Some("compound".to_string())
         );
         // A `--workflow` override wins over everything.
         assert_eq!(

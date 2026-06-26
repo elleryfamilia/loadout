@@ -6,7 +6,7 @@ strips them, so never write a workflow into a repo.
 
 ## The fixed spine
 
-loadout always exposes the same five slash commands. A workflow fills these
+loadout always exposes the same six slash commands. A workflow fills these
 slots; it never adds or renames commands.
 
 | # | slot | what the step is (process, workflow-independent) |
@@ -15,10 +15,11 @@ slots; it never adds or renames commands.
 | 2 | `brainstorm`| Shape the idea — the design or the spec. |
 | 3 | `plan`      | Break it into an ordered task list. |
 | 4 | `implement` | Build it. |
-| 5 | `verify`    | Check the result — tests, review, commit. |
+| 5 | `verify`    | Check the result — tests, review, quality. |
+| 6 | `ship`      | Commit, push, and open the PR. |
 
 A source step whose name matches no slot becomes an **extra**, rendered after
-the five in declaration order.
+the six in declaration order.
 
 ## Mapping table (source step name → slot)
 
@@ -30,11 +31,12 @@ Match case-insensitively. Anything not listed here is an **extra**.
 | `brainstorm`| brainstorm, specify, spec, design, ideate, discovery |
 | `plan`      | plan, planning, decompose |
 | `implement` | implement, iterate, code, build, execute, develop |
-| `verify`    | verify, review, commit, test, validate, ship, qa |
+| `verify`    | verify, review, test, validate, qa |
+| `ship`      | ship, commit, pr, push, deliver, release, deploy, merge, finish, finishing |
 
 Examples: a "Research" command → `explore`; "Specify" → `brainstorm`;
-"Review" and "Commit & PR" both → `verify` (keep the first, fold the second's
-intent into its purpose); a "Capture learnings" step → an **extra**.
+"Review" → `verify` and "Commit & PR" → `ship` (they're separate phases now —
+each keeps its own command); a "Capture learnings" step → an **extra**.
 
 ## `[[workflows]]`
 
@@ -135,7 +137,7 @@ purpose = "Capture what you learned into docs/solutions/ so the next cycle start
 
 Note the `review` stage is **named** `review` but fills the `verify` slot (per
 the mapping table), and `compound` matches no slot so it renders as an extra
-after the five. This workflow already ships as the built-in `compound` — so it
+after the six. This workflow already ships as the built-in `compound` — so it
 doubles as an answer key. When you import a framework that *isn't* shipped, give
 it a fresh `id` and the same treatment.
 
@@ -159,5 +161,5 @@ workflow = "compound"
 ```
 
 Then `load doctor` should report `active workflow: 'compound'` and
-`load refresh` regenerates the five `/loadout:*` commands with the imported
+`load refresh` regenerates the six `/loadout:*` commands with the imported
 steps.

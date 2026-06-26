@@ -1135,7 +1135,7 @@ fn workflow_slot(s: &WorkflowSlotView, wf_glyph: &str) -> Markup {
 /// a blank one); `customize` means "duplicate `base` into a new workflow" (the
 /// original is left intact) rather than editing an owned one in place.
 ///
-/// The five fixed steps are a tab row; selecting one opens a big instructions
+/// The six fixed steps are a tab row; selecting one opens a big instructions
 /// box for that step — a step is just markdown. The handoff files / checkpoint /
 /// checklist a built-in carries aren't edited here; they ride along from `base`
 /// when you save (see [`crate::studio::state::workflow_from_form`]). The card
@@ -1209,7 +1209,7 @@ pub fn workflow_editor(base: Option<&crate::workflow::Workflow>, customize: bool
                         "instructions the agent follows when that step runs. "
                         "Leave the summary blank to skip the step; handoff files between steps carry over from the original."
                     }
-                    // The five fixed steps as a tab row (CSS-only): each radio's
+                    // The six fixed steps as a tab row (CSS-only): each radio's
                     // label is a tab, and the matching panel below shows its big
                     // instructions box. Every panel stays in the form, so all
                     // steps submit regardless of which tab is open.

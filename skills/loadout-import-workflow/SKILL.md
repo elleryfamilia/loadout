@@ -6,13 +6,13 @@ when_to_use: The user wants to adopt another project's development process insid
 
 # Import a workflow into loadout
 
-loadout ships a **fixed spine of five slash commands** — `/loadout:explore`,
-`/loadout:brainstorm`, `/loadout:plan`, `/loadout:implement`, `/loadout:verify`
-— that every agent gets. A **workflow** does not add new commands. It changes
-what each of those five steps *means*. "Import a workflow" = take another
-project's process (its commands, skills, or documented steps) and map it onto
-those five slots, writing one `[[workflows]]` entry into the user's **global**
-`~/.config/loadout/config.toml`.
+loadout ships a **fixed spine of six slash commands** — `/loadout:explore`,
+`/loadout:brainstorm`, `/loadout:plan`, `/loadout:implement`, `/loadout:verify`,
+`/loadout:ship` — that every agent gets. A **workflow** does not add new
+commands. It changes what each of those six steps *means*. "Import a workflow" =
+take another project's process (its commands, skills, or documented steps) and
+map it onto those six slots, writing one `[[workflows]]` entry into the user's
+**global** `~/.config/loadout/config.toml`.
 
 Read [reference.md](reference.md) for the exact `[[workflows]]` schema, the
 slot-mapping table, and a full worked example before writing any config.
@@ -20,17 +20,20 @@ slot-mapping table, and a full worked example before writing any config.
 ## The model (read this first — it is not what you'd guess)
 
 - **The spine is fixed.** Importing never creates `/loadout:<newname>` commands.
-  The five canonical slots, in order, are:
+  The six canonical slots, in order, are:
   1. **explore** — understand the problem and the code before changing anything.
   2. **brainstorm** — shape the idea (the design or the spec).
   3. **plan** — break it into an ordered task list.
   4. **implement** — build it.
-  5. **verify** — check the result (tests, review, commit).
+  5. **verify** — check the result (tests, review, quality).
+  6. **ship** — commit, push, and open the PR.
 - **You fill slots, you don't rename them.** Each source step maps onto the slot
-  it belongs to. A workflow may fill all five or skip some. Multiple source
-  steps that map to the same slot collapse to one — the first wins.
+  it belongs to. A workflow may fill all six or skip some. Multiple source
+  steps that map to the same slot collapse to one — the first wins. (Review and
+  commit are separate slots now — `verify` and `ship` — so a framework that has
+  both keeps both.)
 - **Extras are the escape hatch.** A source step that matches no slot (e.g. a
-  "capture what you learned" step) becomes an **extra** rendered after the five.
+  "capture what you learned" step) becomes an **extra** rendered after the six.
   Use extras sparingly — only for a genuinely distinct phase.
 - **Handoff artifacts are the load-bearing part.** A stage can `write` a file
   (e.g. `plan.md`) under `.loadout/workflow/artifacts/` and a later stage can
@@ -52,8 +55,8 @@ sed -n '1,40p' ~/.config/loadout/config.toml 2>/dev/null || echo "(none yet — 
 load doctor 2>/dev/null | grep -i workflow
 ```
 
-The shipped built-ins are `lean`, `boris`, `superpowers`, `spec-driven`,
-`loop`, and `compound`. If the source matches one of these, tell the user it
+The shipped built-ins are `superpowers`, `spec-driven`, and `compound` — each a
+real upstream framework vendored verbatim. If the source matches one of these, tell the user it
 already ships — they can bind it directly instead of importing a duplicate.
 
 ## Process
@@ -80,10 +83,10 @@ already ships — they can bind it directly instead of importing a duplicate.
    `purpose` is just headings; capturing the body is what makes it teach.
 
 3. **Map each step onto a slot.** Use the slot↔synonym table in reference.md.
-   A step that matches no slot becomes an extra (kept in order, after the five).
+   A step that matches no slot becomes an extra (kept in order, after the six).
    If two steps map to the same slot, keep the earlier and fold the other's
-   intent into its purpose (this is exactly why `boris`'s ship step folds into
-   verify).
+   intent into its purpose. (Review and commit live in separate slots now —
+   `verify` and `ship` — so a source that has both keeps both.)
 
 4. **Infer the handoffs.** Where one step clearly produces an artifact a later
    step consumes (a spec, a plan, a requirements doc, a backlog), set `writes`
@@ -122,7 +125,7 @@ already ships — they can bind it directly instead of importing a duplicate.
    - `load doctor` — should print `active workflow: '<id>'` (global) or
      `loadout '<profile>' → workflow '<id>'`, and no workflow warnings.
    - `load refresh` (or `load run <agent>`) — regenerates the
-     `.claude/commands/loadout/*.md` (and other agents') so the five commands
+     `.claude/commands/loadout/*.md` (and other agents') so the six commands
      now carry the imported workflow's steps. Spot-check one.
    - Offer `load studio` → the Workflows tab for a visual review/edit.
 

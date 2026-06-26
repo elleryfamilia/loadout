@@ -179,10 +179,10 @@ fn refresh_renders_a_bound_workflow_in_both_channels_and_clean_removes_commands(
     let fx = Fixture::new();
     fx.rust_project();
     fx.git_init();
-    // A rust profile bound to the built-in `lean` workflow.
+    // A rust profile bound to the built-in `spec-driven` workflow.
     fx.author(
         "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
-         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"lean\"\n",
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"spec-driven\"\n",
     );
 
     fx.cmd()
@@ -192,7 +192,7 @@ fn refresh_renders_a_bound_workflow_in_both_channels_and_clean_removes_commands(
 
     // Channel 1: the overlay carries the workflow context section.
     let overlay = fx.read(".loadout/generated/claude.md");
-    assert!(overlay.contains("## Workflow: Lean"));
+    assert!(overlay.contains("## Workflow: Spec-driven"));
     assert!(overlay.contains(".loadout/workflow/artifacts/"));
 
     // Channel 2: one generated command file per stage, under the owned namespace.
@@ -222,11 +222,11 @@ fn run_workflow_override_sets_handoff_env_in_dry_run() {
     // `--workflow` resolves a built-in directly, so no profile binding is needed.
     // Placed before the agent so it isn't swallowed by the trailing agent args.
     fx.cmd()
-        .args(["--dry-run", "run", "--workflow", "lean", "claude"])
+        .args(["--dry-run", "run", "--workflow", "spec-driven", "claude"])
         .assert()
         .success()
         // The run summary names the active workflow…
-        .stdout(predicate::str::contains("Lean"))
+        .stdout(predicate::str::contains("Spec-driven"))
         // …and the launch env exposes each handoff artifact's absolute path.
         .stdout(predicate::str::contains("LOADOUT_PLAN_PATH="))
         .stdout(predicate::str::contains(
@@ -242,7 +242,7 @@ fn global_active_workflow_renders_without_any_binding() {
     // A rust loadout with NO workflow binding, plus a global active workflow.
     // The single house workflow should still render for this repo.
     fx.author(
-        "[defaults]\nworkflow = \"boris\"\n\n\
+        "[defaults]\nworkflow = \"compound\"\n\n\
          [[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
          [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
     );
@@ -251,11 +251,11 @@ fn global_active_workflow_renders_without_any_binding() {
         .assert()
         .success();
     let overlay = fx.read(".loadout/generated/claude.md");
-    assert!(overlay.contains("## Workflow: Boris's workflow"));
-    // The per-stage commands generate under the *canonical* spine names, so
-    // Boris's stages land on `/loadout:verify`, not a per-stage `ship.md`.
+    assert!(overlay.contains("## Workflow: Compound engineering"));
+    // The per-stage commands generate under the *canonical* spine names —
+    // compound fills both `verify` (its review) and `ship` (its commit-push-pr).
     assert!(fx.exists(".claude/commands/loadout/verify.md"));
-    assert!(!fx.exists(".claude/commands/loadout/ship.md"));
+    assert!(fx.exists(".claude/commands/loadout/ship.md"));
 }
 
 #[test]

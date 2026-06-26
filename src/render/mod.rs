@@ -629,23 +629,23 @@ mod tests {
             "rust",
             vec![resolved(named_cap("baseline", "Be minimal."), "rust")],
         );
-        let lean = crate::workflow::builtin_workflows()
+        let wf = crate::workflow::builtin_workflows()
             .into_iter()
-            .find(|w| w.id == "lean")
+            .find(|w| w.id == "spec-driven")
             .unwrap();
         let out = render(&RenderRequest {
             agent: "claude",
             template_name: "claude",
             context: &ctx,
             composition: &comp,
-            workflow: Some(&lean),
+            workflow: Some(&wf),
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
         })
         .unwrap();
         // The section renders with its title, the ordered stages, and the handoff.
-        assert!(out.content.contains("## Workflow: Lean"));
+        assert!(out.content.contains("## Workflow: Spec-driven"));
         assert!(out.content.contains("**plan**"));
         assert!(out.content.contains("writes `plan.md`"));
         assert!(out.content.contains("reads `plan.md`"));
@@ -660,9 +660,9 @@ mod tests {
     fn workflow_is_folded_into_the_fingerprint_without_churn() {
         let ctx = sample_context();
         let comp = composition("rust", vec![resolved(named_cap("a", "A"), "rust")]);
-        let lean = crate::workflow::builtin_workflows()
+        let wf = crate::workflow::builtin_workflows()
             .into_iter()
-            .find(|w| w.id == "lean")
+            .find(|w| w.id == "spec-driven")
             .unwrap();
 
         // No workflow → byte-identical to the pre-workflow (context, composition)
@@ -671,11 +671,11 @@ mod tests {
         assert_eq!(overlay_fingerprint(&ctx, &comp, None), legacy);
 
         // Binding a workflow moves the fingerprint...
-        let with = overlay_fingerprint(&ctx, &comp, Some(&lean));
+        let with = overlay_fingerprint(&ctx, &comp, Some(&wf));
         assert_ne!(with, legacy);
 
         // ...and editing the bound workflow moves it again.
-        let mut edited = lean.clone();
+        let mut edited = wf.clone();
         edited.stages[0].purpose = Some("changed".into());
         assert_ne!(with, overlay_fingerprint(&ctx, &comp, Some(&edited)));
     }
