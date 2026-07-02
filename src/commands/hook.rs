@@ -2,10 +2,12 @@
 //! lifecycle hooks call (e.g. Cursor's `sessionStart` in `~/.cursor/hooks.json`).
 //!
 //! Serve mode reads the agent's hook payload JSON on stdin, extracts the
-//! workspace roots, and quietly re-renders every **adopted** repo among them
-//! (one with `.loadout/generated/` — the same test `refresh` uses). It is an
-//! observational hook: it prints nothing on stdout, suppresses warnings, and
-//! **always exits 0** — a loadout failure must never block the agent.
+//! workspace roots, and quietly re-renders each: already-adopted repos refresh
+//! every overlay they have, and (by default) a git repo some loadout applies
+//! to is **adopted on first open** — wired for this agent with no prior
+//! `load refresh`. It is an observational hook: it prints nothing on stdout,
+//! suppresses warnings, and **always exits 0** — a loadout failure must never
+//! block the agent.
 //!
 //! `--remove` deregisters loadout's entries from the agent's hooks file (the
 //! counterpart to the automatic registration during `refresh`/`run`; repo-local
@@ -41,13 +43,13 @@ pub fn run(rt: &Runtime, args: &HookArgs) -> crate::Result<()> {
     if args.remove {
         return remove(&hr);
     }
-    serve();
+    serve(&args.agent, hr.auto_adopt);
     Ok(())
 }
 
-/// Serve mode: refresh adopted workspace roots from the stdin payload.
-/// Infallible by design — every failure is swallowed.
-fn serve() {
+/// Serve mode: refresh (and possibly adopt) the workspace roots from the
+/// stdin payload. Infallible by design — every failure is swallowed.
+fn serve(agent: &str, auto_adopt: bool) {
     // Nothing may reach stdout (the agent parses it as the hook response) and
     // warnings would only confuse a machine caller.
     crate::report::set_quiet_warnings(true);
@@ -55,7 +57,7 @@ fn serve() {
     // Bound the read defensively; real payloads are a few hundred bytes.
     let _ = std::io::stdin().take(1 << 20).read_to_string(&mut payload);
     for root in workspace_roots(&payload) {
-        refresh_root(&root);
+        refresh_root(&root, agent, auto_adopt);
     }
 }
 
@@ -75,9 +77,10 @@ fn workspace_roots(payload: &str) -> Vec<PathBuf> {
 }
 
 /// Quietly re-render one workspace root, mirroring a bare `load refresh` there
-/// (auto-pull sync, then every agent with an existing overlay). All guards
-/// fail closed; all errors are swallowed.
-fn refresh_root(root: &Path) {
+/// (auto-pull sync, then every agent with an existing overlay) — and, with
+/// `auto_adopt`, wiring `agent` into a repo on its first open so no prior
+/// `load refresh` is ever needed. All guards fail closed; errors are swallowed.
+fn refresh_root(root: &Path, agent: &str, auto_adopt: bool) {
     let Ok(root) = root.canonicalize() else {
         return;
     };
@@ -88,11 +91,6 @@ fn refresh_root(root: &Path) {
             return;
         }
     }
-    // Adoption gate: only repos loadout already manages. NOT bindings — most
-    // repos never get one (only an ambiguous-profile pick is persisted).
-    if !config::generated_dir(&root).is_dir() {
-        return;
-    }
     if debounced(&root) {
         return;
     }
@@ -101,7 +99,19 @@ fn refresh_root(root: &Path) {
     let Ok(prep) = prepare_live(&rt) else {
         return;
     };
-    let agents = super::refresh::existing_overlay_agents(&prep);
+    let mut agents = super::refresh::existing_overlay_agents(&prep);
+    // Zero-friction adoption: opening a repo in the IDE wires this agent on
+    // first session, gated only on it being worth anything — a git repo (an
+    // arbitrary folder like ~/Downloads gets nothing) that some loadout
+    // actually applies to (else the overlay would be an empty husk). NOT
+    // gated on bindings or prior refreshes.
+    if auto_adopt
+        && !agents.iter().any(|a| a == agent)
+        && prep.context.git.is_some()
+        && prep.composition.primary_profile().is_some()
+    {
+        agents.push(agent.to_string());
+    }
     if agents.is_empty() {
         return;
     }

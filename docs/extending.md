@@ -23,7 +23,10 @@ for any descriptor. The wiring it picks:
   file without loadout's generated marker is never overwritten. Add
   `hook_registry` when the agent should keep the overlay fresh itself via a
   user-level lifecycle hook (e.g. Cursor's `~/.cursor/hooks.json` `sessionStart`
-  running `load hook cursor`).
+  running `load hook cursor`). By default the hook also **auto-adopts**: opening
+  a git repo some loadout applies to wires the agent on first session, no prior
+  `load refresh` needed (`auto_adopt = false` limits it to repos adopted by
+  hand; non-git folders and repos no loadout targets are always left alone).
 - otherwise (or override opted out) → emit-only: write the gitignored overlay +
   print `wire_hint`.
 

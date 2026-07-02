@@ -158,7 +158,7 @@ Loadout produces one overlay and delivers it the way each agent expects.
 | `gemini`   | `.loadout/generated/gemini.md`                                            | Wires through gitignored `GEMINI.local.md` and Gemini settings |
 | `opencode` | `.loadout/generated/opencode.md`                                          | Registers the overlay in global opencode instructions          |
 | `copilot`  | `.loadout/generated/copilot/.github/instructions/loadout.instructions.md` | Launches Copilot CLI with the custom instructions directory    |
-| `cursor`   | `.cursor/rules/loadout.mdc` (always-on rule)                              | Read by the Cursor IDE **and** `cursor-agent` CLI; a user-level `sessionStart` hook keeps it fresh in the IDE |
+| `cursor`   | `.cursor/rules/loadout.mdc` (always-on rule)                              | Read by the Cursor IDE **and** `cursor-agent` CLI; a user-level `sessionStart` hook keeps it fresh — and wires a matching repo automatically the first time you open it |
 | `generic`  | `.loadout/generated/generic.md`                                           | Emit-only; you wire it yourself                                 |
 
 It never edits committed shared files like `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or `.github/copilot-instructions.md` — only local, gitignored paths.

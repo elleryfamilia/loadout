@@ -186,7 +186,9 @@ in `~/.gemini/settings.json`), `copilot` (`load run` sets
 `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → the gitignored overlay), `cursor` (owned
 `.cursor/rules/loadout.mdc` rule — one file read by the IDE agent *and* the
 `cursor-agent` CLI — plus a user-level `sessionStart` hook in `~/.cursor/hooks.json`
-that re-renders adopted repos, since IDE sessions never pass through `load run`),
+that keeps repos fresh — and auto-adopts a git repo some loadout applies to on
+first open, no prior `load refresh` needed — since IDE sessions never pass
+through `load run`),
 `opencode` (registers
 the overlay path in `~/.config/opencode/opencode.json` `instructions`), `generic`
 (emit-only). All overridable / extendable via `[[agents]]`.

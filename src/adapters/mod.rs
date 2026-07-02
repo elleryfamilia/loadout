@@ -165,6 +165,16 @@ pub struct HookRegistry {
     /// command is `"<current load binary>" <subcommand>`; the suffix also
     /// identifies our entry for updates and `--remove`.
     pub subcommand: String,
+    /// Whether the hook may **adopt** a repo on first open — wiring this agent
+    /// into a git repo some loadout applies to, with no prior `load refresh`
+    /// there (default: true). Off → the hook only refreshes repos already
+    /// adopted by hand.
+    #[serde(default = "default_true")]
+    pub auto_adopt: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl AgentDescriptor {
@@ -313,6 +323,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
                 hooks_file: ".cursor/hooks.json".into(),
                 event: "sessionStart".into(),
                 subcommand: "hook cursor".into(),
+                auto_adopt: true,
             }),
             wire_hint: Some(
                 "Cursor reads .cursor/rules/*.mdc; loadout writes the overlay to a \

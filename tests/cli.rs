@@ -2179,12 +2179,59 @@ fn hook_serve_refreshes_adopted_roots_debounced_and_never_fails() {
         .stdout(predicate::str::is_empty());
 }
 
-/// Serve mode ignores roots loadout doesn't manage (no .loadout/generated/).
+/// Zero-friction adoption: opening a matching git repo in the IDE wires
+/// cursor on first session — no prior `load refresh` needed.
 #[test]
-fn hook_serve_skips_unadopted_roots() {
+fn hook_serve_auto_adopts_matching_git_repo() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.rust_profile();
+    fx.git_init();
+    let payload = format!(
+        r#"{{ "workspace_roots": ["{}"] }}"#,
+        fx.repo_path().display()
+    );
+    fx.cmd()
+        .args(["hook", "cursor"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    let rule = fx.read(".cursor/rules/loadout.mdc");
+    assert!(rule.starts_with("---\n"), "frontmatter first");
+    assert!(rule.contains("Rust project. Build with cargo"));
+    assert!(fx.exists(".loadout/generated/cursor.md"));
+    assert!(fx.read(".gitignore").contains(".cursor/rules/loadout.mdc"));
+}
+
+/// Auto-adoption is gated on worth: a non-git folder gets nothing, and a git
+/// repo no loadout applies to gets nothing.
+#[test]
+fn hook_serve_skips_non_git_and_non_matching_roots() {
+    // Matching profile but NOT a git repo (e.g. opening ~/Downloads).
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    let payload = format!(
+        r#"{{ "workspace_roots": ["{}"] }}"#,
+        fx.repo_path().display()
+    );
+    fx.cmd()
+        .args(["hook", "cursor"])
+        .write_stdin(payload)
+        .assert()
+        .success();
+    assert!(!fx.exists(".cursor/rules/loadout.mdc"));
+    assert!(!fx.exists(".loadout/generated/cursor.md"));
+
+    // Git repo, but the only loadout targets a different stack (and there is
+    // no no-targets default) → empty composition → no adoption.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\nid = \"py\"\nguidance = \"Python.\"\n\n[[loadouts]]\nname = \"python\"\ntargets = [\"python\"]\nfragments = [\"py\"]\n",
+    );
     let payload = format!(
         r#"{{ "workspace_roots": ["{}"] }}"#,
         fx.repo_path().display()
