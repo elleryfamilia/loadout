@@ -15,7 +15,7 @@ A *loadout* is the kit you equip before a job. Loadout (the tool) bundles your A
 - Your project's `AGENTS.md` describes **the repo.**
 - Loadout carries **what you bring to it** — your conventions, your tooling, your voice — across every project, machine, and agent.
 
-Works with **Claude, Codex, Gemini, opencode, and Copilot**. Loadout delivers your context as a local, gitignored file each agent reads — without touching committed project instruction files.
+Works with **Claude, Codex, Gemini, Cursor, opencode, and Copilot**. Loadout delivers your context as a local, gitignored file each agent reads — without touching committed project instruction files.
 
 <p align="center">
   <img src="docs/screenshots/loadouts.png" alt="load studio — the Loadouts tab: composing a machine loadout from fragments, with live script re-runs" width="900">
@@ -158,6 +158,7 @@ Loadout produces one overlay and delivers it the way each agent expects.
 | `gemini`   | `.loadout/generated/gemini.md`                                            | Wires through gitignored `GEMINI.local.md` and Gemini settings |
 | `opencode` | `.loadout/generated/opencode.md`                                          | Registers the overlay in global opencode instructions          |
 | `copilot`  | `.loadout/generated/copilot/.github/instructions/loadout.instructions.md` | Launches Copilot CLI with the custom instructions directory    |
+| `cursor`   | `.cursor/rules/loadout.mdc` (always-on rule)                              | Read by the Cursor IDE **and** `cursor-agent` CLI; a user-level `sessionStart` hook keeps it fresh in the IDE |
 | `generic`  | `.loadout/generated/generic.md`                                           | Emit-only; you wire it yourself                                 |
 
 It never edits committed shared files like `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or `.github/copilot-instructions.md` — only local, gitignored paths.

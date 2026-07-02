@@ -183,7 +183,11 @@ how to wire it, not content in a shared file.
 Built-ins: `claude` (import), `codex` (auto `AGENTS.override.md` merge,
 `--no-override` to skip), `gemini` (auto `GEMINI.local.md` @import + registers it
 in `~/.gemini/settings.json`), `copilot` (`load run` sets
-`COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → the gitignored overlay), `opencode` (registers
+`COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → the gitignored overlay), `cursor` (owned
+`.cursor/rules/loadout.mdc` rule — one file read by the IDE agent *and* the
+`cursor-agent` CLI — plus a user-level `sessionStart` hook in `~/.cursor/hooks.json`
+that re-renders adopted repos, since IDE sessions never pass through `load run`),
+`opencode` (registers
 the overlay path in `~/.config/opencode/opencode.json` `instructions`), `generic`
 (emit-only). All overridable / extendable via `[[agents]]`.
 

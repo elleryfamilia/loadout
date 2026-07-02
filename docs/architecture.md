@@ -77,7 +77,9 @@ cwd → repo_base → Config::load → detect_context → select (one loadout by
 - **Auto-wire only through local/gitignored paths.** Claude's `CLAUDE.local.md`
   (`@import`), Codex's `AGENTS.override.md` (read before the committed `AGENTS.md`),
   Gemini's `GEMINI.local.md` (`@import`, registered once in
-  `~/.gemini/settings.json` `context.fileName`), and Copilot's gitignored overlay
+  `~/.gemini/settings.json` `context.fileName`), Cursor's `.cursor/rules/loadout.mdc`
+  (a fully loadout-owned always-on rule, gitignored — Cursor doesn't filter rules
+  by gitignore), and Copilot's gitignored overlay
   (pointed at via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` by `load run`) are wired
   automatically; loadout never edits a committed shared file. Agents with no wiring
   path (only `generic`, plus any custom agent) are emit-only. (opencode registers

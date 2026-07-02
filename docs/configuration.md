@@ -193,7 +193,10 @@ push: `auto_push = false`.
 ## `[[agents]]` (implemented)
 
 Built-in agents are a base layer; override by `id` or add new ones — no code
-change. Required: `id`, `generated_filename`.
+change. Required: `id`, `generated_filename`. One sync caveat: descriptor fields
+are parsed strictly, so a hand-written `[[agents]]` entry using a field from a
+newer loadout (e.g. `target_file`) fails loudly on a machine running an older
+binary — update that machine's `load` first. Built-ins are unaffected.
 
 ```toml
 [[agents]]
@@ -204,6 +207,8 @@ template = "overlay"              # body template name (repo/global override →
 # importer = "GEMINI.local.md"             # auto-wire @import into a LOCAL file
 # override_target = "AGENTS.override.md"   # auto-merge target, gitignored (default-on)
 # override_base   = "AGENTS.md"            # file whose content seeds the override
+# target_file = ".cursor/rules/loadout.mdc" # loadout-owned wired file, written raw (no marker block)
+# preamble = "---\nalwaysApply: true\n---\n" # raw first bytes of target_file (e.g. MDC frontmatter)
 # append_prompt_flag = "--append-system-prompt"   # run injects a freshness note via this flag
 wire_hint = "include .loadout/generated/gemini.md from your agent config"
 ```
@@ -217,6 +222,7 @@ Built-in defaults:
 | `gemini` | `gemini.md` | auto → gitignored `GEMINI.local.md` (`@import`) + registers it in `~/.gemini/settings.json` `context.fileName` | `gemini` |
 | `opencode` | `opencode.md` | registers overlay path in `~/.config/opencode/opencode.json` `instructions` | `opencode` |
 | `copilot` | `copilot/.github/instructions/loadout.instructions.md` | `load run` sets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → `.loadout/generated/copilot` | `copilot` |
+| `cursor` | `cursor.md` | owned file → gitignored `.cursor/rules/loadout.mdc` (`alwaysApply` rule, IDE + CLI) + `sessionStart` hook in `~/.cursor/hooks.json` for IDE freshness | `cursor-agent` |
 | `generic` | `generic.md` | emit-only | — |
 
 ## `[host_classes]` (implemented; keep mappings private)

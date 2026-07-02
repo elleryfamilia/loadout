@@ -17,6 +17,13 @@ for any descriptor. The wiring it picks:
 - `override_target` set → auto-merge (default-on) into that gitignored file,
   re-seeded from `override_base` on each (re)write; opt out with `--no-override`
   / `[codex] write_override = false`.
+- `target_file` set → the overlay written **raw** as a fully loadout-owned,
+  gitignored file at that path — `preamble` supplies mandatory first bytes such
+  as MDC frontmatter (e.g. Cursor's `.cursor/rules/loadout.mdc`). A pre-existing
+  file without loadout's generated marker is never overwritten. Add
+  `hook_registry` when the agent should keep the overlay fresh itself via a
+  user-level lifecycle hook (e.g. Cursor's `~/.cursor/hooks.json` `sessionStart`
+  running `load hook cursor`).
 - otherwise (or override opted out) → emit-only: write the gitignored overlay +
   print `wire_hint`.
 
