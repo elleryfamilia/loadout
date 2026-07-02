@@ -59,7 +59,8 @@ pub fn build(meta: &HeaderMeta) -> String {
          > 🕒 loadout snapshot — **{host}**, **{generated_at}**, profile **{profile}** (context {hash}).\n\
          > This is point-in-time **agent guidance, not enforced policy**, and may be stale.\n\
          > Check freshness with `load doctor`; regenerate with `load refresh`; remove with `load clean`.\n\
-         > If `$LOADOUT_RUN` is unset and the project changed since the time above, refresh before relying on this.\n\
+         > If `$LOADOUT_RUN` is unset, run `load refresh` before relying on this (it skips work when \
+         nothing changed), then re-read this file.\n\
          \n",
         hash = meta.context_hash,
         generated_at = meta.generated_at,
@@ -124,9 +125,13 @@ mod tests {
         // addressed to the agent and attributing the guidance to the user
         assert!(h.contains("What is loadout?"));
         assert!(h.contains("comes from the user"));
-        // self-healing instructions + launch-mode signal
+        // self-healing instructions + launch-mode signal: an agent launched
+        // outside `load run` is told to *run* the refresh itself, not merely
+        // that it could.
         assert!(h.contains("load refresh"));
         assert!(h.contains("load clean"));
+        assert!(h.contains("run `load refresh` before relying on this"));
+        assert!(h.contains("then re-read this file"));
         assert!(h.contains("$LOADOUT_RUN"));
     }
 

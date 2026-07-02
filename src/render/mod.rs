@@ -149,21 +149,32 @@ struct ProviderRef<'a> {
 /// an unchanged context — moves the fingerprint, so a cached overlay is never
 /// silently stale.
 ///
-/// When no workflow is bound the fingerprint is byte-identical to the
-/// pre-workflow `(context, composition)` hash, so adding the feature doesn't
-/// churn every existing overlay — only a profile that gains a workflow
-/// re-renders.
+/// When no workflow is bound the fingerprint reduces to the
+/// `(HEADER_VERSION, context, composition)` hash — binding a workflow is the
+/// only thing that folds more in, so a profile without one doesn't churn when
+/// the workflow feature evolves.
 pub fn overlay_fingerprint(
     context: &Context,
     composition: &Composition,
     workflow: Option<&Workflow>,
 ) -> String {
-    let base = (context.compute_hash(), composition.fingerprint());
+    let base = (
+        HEADER_VERSION,
+        context.compute_hash(),
+        composition.fingerprint(),
+    );
     match workflow {
         None => crate::hash::context_hash(&base),
-        Some(w) => crate::hash::context_hash(&(base.0, base.1, w.content_hash())),
+        Some(w) => crate::hash::context_hash(&(base.0, base.1, base.2, w.content_hash())),
     }
 }
+
+/// Bumped when the generated header's wording changes in a way agents should
+/// actually see (e.g. the self-heal instruction). The header text isn't part
+/// of the context, so without this a wording change would never reach
+/// already-rendered overlays — the hash-skip would keep them forever.
+/// Bumping re-renders every overlay exactly once.
+const HEADER_VERSION: u32 = 2;
 
 /// Render an overlay for `req`.
 pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
@@ -665,14 +676,18 @@ mod tests {
             .find(|w| w.id == "spec-driven")
             .unwrap();
 
-        // No workflow → byte-identical to the pre-workflow (context, composition)
-        // hash, so adding the feature doesn't re-render every existing overlay.
-        let legacy = crate::hash::context_hash(&(ctx.compute_hash(), comp.fingerprint()));
-        assert_eq!(overlay_fingerprint(&ctx, &comp, None), legacy);
+        // No workflow → the base (header-version, context, composition) hash;
+        // the workflow arm folds more in only when one is actually bound.
+        let base = crate::hash::context_hash(&(
+            super::HEADER_VERSION,
+            ctx.compute_hash(),
+            comp.fingerprint(),
+        ));
+        assert_eq!(overlay_fingerprint(&ctx, &comp, None), base);
 
         // Binding a workflow moves the fingerprint...
         let with = overlay_fingerprint(&ctx, &comp, Some(&wf));
-        assert_ne!(with, legacy);
+        assert_ne!(with, base);
 
         // ...and editing the bound workflow moves it again.
         let mut edited = wf.clone();
