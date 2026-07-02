@@ -406,6 +406,8 @@ fn delivery_of(a: &AgentDescriptor, write_override: bool) -> String {
         } else {
             format!("override → {ovr} (off; set [codex] write_override = true)")
         }
+    } else if let Some(target) = &a.target_file {
+        format!("owned file → {target}")
     } else if let Some(reg) = &a.importer_registry {
         format!("register → {}", reg.settings_file)
     } else if let Some(var) = &a.launch_context_dir_env {

@@ -27,22 +27,29 @@ pub enum CommandFormat {
     Markdown,
     /// TOML with `description` + `prompt` (Gemini CLI).
     Toml,
+    /// Cursor Skills: a folder per command holding a `SKILL.md` (the leaf
+    /// folder names the skill, so commands land as
+    /// `<commands_dir>/loadout/loadout-<stage>/SKILL.md` → `/loadout-<stage>`).
+    Skill,
 }
 
 impl CommandFormat {
     /// File extension for this format.
     pub fn ext(self) -> &'static str {
         match self {
-            CommandFormat::Markdown => "md",
+            CommandFormat::Markdown | CommandFormat::Skill => "md",
             CommandFormat::Toml => "toml",
         }
     }
 
     /// The placeholder this agent substitutes the user's command text into.
+    /// Cursor skills have no substitution syntax — the invoking message rides
+    /// along as-is, so the body just points the agent at it.
     fn arg_placeholder(self) -> &'static str {
         match self {
             CommandFormat::Markdown => "$ARGUMENTS",
             CommandFormat::Toml => "{{args}}",
+            CommandFormat::Skill => "the request that accompanied this skill invocation",
         }
     }
 }
@@ -79,7 +86,12 @@ fn render_stage_command(
     stage: &WorkflowStage,
     format: CommandFormat,
 ) -> StageCommand {
-    let filename = format!("{}.{}", slug(command), format.ext());
+    let stem = slug(command);
+    let filename = match format {
+        // A skill is a folder named after the skill, holding a SKILL.md.
+        CommandFormat::Skill => format!("loadout-{stem}/SKILL.md"),
+        _ => format!("{stem}.{}", format.ext()),
+    };
     let description = stage
         .purpose
         .clone()
@@ -89,6 +101,12 @@ fn render_stage_command(
         CommandFormat::Markdown => {
             format!(
                 "---\ndescription: {}\n---\n\n{body}\n",
+                yaml_dq(&description)
+            )
+        }
+        CommandFormat::Skill => {
+            format!(
+                "---\nname: loadout-{stem}\ndescription: {}\n---\n\n{body}\n",
                 yaml_dq(&description)
             )
         }

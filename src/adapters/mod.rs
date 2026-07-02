@@ -15,6 +15,10 @@
 //!   (inlined) into a gitignored override file the agent *prefers* over its
 //!   committed instruction file (e.g. Codex reads `AGENTS.override.md` before
 //!   `AGENTS.md`). Opt out with `--no-override` / `[codex] write_override`.
+//! - **`target_file`** set → auto-wire: write the overlay raw (optionally
+//!   after a `preamble`, e.g. MDC frontmatter) as a fully loadout-owned,
+//!   gitignored file at that path (e.g. Cursor's `.cursor/rules/loadout.mdc`).
+//!   No marker-block wrap; a foreign file at the path is never overwritten.
 //! - otherwise (or override opted out) → **emit-only**: write the gitignored
 //!   overlay and print a hint on how to wire it (committed instruction files
 //!   like `AGENTS.md` are never touched).
@@ -66,6 +70,19 @@ pub struct AgentDescriptor {
     /// Source file whose content seeds the override (e.g. `AGENTS.md`).
     #[serde(default)]
     pub override_base: Option<String>,
+    /// Repo-relative path of a fully loadout-owned wired file, written **raw**
+    /// (`preamble` + overlay, no marker-block wrap) — for agents whose
+    /// instruction files must be loadout's content as the *entire* file in a
+    /// specific shape (e.g. Cursor's `.cursor/rules/loadout.mdc`, whose MDC
+    /// frontmatter must be the file's first bytes). Gitignored; a pre-existing
+    /// file without loadout's generated marker is never overwritten.
+    #[serde(default)]
+    pub target_file: Option<String>,
+    /// Raw first bytes of [`target_file`](Self::target_file) (e.g. MDC
+    /// frontmatter). The generated-marker header follows it, so hash-based
+    /// freshness detection still works.
+    #[serde(default)]
+    pub preamble: Option<String>,
     /// Note shown in emit-only mode explaining how to wire the overlay.
     #[serde(default)]
     pub wire_hint: Option<String>,
@@ -146,6 +163,8 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             importer_registry: None,
             override_target: None,
             override_base: None,
+            target_file: None,
+            preamble: None,
             wire_hint: None,
             append_prompt_flag: None,
             launch_context_dir_env: None,
@@ -245,6 +264,35 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
                 "copilot",
                 "copilot/.github/instructions/loadout.instructions.md",
             )
+        },
+        AgentDescriptor {
+            display_name: Some("Cursor (IDE + CLI)".into()),
+            launch: Some("cursor-agent".into()),
+            // Cursor — IDE agent and `cursor-agent` CLI alike — reads project
+            // rules from `.cursor/rules/*.mdc`; an `alwaysApply: true` rule is
+            // always-on, and rules discovery is NOT gitignore-filtered
+            // (verified live, unlike Copilot above). So one gitignored,
+            // loadout-owned rule file wires both surfaces. MDC frontmatter
+            // must be the file's first bytes, hence `preamble` + the raw
+            // `target_file` write (no marker-block wrap).
+            target_file: Some(".cursor/rules/loadout.mdc".into()),
+            preamble: Some(
+                "---\ndescription: loadout — the user's personal cross-project context\n\
+                 alwaysApply: true\n---\n\n"
+                    .into(),
+            ),
+            wire_hint: Some(
+                "Cursor reads .cursor/rules/*.mdc; loadout writes the overlay to a \
+                 gitignored .cursor/rules/loadout.mdc (alwaysApply: true)."
+                    .into(),
+            ),
+            // Cursor Skills: `.cursor/skills/<category>/<skill>/SKILL.md` — the
+            // leaf folder names the skill (the category above it doesn't), so
+            // loadout owns `.cursor/skills/loadout/` whole and the stages
+            // invoke as `/loadout-<stage>`.
+            commands_dir: Some(".cursor/skills".into()),
+            command_format: Some(commands::CommandFormat::Skill),
+            ..d("cursor", "cursor.md")
         },
         AgentDescriptor {
             display_name: Some("Generic (AGENTS.md-style)".into()),
@@ -366,14 +414,17 @@ pub fn apply(
     let bleeds = is_home(app.repo_base());
     let want_override =
         !opts.codex_no_override && (opts.codex_override || app.config.codex.write_override);
-    let suppress_wiring =
-        bleeds && (d.importer.is_some() || (d.override_target.is_some() && want_override));
+    let suppress_wiring = bleeds
+        && (d.importer.is_some()
+            || d.target_file.is_some()
+            || (d.override_target.is_some() && want_override));
 
     if suppress_wiring {
         let what = d
             .importer
             .as_deref()
             .or(d.override_target.as_deref())
+            .or(d.target_file.as_deref())
             .unwrap_or("the overlay");
         if d.append_prompt_flag.is_some() {
             notes.push(format!(
@@ -468,6 +519,35 @@ pub fn apply(
                 "{base} left untouched; overlay merged into {ovr} (Codex prefers it)"
             ));
         }
+    } else if let Some(target) = &d.target_file {
+        // Owned-target wiring: the overlay IS the file — written raw (preamble
+        // first, e.g. Cursor's MDC frontmatter, then header + body), with no
+        // marker-block wrap and independent of the [codex] override knobs.
+        // Never overwrites a file loadout didn't generate.
+        let path = app.repo_base().join(target);
+        let foreign = std::fs::read_to_string(&path)
+            .map(|c| !c.contains(header::GENERATED_MARKER))
+            .unwrap_or(false);
+        if foreign {
+            warnings.push(format!(
+                "{target} exists but wasn't generated by loadout — not overwriting \
+                 (move it aside and re-run to wire {})",
+                d.id
+            ));
+        } else {
+            let content = match &d.preamble {
+                Some(p) => format!("{p}{}", rendered.content),
+                None => rendered.content.clone(),
+            };
+            files.push(write_hash_skipping(
+                app,
+                force,
+                &path,
+                &content,
+                &rendered.context_hash,
+            )?);
+            gitignore_extra.push(target.clone());
+        }
     } else if let Some(reg) = &d.importer_registry {
         // Registry-only wiring (no importer/override): the agent loads the overlay
         // directly once its path is registered in the agent's own settings (e.g.
@@ -540,6 +620,16 @@ pub fn artifacts(d: &AgentDescriptor, repo_base: &Path) -> Vec<PathBuf> {
             out.push(p);
         }
     }
+    if let Some(target) = &d.target_file {
+        // Only ours if it carries the generated marker (collision guard).
+        let p = repo_base.join(target);
+        let ours = std::fs::read_to_string(&p)
+            .map(|c| c.contains(header::GENERATED_MARKER))
+            .unwrap_or(false);
+        if ours {
+            out.push(p);
+        }
+    }
     if let Some(importer) = &d.importer {
         let p = repo_base.join(importer);
         let has_block = std::fs::read_to_string(&p)
@@ -591,6 +681,21 @@ pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult
     if let Some(ovr) = &d.override_target {
         let p = app.repo_base().join(ovr);
         if p.exists() {
+            if !dry {
+                std::fs::remove_file(&p).ok();
+            }
+            removed.push(p);
+        }
+    }
+
+    // Owned target file → remove only when it carries our generated marker
+    // (respects the collision guard: a foreign file was never ours to delete).
+    if let Some(target) = &d.target_file {
+        let p = app.repo_base().join(target);
+        let ours = std::fs::read_to_string(&p)
+            .map(|c| c.contains(header::GENERATED_MARKER))
+            .unwrap_or(false);
+        if ours {
             if !dry {
                 std::fs::remove_file(&p).ok();
             }
@@ -702,15 +807,25 @@ fn write_stage_commands(
         .unwrap_or(commands::CommandFormat::Markdown);
     let ns_dir = command_namespace_dir(app.repo_base(), commands_dir);
     let generated = commands::stage_commands(wf, format);
-    let keep: std::collections::HashSet<&str> =
-        generated.iter().map(|c| c.filename.as_str()).collect();
+    // A command's top-level entry in the namespace dir: the file itself, or —
+    // for folder-shaped formats (Cursor skills' `loadout-plan/SKILL.md`) — the
+    // folder. Pruning compares at that level.
+    let keep: std::collections::HashSet<&str> = generated
+        .iter()
+        .filter_map(|c| c.filename.split('/').next())
+        .collect();
 
-    // Prune stale command files (a removed/renamed stage's leftover).
+    // Prune stale command entries (a removed/renamed stage's leftover).
     if let Ok(entries) = std::fs::read_dir(&ns_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             if !keep.contains(name.to_string_lossy().as_ref()) && !app.writer.is_dry_run() {
-                std::fs::remove_file(entry.path()).ok();
+                let p = entry.path();
+                if p.is_dir() {
+                    std::fs::remove_dir_all(&p).ok();
+                } else {
+                    std::fs::remove_file(&p).ok();
+                }
             }
         }
     }
