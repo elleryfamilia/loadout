@@ -35,7 +35,7 @@ pub fn run(rt: &Runtime, args: &HookArgs) -> crate::Result<()> {
     // hook command always names a valid agent.
     let repo_base = crate::context::repo_base_for(&rt.cwd);
     let cfg = config::Config::load(&repo_base)?;
-    let d = adapters::descriptor(&cfg, &args.agent)
+    let d = adapters::resolve_agent_token(&cfg, &args.agent)
         .ok_or_else(|| anyhow::anyhow!("unknown agent '{}'", args.agent))?;
     let Some(hr) = d.hook_registry.clone() else {
         anyhow::bail!("agent '{}' has no hook integration", args.agent);

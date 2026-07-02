@@ -289,13 +289,12 @@ pub fn resolve_agents(arg: Option<&str>, config: &Config) -> crate::Result<Vec<S
     let ids = adapters::agent_ids(config);
     match arg {
         Some("all") => Ok(ids),
-        Some(id) => {
-            if ids.iter().any(|a| a == id) {
-                Ok(vec![id.to_string()])
-            } else {
-                bail!("unknown agent '{id}' (known: {})", ids.join(", "))
-            }
-        }
+        // Accept a launch-program name as an alias for the id (`cursor-agent`
+        // → `cursor`): people type the binary they know.
+        Some(id) => match adapters::resolve_agent_token(config, id) {
+            Some(d) => Ok(vec![d.id.clone()]),
+            None => bail!("unknown agent '{id}' (known: {})", ids.join(", ")),
+        },
         None => {
             let def = config.default_agent.clone();
             if ids.iter().any(|a| a == &def) {

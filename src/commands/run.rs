@@ -175,6 +175,12 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         Err(e) => return Err(e),
     };
 
+    // Passive hook bootstrap (see `bootstrap_hook_registrations`): launching
+    // any agent also wires the IDE freshness hooks of installed ones.
+    for note in crate::adapters::bootstrap_hook_registrations(&prep.config, rt.dry_run) {
+        println!("  {} {}", p.green("✓"), p.dim(&note));
+    }
+
     // A profile that references a fragment id not in the library would silently
     // drop it from the overlay. Interrupt here — before any render/launch work —
     // and let the user decide: ignore once, open studio to fix it, or quit.
@@ -202,9 +208,17 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         skill_preflight(&prep, &p);
     }
 
-    let descriptor = adapters::descriptor(&prep.config, agent)
-        .ok_or_else(|| anyhow!("unknown agent '{agent}'"))?
+    // Accept the agent's launch program as an alias for its id — people type
+    // the binary they know (`load cursor-agent`) for the `cursor` agent.
+    let descriptor = adapters::resolve_agent_token(&prep.config, agent)
+        .ok_or_else(|| {
+            anyhow!(
+                "unknown agent '{agent}' (known: {})",
+                adapters::agent_ids(&prep.config).join(", ")
+            )
+        })?
         .clone();
+    let agent: &str = &descriptor.id;
     let program = descriptor
         .launch
         .clone()

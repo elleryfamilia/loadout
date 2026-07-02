@@ -2294,3 +2294,63 @@ fn cursor_clean_leaves_global_hook_registered() {
         .stdout(predicate::str::contains("left the user-level"));
     assert!(fx.read_home(".cursor/hooks.json").contains(" hook cursor"));
 }
+
+/// The one-time hook registration needs no explicit cursor command: ANY refresh
+/// bootstraps it — gated on the agent actually being installed (~/.cursor/
+/// exists), so machines without Cursor get nothing.
+#[test]
+fn any_refresh_bootstraps_cursor_hook_when_cursor_is_installed() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+
+    // No ~/.cursor → refreshing another agent must NOT create hooks.json.
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success();
+    assert!(!fx.home_exists(".cursor/hooks.json"));
+
+    // With ~/.cursor present (Cursor installed), a claude-only refresh
+    // registers the cursor hook as a side effect.
+    fs::create_dir_all(fx.global.path().join("home/.cursor")).unwrap();
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("registered the sessionStart hook"));
+    assert!(fx.read_home(".cursor/hooks.json").contains(" hook cursor"));
+}
+
+/// The launch-program name works as an alias for the agent id everywhere a
+/// token is accepted — people type the binary they know (`cursor-agent`).
+#[test]
+fn launch_program_name_aliases_the_agent_id() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+
+    // refresh --agent cursor-agent → the cursor agent.
+    fx.cmd()
+        .args(["refresh", "--agent", "cursor-agent"])
+        .assert()
+        .success();
+    assert!(fx.exists(".cursor/rules/loadout.mdc"));
+
+    // Bare launch dispatch too: `load cursor-agent` (dry-run skips the PATH
+    // check and prints the would-exec line).
+    fx.cmd()
+        .args(["--dry-run", "cursor-agent"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would exec:"))
+        .stdout(predicate::str::contains("cursor-agent"));
+
+    // Unknown tokens now list the known ids.
+    fx.cmd()
+        .args(["--dry-run", "agent"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown agent 'agent'"))
+        .stderr(predicate::str::contains("cursor"));
+}

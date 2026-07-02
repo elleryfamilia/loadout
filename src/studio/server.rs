@@ -1716,6 +1716,11 @@ fn bootstrap(req: &Req, token: &str) -> Resp {
 pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
     let repo_base = context::repo_base_for(&rt.cwd);
     let config = Config::load(&repo_base).context("loading configuration")?;
+    // Passive hook bootstrap: studio is many users' first loadout command, so
+    // wire the IDE freshness hooks of installed agents (e.g. Cursor) here too.
+    for note in crate::adapters::bootstrap_hook_registrations(&config, rt.dry_run) {
+        println!("load studio → {note}");
+    }
     let base_context = context::detect_context(&rt.cwd, &config).context("detecting context")?;
     let global_dir = config::global_config_dir();
     let session = Session::open(&repo_base, global_dir.as_deref())?;

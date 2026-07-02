@@ -16,10 +16,10 @@ use crate::sync::{self, GhCreate, PullOutcome, PushOutcome, ReconcileOutcome};
 /// timeout. (Auto-pull on the `run` hot path uses the short `[sync] timeout`.)
 const MANUAL_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub fn run(_rt: &super::Runtime, args: &SyncArgs) -> Result<()> {
+pub fn run(rt: &super::Runtime, args: &SyncArgs) -> Result<()> {
     let dir = sync::config_dir()?;
     let p = Painter::auto();
-    match &args.action {
+    let result = match &args.action {
         Some(SyncAction::Init(a)) => init_flow(&dir, a.remote.as_deref(), &p),
         Some(SyncAction::Clone(a)) => {
             sync::clone(&a.url, &dir, MANUAL_TIMEOUT).context("cloning the config repo")?;
@@ -35,7 +35,19 @@ pub fn run(_rt: &super::Runtime, args: &SyncArgs) -> Result<()> {
             Ok(())
         }
         None => sync_now(&dir, &p),
+    };
+    // Passive hook bootstrap, after the sync so a fresh machine's first
+    // `load sync clone` loads the just-synced config and leaves the IDE
+    // freshness hooks of installed agents (e.g. Cursor) wired too.
+    if result.is_ok() {
+        let repo_base = crate::context::repo_base_for(&rt.cwd);
+        if let Ok(config) = crate::config::Config::load(&repo_base) {
+            for note in crate::adapters::bootstrap_hook_registrations(&config, rt.dry_run) {
+                println!("{} {}", p.green("✓"), p.dim(&note));
+            }
+        }
     }
+    result
 }
 
 /// `load sync init [url]`: set the config dir up as a synced repo. With a URL,

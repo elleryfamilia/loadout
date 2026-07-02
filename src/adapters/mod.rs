@@ -353,6 +353,24 @@ pub fn descriptor<'a>(config: &'a Config, id: &str) -> Option<&'a AgentDescripto
     config.agents.iter().find(|a| a.id == id)
 }
 
+/// Resolve a user-supplied agent token to a descriptor: an exact id match
+/// first, else a **unique** match on the agent's `launch` program — people
+/// type the binary they know (`load cursor-agent`) for an agent whose id is
+/// shorter (`cursor`). Ambiguous launch matches resolve to nothing.
+pub fn resolve_agent_token<'a>(config: &'a Config, token: &str) -> Option<&'a AgentDescriptor> {
+    if let Some(d) = descriptor(config, token) {
+        return Some(d);
+    }
+    let mut by_launch = config
+        .agents
+        .iter()
+        .filter(|a| a.launch.as_deref() == Some(token));
+    match (by_launch.next(), by_launch.next()) {
+        (Some(d), None) => Some(d),
+        _ => None,
+    }
+}
+
 /// All configured agent ids, in declaration order.
 pub fn agent_ids(config: &Config) -> Vec<String> {
     config.agents.iter().map(|a| a.id.clone()).collect()
@@ -618,7 +636,7 @@ pub fn apply(
     // registries — the hook subcommand self-gates per repo, so registering
     // from any one repo is safe for all.
     if let (Some(hr), false) = (&d.hook_registry, suppress_wiring) {
-        apply_hook_registry(app, hr, &mut files, &mut notes, &mut warnings)?;
+        apply_hook_registry(app.writer, hr, &mut files, &mut notes, &mut warnings)?;
     }
 
     // 3. gitignore (only inside a repo): the loadout-managed dirs + the private
@@ -1045,12 +1063,42 @@ fn apply_importer_registry(
     Ok(())
 }
 
+/// Passive hook bootstrap, called from the commands every user runs anyway
+/// (`refresh`, `run`, `studio`, `sync`): register each configured agent's
+/// freshness hook — but only when the host agent shows evidence of being
+/// installed (the hooks file's parent dir exists under `$HOME`, e.g.
+/// `~/.cursor/`), so loadout never writes config for a product the user
+/// doesn't have. Explicitly rendering the agent (`refresh --agent cursor`)
+/// still registers unconditionally via [`apply`]. Idempotent and cheap after
+/// the first time; returns human notes for anything actually written.
+pub fn bootstrap_hook_registrations(config: &Config, dry_run: bool) -> Vec<String> {
+    let writer = crate::writer::AtomicWriter::new(dry_run);
+    let mut notes = Vec::new();
+    let mut warnings = Vec::new(); // silent path: bootstrap never nags
+    let Some(home) = config::home_dir() else {
+        return notes;
+    };
+    for d in &config.agents {
+        let Some(hr) = &d.hook_registry else { continue };
+        let installed = Path::new(&hr.hooks_file)
+            .parent()
+            .map(|p| home.join(p).is_dir())
+            .unwrap_or(false);
+        if !installed {
+            continue;
+        }
+        let mut files = Vec::new();
+        let _ = apply_hook_registry(&writer, hr, &mut files, &mut notes, &mut warnings);
+    }
+    notes
+}
+
 /// Ensure loadout's freshness hook is registered in the agent's user-level
 /// hooks file. A pre-existing file gets a one-time `.loadout-bak` backup before
 /// its first modification. Degrades to a warning (never corrupts) on any
 /// read/parse failure, exactly like the importer registries.
 fn apply_hook_registry(
-    app: &AppContext,
+    writer: &dyn Writer,
     hr: &HookRegistry,
     files: &mut Vec<WrittenFile>,
     notes: &mut Vec<String>,
@@ -1085,13 +1133,13 @@ fn apply_hook_registry(
     match upsert_hook_command(existing.as_deref(), &hr.event, &hr.subcommand, &command) {
         Ok(Some(updated)) => {
             // One-time backup of a pre-existing file we're about to modify.
-            if existing.is_some() && !app.writer.is_dry_run() {
+            if existing.is_some() && !writer.is_dry_run() {
                 let bak = path.with_extension("json.loadout-bak");
                 if !bak.exists() {
                     let _ = std::fs::copy(&path, &bak);
                 }
             }
-            files.push(app.writer.write(&path, &updated)?);
+            files.push(writer.write(&path, &updated)?);
             notes.push(format!(
                 "registered the {} hook in {} (keeps the overlay fresh in the IDE)",
                 hr.event,

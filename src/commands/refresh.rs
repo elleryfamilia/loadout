@@ -25,6 +25,13 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
 
     let prep = prepare_live(rt)?;
 
+    // Passive hook bootstrap: any refresh registers the IDE freshness hooks of
+    // agents that are installed (e.g. ~/.cursor exists), so no one ever has to
+    // run `refresh --agent cursor` just for the hook.
+    for note in crate::adapters::bootstrap_hook_registrations(&prep.config, rt.dry_run) {
+        println!("  note: {note}");
+    }
+
     let agents: Vec<String> = match &args.agent {
         Some(_) => resolve_agents(args.agent.as_deref(), &prep.config)?,
         None => {
