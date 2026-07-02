@@ -2058,3 +2058,192 @@ fn agents_lists_cursor_owned_file_delivery() {
         ))
         .stdout(predicate::str::contains("cursor-agent"));
 }
+
+// --- cursor freshness hook ------------------------------------------------------
+
+/// Refreshing cursor registers the sessionStart hook in the (isolated)
+/// user-level ~/.cursor/hooks.json — idempotently.
+#[test]
+fn cursor_refresh_registers_user_hook_idempotently() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+
+    fx.cmd()
+        .args(["refresh", "--agent", "cursor"])
+        .assert()
+        .success();
+
+    let hooks = fx.read_home(".cursor/hooks.json");
+    let v: serde_json::Value = serde_json::from_str(&hooks).unwrap();
+    assert_eq!(v["version"], 1);
+    let cmd = v["hooks"]["sessionStart"][0]["command"].as_str().unwrap();
+    assert!(cmd.ends_with(" hook cursor"), "got: {cmd}");
+
+    // Second refresh: byte-identical (no churn).
+    fx.cmd()
+        .args(["refresh", "--agent", "cursor"])
+        .assert()
+        .success();
+    assert_eq!(hooks, fx.read_home(".cursor/hooks.json"));
+}
+
+/// A pre-existing hooks.json shared with other tools is merged, not clobbered —
+/// and gets a one-time backup before loadout's first modification.
+#[test]
+fn cursor_hook_registration_preserves_third_party_entries() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    let home = fx.global.path().join("home");
+    fs::create_dir_all(home.join(".cursor")).unwrap();
+    let third_party = r#"{
+  "version": 1,
+  "hooks": {
+    "stop": [ { "command": "\"/opt/bun\" worker.cjs summarize" } ]
+  }
+}"#;
+    fs::write(home.join(".cursor/hooks.json"), third_party).unwrap();
+
+    fx.cmd()
+        .args(["refresh", "--agent", "cursor"])
+        .assert()
+        .success();
+
+    let hooks = fx.read_home(".cursor/hooks.json");
+    assert!(
+        hooks.contains("worker.cjs summarize"),
+        "third-party entry kept"
+    );
+    assert!(hooks.contains(" hook cursor"), "ours added");
+    // One-time backup of the pre-existing file.
+    assert_eq!(fx.read_home(".cursor/hooks.json.loadout-bak"), third_party);
+}
+
+/// Serve mode: refreshes an adopted workspace root from the stdin payload,
+/// debounces repeat firings, and always exits 0 — even on garbage stdin.
+#[test]
+fn hook_serve_refreshes_adopted_roots_debounced_and_never_fails() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\ndescription = \"v1\"\nguidance = \"MARKER-ONE\"\n\
+         \n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
+    );
+    // Adopt the repo for cursor.
+    fx.cmd()
+        .args(["refresh", "--agent", "cursor"])
+        .assert()
+        .success();
+    assert!(fx.read(".cursor/rules/loadout.mdc").contains("MARKER-ONE"));
+
+    // Config changes; the hook (fed the root via stdin) must re-render.
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\ndescription = \"v2\"\nguidance = \"MARKER-TWO\"\n\
+         \n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
+    );
+    let payload = format!(
+        r#"{{ "hook_event_name": "sessionStart", "workspace_roots": ["{}"] }}"#,
+        fx.repo_path().display()
+    );
+    fx.cmd()
+        .args(["hook", "cursor"])
+        .write_stdin(payload.clone())
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert!(fx.read(".cursor/rules/loadout.mdc").contains("MARKER-TWO"));
+    assert!(fx.exists(".loadout/cache/hook-stamp"));
+
+    // Within the debounce window a further config change is NOT picked up.
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\ndescription = \"v3\"\nguidance = \"MARKER-THREE\"\n\
+         \n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
+    );
+    fx.cmd()
+        .args(["hook", "cursor"])
+        .write_stdin(payload)
+        .assert()
+        .success();
+    assert!(fx.read(".cursor/rules/loadout.mdc").contains("MARKER-TWO"));
+
+    // Garbage stdin: still exit 0, still silent on stdout.
+    fx.cmd()
+        .args(["hook", "cursor"])
+        .write_stdin("not json at all")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+/// Serve mode ignores roots loadout doesn't manage (no .loadout/generated/).
+#[test]
+fn hook_serve_skips_unadopted_roots() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    let payload = format!(
+        r#"{{ "workspace_roots": ["{}"] }}"#,
+        fx.repo_path().display()
+    );
+    fx.cmd()
+        .args(["hook", "cursor"])
+        .write_stdin(payload)
+        .assert()
+        .success();
+    assert!(!fx.exists(".cursor/rules/loadout.mdc"));
+    assert!(!fx.exists(".loadout/generated/cursor.md"));
+}
+
+/// `load hook cursor --remove` strips only loadout's entries.
+#[test]
+fn hook_remove_strips_only_loadout_entries() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    let home = fx.global.path().join("home");
+    fs::create_dir_all(home.join(".cursor")).unwrap();
+    fs::write(
+        home.join(".cursor/hooks.json"),
+        r#"{ "version": 1, "hooks": { "stop": [ { "command": "\"/opt/bun\" worker.cjs" } ] } }"#,
+    )
+    .unwrap();
+
+    fx.cmd()
+        .args(["refresh", "--agent", "cursor"])
+        .assert()
+        .success();
+    assert!(fx.read_home(".cursor/hooks.json").contains(" hook cursor"));
+
+    fx.cmd()
+        .args(["hook", "cursor", "--remove"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed loadout's hook entries"));
+    let after = fx.read_home(".cursor/hooks.json");
+    assert!(!after.contains(" hook cursor"));
+    assert!(after.contains("worker.cjs"), "third-party entry kept");
+}
+
+/// Repo-local clean leaves the user-global hook registered (other repos rely
+/// on it) and says so.
+#[test]
+fn cursor_clean_leaves_global_hook_registered() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    fx.cmd()
+        .args(["refresh", "--agent", "cursor"])
+        .assert()
+        .success();
+
+    fx.cmd()
+        .args(["clean", "--agent", "cursor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("left the user-level"));
+    assert!(fx.read_home(".cursor/hooks.json").contains(" hook cursor"));
+}

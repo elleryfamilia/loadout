@@ -36,6 +36,7 @@ fn main() -> ExitCode {
         Command::Sync(args) => commands::sync::run(&rt, args),
         Command::Skill(args) => commands::skill::run(&rt, args),
         Command::Update(args) => commands::update::run(&rt, args),
+        Command::Hook(args) => commands::hook::run(&rt, args),
         Command::Use(args) => commands::bind::run(&rt, args),
         Command::List(args) => commands::introspect::list(&rt, args),
         Command::Edit(args) => commands::edit::run(&rt, args),

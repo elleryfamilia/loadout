@@ -58,8 +58,9 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
     Ok(())
 }
 
-/// Which agents already have a generated overlay on disk.
-fn existing_overlay_agents(prep: &Prepared) -> Vec<String> {
+/// Which agents already have a generated overlay on disk. Also the adoption
+/// test `load hook` uses to decide whether a workspace root is loadout-managed.
+pub(crate) fn existing_overlay_agents(prep: &Prepared) -> Vec<String> {
     let dir = config::generated_dir(&prep.repo_base);
     prep.config
         .agents

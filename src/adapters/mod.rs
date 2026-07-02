@@ -83,6 +83,10 @@ pub struct AgentDescriptor {
     /// freshness detection still works.
     #[serde(default)]
     pub preamble: Option<String>,
+    /// User-level lifecycle-hook registration that keeps the overlay fresh for
+    /// sessions loadout doesn't launch (e.g. the Cursor IDE).
+    #[serde(default)]
+    pub hook_registry: Option<HookRegistry>,
     /// Note shown in emit-only mode explaining how to wire the overlay.
     #[serde(default)]
     pub wire_hint: Option<String>,
@@ -143,6 +147,26 @@ pub struct ImporterRegistry {
     pub value: Option<String>,
 }
 
+/// Registration of a loadout freshness hook in an agent's **user-level** hooks
+/// file (e.g. Cursor's `~/.cursor/hooks.json`): the agent then re-renders the
+/// overlay itself on its own lifecycle events — the freshness path for IDE
+/// sessions, which never go through `load run`. Registration is global and
+/// idempotent; loadout's entry is matched by the `subcommand` suffix (so a
+/// moved binary is re-pointed, not duplicated) and every other tool's entry is
+/// preserved byte-for-byte.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookRegistry {
+    /// Hooks file relative to `$HOME` (e.g. `.cursor/hooks.json`).
+    pub hooks_file: String,
+    /// Event to register under (e.g. `sessionStart`).
+    pub event: String,
+    /// The `load` subcommand the hook runs (e.g. `hook cursor`). The registered
+    /// command is `"<current load binary>" <subcommand>`; the suffix also
+    /// identifies our entry for updates and `--remove`.
+    pub subcommand: String,
+}
+
 impl AgentDescriptor {
     /// Display name, falling back to the id.
     pub fn display(&self) -> &str {
@@ -165,6 +189,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             override_base: None,
             target_file: None,
             preamble: None,
+            hook_registry: None,
             wire_hint: None,
             append_prompt_flag: None,
             launch_context_dir_env: None,
@@ -281,6 +306,14 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
                  alwaysApply: true\n---\n\n"
                     .into(),
             ),
+            // IDE freshness: a user-level sessionStart hook re-renders adopted
+            // repos (`load hook cursor` self-gates + debounces — Cursor fires
+            // more than one session event per window open, verified live).
+            hook_registry: Some(HookRegistry {
+                hooks_file: ".cursor/hooks.json".into(),
+                event: "sessionStart".into(),
+                subcommand: "hook cursor".into(),
+            }),
             wire_hint: Some(
                 "Cursor reads .cursor/rules/*.mdc; loadout writes the overlay to a \
                  gitignored .cursor/rules/loadout.mdc (alwaysApply: true)."
@@ -569,6 +602,14 @@ pub fn apply(
         }
     }
 
+    // 2c. User-level freshness hook (e.g. Cursor's sessionStart): registered
+    // whenever we're wiring at all. Global + idempotent, like the importer
+    // registries — the hook subcommand self-gates per repo, so registering
+    // from any one repo is safe for all.
+    if let (Some(hr), false) = (&d.hook_registry, suppress_wiring) {
+        apply_hook_registry(app, hr, &mut files, &mut notes, &mut warnings)?;
+    }
+
     // 3. gitignore (only inside a repo): the loadout-managed dirs + the private
     // local.toml (binding + param overrides) + any root files we created. This
     // keeps a repo clean automatically on every render — there is no `init`.
@@ -739,6 +780,21 @@ pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult
     notes.push("committed instruction files (AGENTS.md, GEMINI.md, …) were not touched".into());
     if app.in_repo() {
         notes.push("left .gitignore entries in place (remove them by hand if desired)".into());
+    }
+    // The user-level hook is global — other repos rely on it, so a repo-local
+    // clean never deregisters it.
+    if let Some(hr) = &d.hook_registry {
+        let registered = config::home_dir()
+            .and_then(|h| std::fs::read_to_string(h.join(&hr.hooks_file)).ok())
+            .map(|c| c.contains(&format!(" {}", hr.subcommand)))
+            .unwrap_or(false);
+        if registered {
+            notes.push(format!(
+                "left the user-level {} hook registered (other repos may rely on it); \
+                 `load {} --remove` deregisters it everywhere",
+                hr.hooks_file, hr.subcommand
+            ));
+        }
     }
 
     Ok(CleanResult {
@@ -978,6 +1034,157 @@ fn apply_importer_registry(
     Ok(())
 }
 
+/// Ensure loadout's freshness hook is registered in the agent's user-level
+/// hooks file. A pre-existing file gets a one-time `.loadout-bak` backup before
+/// its first modification. Degrades to a warning (never corrupts) on any
+/// read/parse failure, exactly like the importer registries.
+fn apply_hook_registry(
+    app: &AppContext,
+    hr: &HookRegistry,
+    files: &mut Vec<WrittenFile>,
+    notes: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> crate::Result<()> {
+    let Some(home) = config::home_dir() else {
+        warnings.push(format!(
+            "$HOME unset — can't register the {} hook in {}; add it by hand",
+            hr.event, hr.hooks_file
+        ));
+        return Ok(());
+    };
+    let path = home.join(&hr.hooks_file);
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(s) => Some(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            warnings.push(format!(
+                "could not read {} ({e}); register the `load {}` hook by hand",
+                path.display(),
+                hr.subcommand
+            ));
+            return Ok(());
+        }
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        warnings.push("could not resolve the load binary path for hook registration".into());
+        return Ok(());
+    };
+    let command = format!("\"{}\" {}", exe.display(), hr.subcommand);
+
+    match upsert_hook_command(existing.as_deref(), &hr.event, &hr.subcommand, &command) {
+        Ok(Some(updated)) => {
+            // One-time backup of a pre-existing file we're about to modify.
+            if existing.is_some() && !app.writer.is_dry_run() {
+                let bak = path.with_extension("json.loadout-bak");
+                if !bak.exists() {
+                    let _ = std::fs::copy(&path, &bak);
+                }
+            }
+            files.push(app.writer.write(&path, &updated)?);
+            notes.push(format!(
+                "registered the {} hook in {} (keeps the overlay fresh in the IDE)",
+                hr.event,
+                path.display()
+            ));
+        }
+        Ok(None) => {} // already registered with the current binary — no churn
+        Err(e) => warnings.push(format!(
+            "could not update {} ({e:#}); register the `load {}` hook by hand",
+            path.display(),
+            hr.subcommand
+        )),
+    }
+    Ok(())
+}
+
+/// Ensure an entry running `command` exists under `hooks.<event>` in the hooks
+/// file JSON, preserving every other field and entry byte-for-byte (the file is
+/// shared with other tools). An existing loadout entry — identified by the
+/// ` <subcommand>` suffix — is updated in place when the binary moved. Returns
+/// the new pretty-printed JSON, or `None` when already current (no churn).
+fn upsert_hook_command(
+    existing: Option<&str>,
+    event: &str,
+    subcommand: &str,
+    command: &str,
+) -> crate::Result<Option<String>> {
+    use anyhow::{anyhow, bail, Context as _};
+    use serde_json::{json, Map, Value};
+
+    let mut root: Value = match existing {
+        Some(s) if !s.trim().is_empty() => {
+            serde_json::from_str(s).context("parsing existing hooks JSON")?
+        }
+        _ => Value::Object(Map::new()),
+    };
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("hooks file root is not a JSON object"))?;
+    // Seed the version only when absent — never rewrite one the agent set.
+    obj.entry("version").or_insert(json!(1));
+    let hooks = obj
+        .entry("hooks")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("`hooks` is not a JSON object"))?;
+    let arr = hooks
+        .entry(event)
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Value::Array(entries) = arr else {
+        bail!("`hooks.{event}` is not an array");
+    };
+
+    let suffix = format!(" {subcommand}");
+    let is_ours = |v: &Value| {
+        v.get("command")
+            .and_then(|c| c.as_str())
+            .map(|c| c.ends_with(&suffix))
+            .unwrap_or(false)
+    };
+    if let Some(entry) = entries.iter_mut().find(|v| is_ours(v)) {
+        if entry.get("command").and_then(|c| c.as_str()) == Some(command) {
+            return Ok(None); // already registered with this binary
+        }
+        entry
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("`hooks.{event}` entry is not an object"))?
+            .insert("command".into(), json!(command));
+    } else {
+        entries.push(json!({ "command": command }));
+    }
+    Ok(Some(format!("{}\n", serde_json::to_string_pretty(&root)?)))
+}
+
+/// Strip loadout's entries (matched by the ` <subcommand>` suffix) from every
+/// event array in the hooks file, leaving everything else untouched. Returns
+/// the new JSON, or `None` when no loadout entry was present.
+pub fn remove_hook_command(existing: &str, subcommand: &str) -> crate::Result<Option<String>> {
+    use anyhow::Context as _;
+    use serde_json::Value;
+
+    let mut root: Value = serde_json::from_str(existing).context("parsing existing hooks JSON")?;
+    let suffix = format!(" {subcommand}");
+    let mut removed = false;
+    if let Some(hooks) = root.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+        for (_event, arr) in hooks.iter_mut() {
+            if let Value::Array(entries) = arr {
+                let before = entries.len();
+                entries.retain(|v| {
+                    !v.get("command")
+                        .and_then(|c| c.as_str())
+                        .map(|c| c.ends_with(&suffix))
+                        .unwrap_or(false)
+                });
+                removed |= entries.len() != before;
+            }
+        }
+    }
+    if !removed {
+        return Ok(None);
+    }
+    Ok(Some(format!("{}\n", serde_json::to_string_pretty(&root)?)))
+}
+
 /// Read the JSON string-array (or single string) at `key_path` in `text`.
 /// Returns `None` if absent, unparseable, or not a string/array-of-strings.
 fn read_string_list_at(text: &str, key_path: &[String]) -> Option<Vec<String>> {
@@ -1065,6 +1272,113 @@ fn register_context_name(
     );
 
     Ok(Some(format!("{}\n", serde_json::to_string_pretty(&root)?)))
+}
+
+#[cfg(test)]
+mod hook_registry_tests {
+    use super::{remove_hook_command, upsert_hook_command};
+
+    const CMD: &str = "\"/usr/local/bin/load\" hook cursor";
+
+    /// Modeled on a real-world ~/.cursor/hooks.json shared with another tool.
+    fn third_party() -> String {
+        serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "beforeSubmitPrompt": [
+                    { "command": "\"/opt/bun\" worker.cjs hook cursor session-init" }
+                ],
+                "stop": [ { "command": "\"/opt/bun\" worker.cjs hook cursor summarize" } ]
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn creates_fresh_file_with_version_and_entry() {
+        let out = upsert_hook_command(None, "sessionStart", "hook cursor", CMD)
+            .unwrap()
+            .expect("should write");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["version"], 1);
+        assert_eq!(v["hooks"]["sessionStart"][0]["command"], CMD);
+    }
+
+    #[test]
+    fn preserves_third_party_entries_and_is_idempotent() {
+        let out = upsert_hook_command(Some(&third_party()), "sessionStart", "hook cursor", CMD)
+            .unwrap()
+            .expect("should write");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // Other tools' entries survive byte-for-byte…
+        assert_eq!(
+            v["hooks"]["beforeSubmitPrompt"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(v["hooks"]["stop"].as_array().unwrap().len(), 1);
+        // …their `… hook cursor <extra>` commands are NOT mistaken for ours
+        // (suffix match is exact), so ours is appended fresh.
+        assert_eq!(v["hooks"]["sessionStart"][0]["command"], CMD);
+        // Second apply with the same binary: no churn.
+        assert!(
+            upsert_hook_command(Some(&out), "sessionStart", "hook cursor", CMD)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn repoints_a_moved_binary_in_place() {
+        let first = upsert_hook_command(None, "sessionStart", "hook cursor", CMD)
+            .unwrap()
+            .unwrap();
+        let moved = "\"/new/home/load\" hook cursor";
+        let out = upsert_hook_command(Some(&first), "sessionStart", "hook cursor", moved)
+            .unwrap()
+            .expect("should update");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = v["hooks"]["sessionStart"].as_array().unwrap();
+        assert_eq!(arr.len(), 1, "updated in place, not duplicated");
+        assert_eq!(arr[0]["command"], moved);
+    }
+
+    #[test]
+    fn preserves_an_existing_version_field() {
+        let existing = r#"{ "version": 3, "hooks": {} }"#;
+        let out = upsert_hook_command(Some(existing), "sessionStart", "hook cursor", CMD)
+            .unwrap()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["version"], 3);
+    }
+
+    #[test]
+    fn remove_strips_only_ours_across_all_events() {
+        let mut with_ours: serde_json::Value = serde_json::from_str(&third_party()).unwrap();
+        with_ours["hooks"]["sessionStart"] =
+            serde_json::json!([{ "command": CMD }, { "command": "\"/opt/other\" thing" }]);
+        let out = remove_hook_command(&with_ours.to_string(), "hook cursor")
+            .unwrap()
+            .expect("should change");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["hooks"]["sessionStart"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            v["hooks"]["sessionStart"][0]["command"],
+            "\"/opt/other\" thing"
+        );
+        assert_eq!(
+            v["hooks"]["beforeSubmitPrompt"].as_array().unwrap().len(),
+            1
+        );
+        // Removing again: nothing left to do.
+        assert!(remove_hook_command(&out, "hook cursor").unwrap().is_none());
+    }
+
+    #[test]
+    fn garbage_json_errors_rather_than_clobbering() {
+        assert!(upsert_hook_command(Some("not json"), "sessionStart", "hook cursor", CMD).is_err());
+        assert!(remove_hook_command("not json", "hook cursor").is_err());
+    }
 }
 
 #[cfg(test)]

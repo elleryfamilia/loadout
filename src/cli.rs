@@ -84,6 +84,12 @@ pub enum Command {
     Skill(SkillArgs),
     /// Update loadout to the latest release (installer-based installs only).
     Update(UpdateArgs),
+    /// (machine-invoked) Agent lifecycle-hook endpoint: reads the hook payload
+    /// on stdin and quietly refreshes the adopted repos among its workspace
+    /// roots. Registered automatically (e.g. Cursor's ~/.cursor/hooks.json);
+    /// `--remove` deregisters. Always exits 0 in serve mode.
+    #[command(hide = true)]
+    Hook(HookArgs),
     /// Pin this project to a loadout (remembers the choice; `load use <name>`).
     Use(UseArgs),
     /// List your loadouts (default), fragments, agents, or targets.
@@ -95,6 +101,16 @@ pub enum Command {
     /// the rest pass through to the agent.
     #[command(external_subcommand)]
     Launch(Vec<String>),
+}
+
+/// `hook` options.
+#[derive(Debug, Args)]
+pub struct HookArgs {
+    /// Agent id whose hook integration to serve (e.g. `cursor`).
+    pub agent: String,
+    /// Deregister loadout's entries from the agent's user-level hooks file.
+    #[arg(long)]
+    pub remove: bool,
 }
 
 /// `skill` options. Bare `load skill` shows status.

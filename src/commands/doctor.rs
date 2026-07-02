@@ -120,6 +120,7 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
             ),
             None => c.line(Status::Ok, format!("{}: render-only", a.id)),
         }
+        check_hook_registry(&mut c, a);
     }
 
     // Templates.
@@ -407,6 +408,69 @@ fn check_public_leaks(c: &mut Checks, prep: &super::Prepared) {
 }
 
 /// The single-default invariant: exactly one enabled loadout with no targets is
+/// For an agent with a user-level freshness hook (e.g. Cursor): is loadout's
+/// entry registered, and does the binary it points at still exist? A stale
+/// path happens when the load binary moves (or its volume is unmounted) —
+/// the next `load refresh` re-points it.
+fn check_hook_registry(c: &mut Checks, a: &crate::adapters::AgentDescriptor) {
+    let Some(hr) = &a.hook_registry else { return };
+    let Some(home) = config::home_dir() else {
+        return;
+    };
+    let path = home.join(&hr.hooks_file);
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        c.line(
+            Status::Warn,
+            format!(
+                "{}: no {} — IDE sessions won't self-refresh (any `load refresh --agent {}` registers the hook)",
+                a.id, hr.hooks_file, a.id
+            ),
+        );
+        return;
+    };
+    let suffix = format!(" {}", hr.subcommand);
+    let command = serde_json::from_str::<serde_json::Value>(&content)
+        .ok()
+        .and_then(|v| {
+            v.get("hooks")?.as_object()?.values().find_map(|arr| {
+                arr.as_array()?.iter().find_map(|e| {
+                    let cmd = e.get("command")?.as_str()?;
+                    cmd.ends_with(&suffix).then(|| cmd.to_string())
+                })
+            })
+        });
+    match command {
+        None => c.line(
+            Status::Warn,
+            format!(
+                "{}: `load {}` hook not registered in {} — IDE sessions won't self-refresh \
+                 (any `load refresh --agent {}` registers it)",
+                a.id, hr.subcommand, hr.hooks_file, a.id
+            ),
+        ),
+        Some(cmd) => {
+            // The registered command is `"<binary>" <subcommand>` — check the
+            // binary still exists.
+            let bin = cmd.trim_end_matches(&suffix).trim().trim_matches('"');
+            if Path::new(bin).is_file() {
+                c.line(
+                    Status::Ok,
+                    format!("{}: {} hook registered ({})", a.id, hr.event, hr.hooks_file),
+                );
+            } else {
+                c.line(
+                    Status::Warn,
+                    format!(
+                        "{}: registered hook points at a missing binary ({bin}) — \
+                         run `load refresh --agent {}` to re-point it",
+                        a.id, a.id
+                    ),
+                );
+            }
+        }
+    }
+}
+
 /// the catch-all that applies when nothing else matches (in any project or none).
 /// Zero ⇒ unmatched contexts get no loadout; more than one ⇒ ambiguous.
 fn check_default_loadout(c: &mut Checks, cfg: &config::Config) {

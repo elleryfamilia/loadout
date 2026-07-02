@@ -11,6 +11,7 @@ pub mod detect;
 pub mod doctor;
 pub mod edit;
 pub mod explain;
+pub mod hook;
 pub mod introspect;
 pub mod refresh;
 pub mod run;
