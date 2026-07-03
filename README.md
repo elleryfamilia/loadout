@@ -143,7 +143,7 @@ name = "machine"      # the default (no-targets) loadout → applies everywhere
 workflow = "lean"
 ```
 
-Workflows are global-only and never enforced — guidance rendered into each agent, not a runtime. Full detail in [docs/concepts.md](docs/concepts.md#workflows-implemented).
+Workflows are global-only and never enforced — guidance rendered into each agent, not a runtime. (One naming nuance: Cursor delivers the spine as Skills, so there the commands are invoked `/loadout-explore` — dash, not colon — since Cursor names a skill after its folder.) Full detail in [docs/concepts.md](docs/concepts.md#workflows-implemented).
 
 ---
 
@@ -201,7 +201,7 @@ load skill install
 
 Then, in an agent session, run `/loadout-migrate` or just ask *"Import my CLAUDE.md into Loadout."*
 
-Two more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session — instead of leaving it stranded in one agent's memory — and [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows). The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, Gemini, and opencode.
+Two more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session — instead of leaving it stranded in one agent's memory — and [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows). The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, Gemini, opencode, and Cursor.
 
 ---
 

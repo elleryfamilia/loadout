@@ -188,7 +188,9 @@ in `~/.gemini/settings.json`), `copilot` (`load run` sets
 `cursor-agent` CLI — plus a user-level `sessionStart` hook in `~/.cursor/hooks.json`
 that keeps repos fresh — and auto-adopts a git repo some loadout applies to on
 first open, no prior `load refresh` needed — since IDE sessions never pass
-through `load run`),
+through `load run`; workflow commands land as Cursor Skills,
+`.cursor/skills/loadout/loadout-<slot>/SKILL.md`, invoked `/loadout-<slot>`
+rather than `/loadout:<slot>`),
 `opencode` (registers
 the overlay path in `~/.config/opencode/opencode.json` `instructions`), `generic`
 (emit-only). All overridable / extendable via `[[agents]]`.
