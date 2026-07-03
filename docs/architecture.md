@@ -28,8 +28,8 @@ cwd → repo_base → Config::load → detect_context → select (one loadout by
    cross-loadout union.
 5. **Render** produces one agent-neutral overlay (header + a `###` section per
    fragment), filtering fragments restricted to other agents. If a workflow is
-   active (`resolve_active_workflow`), it also contributes a `## Workflow` section
-   and per-agent `/loadout:<slot>` slash-command files for the fixed spine.
+   active (`Config::resolve_active_workflow`), it also contributes a `## Workflow`
+   section and per-agent `/loadout:<slot>` slash-command files for the fixed spine.
 6. **Delivery** is per-agent, driven by an `AgentDescriptor`.
 7. **Audit** appends a JSONL event (skipped on `--dry-run`).
 
@@ -44,7 +44,7 @@ cwd → repo_base → Config::load → detect_context → select (one loadout by
 | `fragment` | `Fragment` (reusable guidance atom) + `Risk` + the read-only shipped `palette()` (starters to duplicate from, never auto-composed). |
 | `loadout` | `LoadoutConfig` (with `targets`), `Rule`/`Field`/`Op` (fragment `when`), `FragmentRef`, pick-one `select()`, and `compose_loadout()` → `Composition` of `ResolvedFragment`s. |
 | `binding` | the per-project remembered loadout choice: repo `local.toml` `[binding]` (via `toml_edit`) + a global path-keyed store; records only *which* loadout (no opt-out — a legacy `none = true` is parsed but ignored). |
-| `workflow` | the house-process model: `Workflow`/`WorkflowStage`, the fixed five-slot `canonical_layout()` (the single source of truth shared by the command channel, the context section, and studio), handoff-artifact paths, the built-in catalog, and `resolve_workflow`/`resolve_active_workflow`. Global-only like fragments/loadouts. |
+| `workflow` | the house-process model: `Workflow`/`WorkflowStage`, the fixed six-slot `canonical_layout()` (the single source of truth shared by the command channel, the context section, and studio), handoff-artifact paths, the built-in catalog, and `resolve_workflow` (the active-workflow resolution `Config::resolve_active_workflow` lives in `config`). Global-only like fragments/loadouts. |
 | `providers/` | `EnvProvider` trait + built-ins (`host`/`toolchain`/`ai-tools`/`tailnet`/`docker`), `gather()`/`probe_one()`/`run_command()`, TTL cache; output redacted and excluded from the context hash. |
 | `dynamic` | resolves a dynamic fragment's `provider`/`command` output at render time (`DynamicMode` Live/ReadOnly); a `command` runs unless `allow_exec = false`. |
 | `render/` | `TemplateRenderer` trait (minijinja impl) + `header` (the self-healing banner) + the high-level `render()`. |

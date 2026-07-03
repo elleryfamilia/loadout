@@ -128,19 +128,19 @@ multiple loadouts match     →  ask once, then remember the choice for this pro
 
 ## Workflows
 
-A loadout carries your *context*. A **workflow** carries your *process* — the way you like to work, across every agent. Loadout exposes one fixed set of five slash commands — `/loadout:explore`, `brainstorm`, `plan`, `implement`, `verify` — and the workflow your loadout equips decides what each step *means*. "Plan like Boris" and "plan spec-first" are the same `/loadout:plan`, carrying different instructions.
+A loadout carries your *context*. A **workflow** carries your *process* — the way you like to work, across every agent. Loadout exposes one fixed set of six slash commands — `/loadout:explore`, `brainstorm`, `plan`, `implement`, `verify`, `ship` — and the workflow your loadout equips decides what each step *means*. "Plan like spec-kit" and "plan compound-style" are the same `/loadout:plan`, carrying different instructions.
 
 <p align="center">
-  <img src="docs/screenshots/workflows.png" alt="load studio — the Workflows tab: a gallery of built-in processes mapped onto the fixed explore/brainstorm/plan/implement/verify spine" width="900">
+  <img src="docs/screenshots/workflows.png" alt="load studio — the Workflows tab: a gallery of built-in processes mapped onto the fixed explore/brainstorm/plan/implement/verify/ship spine" width="900">
 </p>
-<p align="center"><sub><i><code>load studio</code> — pick a house process, or build your own; each fills the same five-command spine.</i></sub></p>
+<p align="center"><sub><i><code>load studio</code> — pick a house process, or build your own; each fills the same six-command spine.</i></sub></p>
 
-Six ship — Anthropic's lean loop, how Boris works, Superpowers, spec-driven, the Ralph loop, and Every's compound engineering — or build your own in `load studio`. A stage can hand a file to the next step (plan writes `plan.md`, implement reads it), which is what makes a workflow more than headings. Equip one on a loadout — in studio's **Workflow slot**, or by hand:
+Three ship — Superpowers (obra/superpowers), spec-driven (Spec Kit / Kiro), and Every's compound engineering — each modeled on a real framework whose actual skill files are vendored verbatim. Or build your own in `load studio`. A stage can hand a file to the next step (plan writes `plan.md`, implement reads it), which is what makes a workflow more than headings. Equip one on a loadout — in studio's **Workflow slot**, or by hand:
 
 ```toml
 [[loadouts]]
 name = "machine"      # the default (no-targets) loadout → applies everywhere
-workflow = "lean"
+workflow = "superpowers"
 ```
 
 Workflows are global-only and never enforced — guidance rendered into each agent, not a runtime. (One naming nuance: Cursor delivers the spine as Skills, so there the commands are invoked `/loadout-explore` — dash, not colon — since Cursor names a skill after its folder.) Full detail in [docs/concepts.md](docs/concepts.md#workflows-implemented).

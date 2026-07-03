@@ -79,24 +79,31 @@ stale binding is dropped and selection re-runs.
 ## Workflows **(implemented)**
 
 A **workflow** is loadout's house *process* — the named way you like to work
-(explore-plan-code-commit, spec-first, a long autonomous loop), carried across
+(explore-plan-code-commit, spec-first, a compounding loop), carried across
 every agent the same way a loadout carries your context. Where a loadout answers
 *"what context applies here?"*, a workflow answers *"what's the process for doing
 the work?"*
 
-**One fixed command spine.** loadout always exposes the same five slash commands
+**One fixed command spine.** loadout always exposes the same six slash commands
 to your agent — `/loadout:explore`, `/loadout:brainstorm`, `/loadout:plan`,
-`/loadout:implement`, `/loadout:verify`. Picking a workflow does **not** add or
-rename commands; it changes what each step *means*. "Plan like Boris" and "plan
-spec-first" are the same `/loadout:plan` command carrying different instructions.
+`/loadout:implement`, `/loadout:verify`, `/loadout:ship`. Picking a workflow does
+**not** add or rename commands; it changes what each step *means*. "Plan
+spec-first" and "plan compound-style" are the same `/loadout:plan` command
+carrying different instructions.
 
 - A workflow is an ordered list of **stages**, each a free-form `name` plus a
-  short `purpose`. Each stage maps onto one of the five canonical slots by its
-  name (`research`→explore, `specify`→brainstorm, `review`/`commit`→verify, …);
-  the **first** stage to claim a slot wins. A workflow may fill all five or skip
-  some.
+  short `purpose`. Each stage maps onto one of the six canonical slots by its
+  name (`research`→explore, `specify`→brainstorm, `review`→verify,
+  `commit`/`pr`→ship, …); the **first** stage to claim a slot wins. A workflow
+  may fill all six or skip some. (Review and shipping are separate slots:
+  `verify` is "check the result", `ship` is "commit, push, open the PR".)
+- A stage may also carry deeper, on-demand `instructions` — the full prescriptive
+  guidance baked into that step's `/loadout:<slot>` command body, loaded only when
+  the step actually runs. The always-on `## Workflow` context section stays terse
+  (it uses just `purpose`), so depth in `instructions` costs nothing until you
+  invoke the step.
 - A stage whose name matches no slot becomes an **extra** — rendered after the
-  five (e.g. compound engineering's "capture what you learned" step).
+  six (e.g. compound engineering's "capture what you learned" step).
 
 **Handoff artifacts** are the load-bearing part. A stage can `write` a file (e.g.
 `plan.md`) and a later stage can `read` it; the file lives under
@@ -111,15 +118,16 @@ workflow, resolved in this order:
 2. The workflow the selected loadout binds — `workflow = "<id>"` on its
    `[[loadouts]]` block (equipped in studio's **Workflow slot**). To get a
    workflow *everywhere*, bind it on the default (no-targets) loadout. There is
-   no separate global active workflow.
+   no separate global active workflow. (The shipped **starter packs** bind a
+   house workflow for you, so a fresh loadout already has one.)
 
-**The catalog.** Six built-ins ship, each modeled on a real practice and stamped
-with provenance: `lean` (Anthropic's explore-plan-code-commit), `boris` (how
-Claude Code's creator works), `superpowers` (the obra/superpowers framework),
-`spec-driven` (Spec Kit / Kiro), `loop` (the Ralph single-prompt loop), and
-`compound` (Every's compounding loop). Bind one directly, or copy it into your
-own `[[workflows]]` and hand-edit — a user workflow of the same id shadows the
-built-in.
+**The catalog.** Three built-ins ship, each modeled on a real,
+permissively-licensed framework whose actual skill/command files are vendored
+verbatim (so binding one gives you that framework's real guidance, not a
+paraphrase), and stamped with provenance: `superpowers` (the obra/superpowers
+framework), `spec-driven` (Spec Kit / Kiro), and `compound` (Every's compounding
+loop). Bind one directly, or copy it into your own `[[workflows]]` and hand-edit —
+a user workflow of the same id shadows the built-in.
 
 **Global-only**, exactly like fragments and loadouts: a repo's `.loadout/` may
 *declare* `[[workflows]]` but the loader strips them (and `load doctor` flags
@@ -128,9 +136,10 @@ owns the artifact-path convention, but it never enforces a step, judges
 completion, or tracks a live "current stage" — this is guidance, not policy, with
 no runtime and no LLM.
 
-**Building your own.** The `load studio` **Workflows** tab is a gallery of the
-built-ins plus your own; you can build a workflow from scratch or customize a
-built-in (which duplicates it to a new id), editing each step as plain markdown.
+**Building your own.** The `load studio` **Library → Workflows** tab is a gallery
+of the built-ins plus your own; you can build a workflow from scratch or customize
+a built-in (which duplicates it to a new id), editing each step as plain markdown
+(its summary `purpose` plus the optional deeper `instructions`).
 The [`loadout-import-workflow`](../skills/loadout-import-workflow/SKILL.md) skill
 imports another repo's command/skill suite into a workflow. Schema in
 [configuration](configuration.md#workflows-implemented).

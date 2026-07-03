@@ -103,21 +103,22 @@ A loadout may also pin a workflow for the contexts it covers:
 name = "rust"
 targets = ["rust"]
 fragments = ["rust-conventions"]
-workflow = "boris"     # the workflow this loadout equips (its Workflow slot); omit for none
+workflow = "superpowers"   # the workflow this loadout equips (its Workflow slot); omit for none
 ```
 
 ## `[[workflows]]` (implemented)
 
-A workflow is your house *process*, mapped onto loadout's fixed five-command
-spine (`explore`, `brainstorm`, `plan`, `implement`, `verify`). **Global-only**
-like fragments and loadouts — a repo declaring `[[workflows]]` is stripped at
-load (`load doctor` flags it). Six built-ins ship; your own of the same `id`
-shadows a built-in. See [concepts](concepts.md#workflows-implemented).
+A workflow is your house *process*, mapped onto loadout's fixed six-command
+spine (`explore`, `brainstorm`, `plan`, `implement`, `verify`, `ship`).
+**Global-only** like fragments and loadouts — a repo declaring `[[workflows]]` is
+stripped at load (`load doctor` flags it). Three built-ins ship (`superpowers`,
+`spec-driven`, `compound`); your own of the same `id` shadows a built-in. See
+[concepts](concepts.md#workflows-implemented).
 
 ```toml
 [[workflows]]
-id = "lean"                    # kebab-case, unique; how a [[loadouts]] block binds it
-name = "Lean"                  # gallery title + rendered heading (optional)
+id = "my-flow"                 # kebab-case, unique; how a [[loadouts]] block binds it
+name = "My flow"               # gallery title + rendered heading (optional)
 description = "Read first, plan on paper, then build."   # one-line blurb (optional)
 icon = "git-branch"            # studio card glyph (optional)
 # modeled_on / researched / source — display-only provenance (optional)
@@ -131,6 +132,7 @@ purpose = "Read the code paths and tests before changing anything."
 name = "plan"
 purpose = "Write a short plan: objective, approach, risks, validation."
 writes = "plan.md"             # handoff artifact this stage produces
+# instructions = "…"           # optional deep guidance baked into /loadout:plan (see below)
 
 [[workflows.stages]]
 name = "implement"
@@ -138,16 +140,27 @@ purpose = "Build the change following the plan."
 reads = "plan.md"              # …consumed by a later stage
 
 [[workflows.stages]]
-name = "commit"                # `commit` maps onto the `verify` slot
-purpose = "Run build, tests, and linter, then commit at a logical checkpoint."
+name = "verify"
+purpose = "Run build, tests, and linter; review the diff before shipping."
 gate = true                    # a checkpoint to review before moving on (guidance only)
-exit = ["build, tests, and linter pass", "commit follows Conventional Commits"]
+exit = ["build, tests, and linter pass", "diff reviewed"]
+
+[[workflows.stages]]
+name = "commit"                # `commit` maps onto the `ship` slot
+purpose = "Commit at a logical checkpoint, push, and open the PR."
 ```
 
 - **`name` → slot:** matched case-insensitively against synonyms —
-  `research`/`investigate`→explore, `specify`/`spec`/`design`→brainstorm,
-  `iterate`/`code`/`build`→implement, `review`/`commit`/`ship`/`test`→verify. The
-  first stage to claim a slot wins; the rest of that slot's claimants are skipped.
+  `research`/`investigate`/`understand`/`scope`→explore,
+  `specify`/`spec`/`design`/`ideate`→brainstorm, `planning`/`decompose`→plan,
+  `iterate`/`code`/`build`/`execute`→implement, `review`/`test`/`validate`/`qa`→verify,
+  `commit`/`pr`/`push`/`deploy`/`release`/`merge`→ship. The first stage to claim a
+  slot wins; the rest of that slot's claimants are skipped.
+- **`purpose` vs `instructions`:** `purpose` is the one-line contract that goes in
+  the always-on `## Workflow` context section *and* the command body. `instructions`
+  is optional, deeper markdown injected **only** into that step's generated
+  `/loadout:<slot>` command — loaded on demand when the step runs, so its length is
+  free until then. The built-ins put each framework's full vendored skill here.
 - **`reads`/`writes`:** a bare filename (no path separators) under
   `.loadout/workflow/artifacts/`; pair a producer's `writes` with a consumer's
   `reads` to form a handoff.
