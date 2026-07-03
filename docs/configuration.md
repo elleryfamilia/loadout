@@ -203,6 +203,7 @@ binary — update that machine's `load` first. Built-ins are unaffected.
 id = "gemini"
 generated_filename = "gemini.md"
 launch = "gemini"                  # program for `load run gemini` (omit → render-only)
+# aliases = ["agent"]              # extra tokens that resolve to this agent (cursor: `agent`)
 template = "overlay"              # body template name (repo/global override → embedded)
 # importer = "GEMINI.local.md"             # auto-wire @import into a LOCAL file
 # override_target = "AGENTS.override.md"   # auto-merge target, gitignored (default-on)

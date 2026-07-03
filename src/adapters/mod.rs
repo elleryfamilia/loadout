@@ -56,6 +56,12 @@ pub struct AgentDescriptor {
     /// Program to exec for `load run`, if launchable.
     #[serde(default)]
     pub launch: Option<String>,
+    /// Extra tokens that resolve to this agent wherever an agent is named —
+    /// for CLIs known by more than one binary (Cursor installs `agent` as an
+    /// alias of `cursor-agent`). The `launch` program is always accepted; these
+    /// add to it.
+    #[serde(default)]
+    pub aliases: Vec<String>,
     /// Local file to auto-wire via `@import` (e.g. `CLAUDE.local.md`).
     #[serde(default)]
     pub importer: Option<String>,
@@ -193,6 +199,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             template: default_template(),
             generated_filename: file.into(),
             launch: None,
+            aliases: Vec::new(),
             importer: None,
             importer_registry: None,
             override_target: None,
@@ -303,6 +310,8 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
         AgentDescriptor {
             display_name: Some("Cursor (IDE + CLI)".into()),
             launch: Some("cursor-agent".into()),
+            // Cursor ships `agent` as an alias binary of `cursor-agent`.
+            aliases: vec!["agent".into()],
             // Cursor — IDE agent and `cursor-agent` CLI alike — reads project
             // rules from `.cursor/rules/*.mdc`; an `alwaysApply: true` rule is
             // always-on, and rules discovery is NOT gitignore-filtered
@@ -354,18 +363,19 @@ pub fn descriptor<'a>(config: &'a Config, id: &str) -> Option<&'a AgentDescripto
 }
 
 /// Resolve a user-supplied agent token to a descriptor: an exact id match
-/// first, else a **unique** match on the agent's `launch` program — people
-/// type the binary they know (`load cursor-agent`) for an agent whose id is
-/// shorter (`cursor`). Ambiguous launch matches resolve to nothing.
+/// first, else a **unique** match on the agent's `launch` program or declared
+/// `aliases` — people type the binary they know (`load cursor-agent`, or
+/// Cursor's `agent` alias) for an agent whose id is shorter (`cursor`).
+/// Ambiguous matches resolve to nothing.
 pub fn resolve_agent_token<'a>(config: &'a Config, token: &str) -> Option<&'a AgentDescriptor> {
     if let Some(d) = descriptor(config, token) {
         return Some(d);
     }
-    let mut by_launch = config
+    let mut matches = config
         .agents
         .iter()
-        .filter(|a| a.launch.as_deref() == Some(token));
-    match (by_launch.next(), by_launch.next()) {
+        .filter(|a| a.launch.as_deref() == Some(token) || a.aliases.iter().any(|al| al == token));
+    match (matches.next(), matches.next()) {
         (Some(d), None) => Some(d),
         _ => None,
     }

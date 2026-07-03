@@ -2346,11 +2346,20 @@ fn launch_program_name_aliases_the_agent_id() {
         .stdout(predicate::str::contains("would exec:"))
         .stdout(predicate::str::contains("cursor-agent"));
 
-    // Unknown tokens now list the known ids.
+    // Cursor ships `agent` as an alias binary — declared via the descriptor's
+    // `aliases`, it resolves the same way.
     fx.cmd()
         .args(["--dry-run", "agent"])
         .assert()
+        .success()
+        .stdout(predicate::str::contains("would exec:"))
+        .stdout(predicate::str::contains("cursor-agent"));
+
+    // Unknown tokens list the known ids.
+    fx.cmd()
+        .args(["--dry-run", "no-such-agent"])
+        .assert()
         .failure()
-        .stderr(predicate::str::contains("unknown agent 'agent'"))
+        .stderr(predicate::str::contains("unknown agent 'no-such-agent'"))
         .stderr(predicate::str::contains("cursor"));
 }
