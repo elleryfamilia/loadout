@@ -8,6 +8,50 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.12.0 — 2026-07-03
+
+### Added
+
+- **Cursor support** — a new built-in `cursor` agent covers the Cursor IDE and
+  the `cursor-agent` CLI with one wiring: a gitignored, always-on rule at
+  `.cursor/rules/loadout.mdc` (Cursor doesn't filter rules by gitignore —
+  verified live in both surfaces). Workflow stages ship as Cursor Skills
+  (`/loadout-plan`, `/loadout-verify`, …), and `load run cursor` launches the
+  CLI with a fresh overlay like any other agent.
+- **Hands-free freshness and adoption in the IDE** — loadout registers a
+  `sessionStart` hook in `~/.cursor/hooks.json` (automatically, from any
+  `refresh`/`run`/`studio`/`sync`, and only when Cursor is installed; other
+  tools' hook entries are preserved). Each IDE session quietly re-renders the
+  workspace before the first prompt, and opening a git repo one of your
+  loadouts applies to wires it on the spot — no `load refresh` ever needed.
+  Opt-outs: `auto_adopt = false` on the hook registry, or
+  `load hook cursor --remove`. `load doctor` checks the registration.
+- **Agent aliases** — agents resolve by the binary name you know, not just
+  their id: `load cursor-agent` and `load agent` (Cursor's alias binary) both
+  reach `cursor`. Custom `[[agents]]` entries can declare their own `aliases`.
+  Unknown agent errors now list the known ids.
+- **New `[[agents]]` descriptor fields** for custom agents: `target_file`
+  (a fully loadout-owned wired file, written raw), `preamble` (mandatory first
+  bytes, e.g. MDC frontmatter), `hook_registry` (user-level lifecycle-hook
+  freshness), and `aliases`.
+
+### Changed
+
+- **The generated header now tells agents to self-refresh** — an agent launched
+  outside `load run` (an IDE session, a direct CLI launch) is instructed to run
+  `load refresh` and re-read the overlay instead of merely being warned it may
+  be stale. Existing overlays pick the new wording up on their next refresh
+  (expect a one-time rewrite of every overlay).
+
+### Fixed
+
+- **Probes and script fragments can no longer hang a render** — every
+  provider/command subprocess is bounded (10s), gets no stdin (a CLI that
+  prompts sees EOF), and is killed at the deadline. A wedged daemon (e.g. an
+  unresponsive `docker ps`) now degrades to "not available" like a missing
+  tool; a timed-out script fragment surfaces as a visible failure and is never
+  cached.
+
 ## 0.11.0 — 2026-06-26
 
 ### Added
