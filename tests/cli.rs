@@ -2363,3 +2363,56 @@ fn launch_program_name_aliases_the_agent_id() {
         .stderr(predicate::str::contains("unknown agent 'no-such-agent'"))
         .stderr(predicate::str::contains("cursor"));
 }
+
+/// Savio review regressions: the hook endpoint must resolve aliases to the
+/// canonical id (else `load hook cursor-agent` silently no-ops) and honor
+/// --dry-run in both serve and --remove modes.
+#[test]
+fn hook_serve_resolves_alias_and_honors_dry_run() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    fx.git_init();
+    let payload = format!(
+        r#"{{ "workspace_roots": ["{}"] }}"#,
+        fx.repo_path().display()
+    );
+
+    // Dry-run serve: nothing written, no stamp — even for a matching repo.
+    fx.cmd()
+        .args(["--dry-run", "hook", "cursor"])
+        .write_stdin(payload.clone())
+        .assert()
+        .success();
+    assert!(!fx.exists(".cursor/rules/loadout.mdc"));
+    assert!(!fx.exists(".loadout/cache/hook-stamp"));
+
+    // Alias invocation must behave exactly like the canonical id.
+    fx.cmd()
+        .args(["hook", "cursor-agent"])
+        .write_stdin(payload)
+        .assert()
+        .success();
+    assert!(fx.exists(".cursor/rules/loadout.mdc"));
+    assert!(fx.exists(".loadout/generated/cursor.md"));
+}
+
+#[test]
+fn hook_remove_honors_dry_run() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    fx.cmd()
+        .args(["refresh", "--agent", "cursor"])
+        .assert()
+        .success();
+    let before = fx.read_home(".cursor/hooks.json");
+    assert!(before.contains(" hook cursor"));
+
+    fx.cmd()
+        .args(["--dry-run", "hook", "cursor", "--remove"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dry run — would remove"));
+    assert_eq!(before, fx.read_home(".cursor/hooks.json"));
+}

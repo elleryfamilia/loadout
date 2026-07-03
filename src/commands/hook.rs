@@ -40,16 +40,19 @@ pub fn run(rt: &Runtime, args: &HookArgs) -> crate::Result<()> {
     let Some(hr) = d.hook_registry.clone() else {
         anyhow::bail!("agent '{}' has no hook integration", args.agent);
     };
+    // The canonical id, not the invocation token — `load hook cursor-agent`
+    // must adopt/refresh `cursor`, and everything downstream keys on ids.
+    let id = d.id.clone();
     if args.remove {
-        return remove(&hr);
+        return remove(&hr, rt.dry_run);
     }
-    serve(&args.agent, hr.auto_adopt);
+    serve(&id, hr.auto_adopt, rt.dry_run);
     Ok(())
 }
 
 /// Serve mode: refresh (and possibly adopt) the workspace roots from the
 /// stdin payload. Infallible by design — every failure is swallowed.
-fn serve(agent: &str, auto_adopt: bool) {
+fn serve(agent: &str, auto_adopt: bool, dry_run: bool) {
     // Nothing may reach stdout (the agent parses it as the hook response) and
     // warnings would only confuse a machine caller.
     crate::report::set_quiet_warnings(true);
@@ -57,7 +60,7 @@ fn serve(agent: &str, auto_adopt: bool) {
     // Bound the read defensively; real payloads are a few hundred bytes.
     let _ = std::io::stdin().take(1 << 20).read_to_string(&mut payload);
     for root in workspace_roots(&payload) {
-        refresh_root(&root, agent, auto_adopt);
+        refresh_root(&root, agent, auto_adopt, dry_run);
     }
 }
 
@@ -80,7 +83,7 @@ fn workspace_roots(payload: &str) -> Vec<PathBuf> {
 /// (auto-pull sync, then every agent with an existing overlay) — and, with
 /// `auto_adopt`, wiring `agent` into a repo on its first open so no prior
 /// `load refresh` is ever needed. All guards fail closed; errors are swallowed.
-fn refresh_root(root: &Path, agent: &str, auto_adopt: bool) {
+fn refresh_root(root: &Path, agent: &str, auto_adopt: bool, dry_run: bool) {
     let Ok(root) = root.canonicalize() else {
         return;
     };
@@ -94,7 +97,7 @@ fn refresh_root(root: &Path, agent: &str, auto_adopt: bool) {
     if debounced(&root) {
         return;
     }
-    let rt = Runtime::new(root.clone(), false);
+    let rt = Runtime::new(root.clone(), dry_run);
     let _ = sync_before_render(&rt);
     let Ok(prep) = prepare_live(&rt) else {
         return;
@@ -116,7 +119,9 @@ fn refresh_root(root: &Path, agent: &str, auto_adopt: bool) {
         return;
     }
     let _ = apply::apply_for_agents(&rt, &prep, &agents, &ApplyOptions::default());
-    stamp(&root);
+    if !dry_run {
+        stamp(&root);
+    }
 }
 
 /// Whether this root was hook-refreshed within the debounce window.
@@ -143,7 +148,7 @@ fn stamp(root: &Path) {
 }
 
 /// `--remove`: strip loadout's entries from the agent's user-level hooks file.
-fn remove(hr: &HookRegistry) -> crate::Result<()> {
+fn remove(hr: &HookRegistry, dry_run: bool) -> crate::Result<()> {
     let home =
         config::home_dir().ok_or_else(|| anyhow::anyhow!("$HOME unset — nothing to remove"))?;
     let path = home.join(&hr.hooks_file);
@@ -157,8 +162,15 @@ fn remove(hr: &HookRegistry) -> crate::Result<()> {
     };
     match adapters::remove_hook_command(&existing, &hr.subcommand)? {
         Some(updated) => {
-            crate::writer::atomic_write(&path, &updated)?;
-            println!("removed loadout's hook entries from {}", path.display());
+            if dry_run {
+                println!(
+                    "dry run — would remove loadout's hook entries from {}",
+                    path.display()
+                );
+            } else {
+                crate::writer::atomic_write(&path, &updated)?;
+                println!("removed loadout's hook entries from {}", path.display());
+            }
         }
         None => println!("no loadout hook entries in {}", path.display()),
     }

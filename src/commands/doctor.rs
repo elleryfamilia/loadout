@@ -407,7 +407,6 @@ fn check_public_leaks(c: &mut Checks, prep: &super::Prepared) {
     }
 }
 
-/// The single-default invariant: exactly one enabled loadout with no targets is
 /// For an agent with a user-level freshness hook (e.g. Cursor): is loadout's
 /// entry registered, and does the binary it points at still exist? A stale
 /// path happens when the load binary moves (or its volume is unmounted) —
@@ -471,6 +470,7 @@ fn check_hook_registry(c: &mut Checks, a: &crate::adapters::AgentDescriptor) {
     }
 }
 
+/// The single-default invariant: exactly one enabled loadout with no targets is
 /// the catch-all that applies when nothing else matches (in any project or none).
 /// Zero ⇒ unmatched contexts get no loadout; more than one ⇒ ambiguous.
 fn check_default_loadout(c: &mut Checks, cfg: &config::Config) {
