@@ -401,7 +401,9 @@ fn sanitize_key(key: &str) -> String {
 
 /// Run a command/script body under the chosen interpreter and capture its
 /// output into a [`ProviderOutput`]. stdout is preferred for `text`, falling
-/// back to stderr; the structured form keeps both plus the exit code.
+/// back to stderr; the structured form keeps both plus the exit code. Bounded
+/// by [`EXEC_TIMEOUT`] — a hung script degrades to an error note, never a
+/// hung render.
 fn exec_command(command: &str, lang: Option<&str>, cwd: Option<&Path>) -> ProviderOutput {
     let (program, args) = interpreter(lang);
     let mut cmd = Command::new(program);
@@ -409,8 +411,15 @@ fn exec_command(command: &str, lang: Option<&str>, cwd: Option<&Path>) -> Provid
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    match cmd.output() {
-        Ok(o) => {
+    match output_with_timeout(&mut cmd, EXEC_TIMEOUT) {
+        Ok(None) => ProviderOutput {
+            text: format!(
+                "(command timed out after {}s and was killed)",
+                EXEC_TIMEOUT.as_secs()
+            ),
+            data: serde_json::Value::Null,
+        },
+        Ok(Some(o)) => {
             let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
             let text = if !stdout.is_empty() {
@@ -469,11 +478,79 @@ pub fn parse_duration(s: &str) -> Option<Duration> {
 
 // --- shared exec helpers (used by the shell-out providers) -------------------
 
+/// Hard cap on any probe/command subprocess. A wedged daemon (an unresponsive
+/// `docker ps`, a CLI waiting for a TTY) must degrade to "no output" — never
+/// hang the render, or the `load hook` process running behind every IDE
+/// session start. Generous because the slow path this must tolerate is a cold
+/// first probe, not the wedge itself.
+const EXEC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `Command::output()` with a deadline. stdout/stderr are drained by reader
+/// threads (a chatty child can't deadlock on a full pipe), stdin is null (a
+/// CLI that prompts gets EOF, not a wait), and the child is killed at the
+/// deadline. `Ok(None)` = timed out. On timeout the reader threads are
+/// deliberately **not** joined — a grandchild holding the pipe write-end
+/// (e.g. a killed `sh -c` leaving its command behind) must not resurrect the
+/// hang; the threads expire with the process.
+fn output_with_timeout(
+    cmd: &mut Command,
+    timeout: Duration,
+) -> std::io::Result<Option<std::process::Output>> {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let t_out = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(p) = out_pipe.as_mut() {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let t_err = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(p) = err_pipe.as_mut() {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait()? {
+            Some(s) => break s,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(None); // timed out — do NOT join the readers
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    let stdout = t_out.join().unwrap_or_default();
+    let stderr = t_err.join().unwrap_or_default();
+    Ok(Some(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    }))
+}
+
 /// Run `program args…` and return its stdout (trimmed) on success, falling back
 /// to stderr when stdout is empty. `None` when the program can't be spawned
-/// (not installed) or exits non-zero (daemon down, logged out, …).
+/// (not installed), exits non-zero (daemon down, logged out, …), or exceeds
+/// [`EXEC_TIMEOUT`] (daemon wedged).
 pub(crate) fn run_ok(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok()?;
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    let out = output_with_timeout(&mut cmd, EXEC_TIMEOUT).ok()??;
     if !out.status.success() {
         return None;
     }
@@ -651,5 +728,48 @@ mod tests {
     fn registry_has_the_five_builtins() {
         let ids: Vec<&str> = builtin_providers().iter().map(|p| p.id()).collect();
         assert_eq!(ids, ["host", "toolchain", "ai-tools", "tailnet", "docker"]);
+    }
+
+    #[test]
+    fn output_with_timeout_kills_a_wedged_child_quickly() {
+        use std::time::{Duration, Instant};
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "sleep 30"]);
+        let started = Instant::now();
+        let out = super::output_with_timeout(&mut cmd, Duration::from_millis(200)).unwrap();
+        assert!(out.is_none(), "timed out run must yield None");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "must return promptly after the deadline, not wait for the child"
+        );
+    }
+
+    #[test]
+    fn output_with_timeout_captures_both_streams_on_success() {
+        use std::time::Duration;
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "echo out; echo err >&2"]);
+        let out = super::output_with_timeout(&mut cmd, Duration::from_secs(10))
+            .unwrap()
+            .expect("fast command must not time out");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "out");
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "err");
+    }
+
+    #[test]
+    fn output_with_timeout_gives_children_no_stdin() {
+        use std::time::{Duration, Instant};
+        // A CLI that waits for input (the "press any key" class) must get EOF
+        // and exit immediately, not sit on a TTY read until the deadline.
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "read -r x; echo done"]);
+        let started = Instant::now();
+        let out = super::output_with_timeout(&mut cmd, Duration::from_secs(10)).unwrap();
+        assert!(
+            out.is_some(),
+            "EOF on stdin must end the read, not time out"
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
