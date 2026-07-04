@@ -344,9 +344,7 @@ fn refresh_in_repo_warns_when_falling_back_to_default() {
         .args(["refresh", "--agent", "claude"])
         .assert()
         .success()
-        .stderr(predicate::str::contains(
-            "no loadout targets this project",
-        ))
+        .stderr(predicate::str::contains("no loadout targets this project"))
         .stderr(predicate::str::contains("default loadout 'machine'"));
 }
 
