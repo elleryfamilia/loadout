@@ -300,6 +300,57 @@ fn refresh_in_non_repo_writes_overlay_but_no_gitignore() {
 }
 
 #[test]
+fn refresh_off_repo_uses_default_loadout_quietly() {
+    // Off-repo, falling back to the no-targets default loadout is the expected
+    // path (e.g. `load claude` in $HOME) — no warning, just the render line.
+    let fx = Fixture::new(); // deliberately NOT a git repo
+    fx.rust_project(); // detection still finds languages/stacks off-repo
+    fx.author(
+        "[[fragments]]\n\
+         id = \"machine-basics\"\n\
+         guidance = \"Machine-wide guidance.\"\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"machine\"\n\
+         fragments = [\"machine-basics\"]\n",
+    );
+
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("machine"))
+        .stderr(predicate::str::contains("no loadout targets").not());
+}
+
+#[test]
+fn refresh_in_repo_warns_when_falling_back_to_default() {
+    // In a repo the same fallback IS worth a warning: detection found stacks
+    // but no loadout targets them, which may be a misconfiguration.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\n\
+         id = \"machine-basics\"\n\
+         guidance = \"Machine-wide guidance.\"\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"machine\"\n\
+         fragments = [\"machine-basics\"]\n",
+    );
+
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "no loadout targets this project",
+        ))
+        .stderr(predicate::str::contains("default loadout 'machine'"));
+}
+
+#[test]
 fn refresh_at_home_withholds_the_bleeding_importer() {
     // When repo_base is $HOME, a managed CLAUDE.local.md there would be inherited
     // by every repo underneath it (agents walk the tree upward) — the "bleed".

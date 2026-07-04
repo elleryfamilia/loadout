@@ -178,9 +178,12 @@ pub fn prepare_with_live(
     let selection = profile::select(&context, &config.profiles, remembered.as_ref());
     // On a real render (not a read-only inspection), tell the user when nothing
     // matched — either falling back to a no-targets default profile, or noting
-    // the empty overlay and how to fix it.
+    // the empty overlay and how to fix it. Off-repo the default fallback IS the
+    // expected path (running in $HOME etc.), so only in-repo warrants a warning;
+    // the render step line already names the loadout used either way.
     if live {
         match &selection {
+            Selection::Default(_) if context.scope() == context::Scope::Machine => {}
             Selection::Default(p) => crate::warn_user!(
                 "no loadout targets this project ({}); using the default loadout '{}' \
                  (it declares no targets).",
