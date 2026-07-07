@@ -10,12 +10,14 @@
 
 **Different work needs different context. Stop handing your agent the same one every time.**
 
-A *loadout* is the kit you equip before a job. Loadout (the tool) bundles your AI coding context into named kits and equips the right one automatically — whether you're in a Rust repo, a Next.js app, or on a bare server with no repo at all.
+Loadout is the adaptive context engine for AI coding agents. The premise is simple: install it, create *loadouts* for the situations you work in, and your context and workflow are injected dynamically when you launch your agent — `load claude`.
+
+A *loadout* is the kit you equip before a job — your conventions, your tooling, your voice. Loadout picks the right one automatically, whether you're in a Rust repo, a Next.js app, or on a bare server with no repo at all.
 
 - Your project's `AGENTS.md` describes **the repo.**
-- Loadout carries **what you bring to it** — your conventions, your tooling, your voice — across every project, machine, and agent.
+- Loadout carries **what you bring to it** — across every project, machine, and agent.
 
-Works with **Claude, Codex, Gemini, Cursor, opencode, and Copilot**. Loadout delivers your context as a local, gitignored file each agent reads — without touching committed project instruction files.
+Works with **Claude, Codex, Gemini, Cursor, opencode, and Copilot**. Your context arrives as a local, gitignored file each agent reads — committed project instruction files are never touched.
 
 <p align="center">
   <img src="docs/screenshots/loadouts.png" alt="load studio — the Loadouts tab: composing a machine loadout from fragments, with live script re-runs" width="900">
@@ -32,13 +34,13 @@ Install the prebuilt binary — no Rust toolchain needed:
 curl -LsSf https://github.com/elleryfamilia/loadout/releases/latest/download/loadout-installer.sh | sh
 ```
 
-Open the local UI and build your first kit:
+Open the studio and equip a **starter pack** — it detects your stack and recommends one, so you have a working loadout before you've written a word:
 
 ```bash
 load studio
 ```
 
-Then equip it and launch your agent in one command:
+Then launch your agent with your context equipped:
 
 ```bash
 load claude
@@ -173,7 +175,9 @@ It never edits committed shared files like `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`
 load studio
 ```
 
-Use it to create and edit fragments, compose loadouts, assign them to targets, browse and build [workflows](#workflows), preview generated overlays, run dynamic fragment previews, and review diffs before applying. On first launch it detects your current context and can scaffold a starter kit from the detected target.
+Use it to create and edit fragments, compose loadouts, assign them to targets, browse and build [workflows](#workflows), preview generated overlays, run dynamic fragment previews, and review diffs before applying.
+
+It also carries a **starter pack gallery**: ready-made loadouts — everyday essentials plus per-stack kits — with the pack matching your detected stack flagged as recommended. Applying one stages the same edits you'd make by hand: fragments are duplicated into your library as your own, so there's nothing auto-active or magic to un-learn later.
 
 ---
 
@@ -215,7 +219,7 @@ You author fragments and loadouts once, globally. A repo never stores them — i
 .loadout/                       # per-repo, gitignored: overlays, binding, logs, cache
 ```
 
-A read-only **palette** of starter fragments also ships inside the binary; duplicate one into your library to own and edit it. Repos don't store global fragments or loadouts — if one does, `load doctor` flags it. More in [docs/configuration.md](docs/configuration.md).
+A read-only **palette** of starter fragments also ships inside the binary; duplicate one into your library to own and edit it, or let a [starter pack](#load-studio) compose them into a ready-made loadout for you. Repos don't store global fragments or loadouts — if one does, `load doctor` flags it. More in [docs/configuration.md](docs/configuration.md).
 
 ---
 
