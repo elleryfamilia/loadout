@@ -8,7 +8,9 @@
 
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
-use crate::plan::model::{plan_hash, Estimate, FileAction, Plan, PlanTask, RiskLevel, Status};
+use crate::plan::model::{
+    plan_hash, Estimate, FileAction, Phase, Plan, PlanTask, RiskLevel, Status,
+};
 use crate::plan::svg;
 
 const CSS: &str = include_str!("assets/plan.css");
@@ -128,6 +130,128 @@ fn file_action_str(action: &FileAction) -> &'static str {
     }
 }
 
+/// `"{n} {word}"`, pluralized with a trailing `s` above one — used for the
+/// counting nouns in the summary strip (tasks, phases, risks).
+fn count_label(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+}
+
+/// The first `max` characters of `s`, followed by `…` if anything was cut.
+/// Truncates on a `char` boundary (never splits a multi-byte codepoint), so
+/// the result is always valid UTF-8 to hand to maud for escaping. This
+/// truncates the *raw* markdown source (backticks, `*`, etc. can show up
+/// literally) rather than parsing it — the simplest option that stays
+/// correct, since the caller only needs a short plain-text preview, not a
+/// faithful rendering.
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut chars = s.chars();
+    let head: String = chars.by_ref().take(max).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+/// The summary strip's headline: task/phase counts, then an estimate
+/// distribution (S/M/L, only sizes that occur) when any task carries an
+/// estimate, then a status distribution when more than one distinct status
+/// appears (a single-status plan doesn't need it spelled out).
+///
+/// The status order below is deliberately not the `Status` enum's
+/// declaration order — it reads like a progress readout: what's finished
+/// first, then what's active, then what's stuck, what's left, and finally
+/// what was abandoned.
+fn summary_counts_line(plan: &Plan) -> String {
+    let tasks: Vec<&PlanTask> = plan.phases.iter().flat_map(|p| p.tasks.iter()).collect();
+    let mut parts = vec![
+        count_label(tasks.len(), "task"),
+        count_label(plan.phases.len(), "phase"),
+    ];
+
+    let mut sizes = [0usize; 3]; // s, m, l
+    for t in &tasks {
+        match t.estimate {
+            Some(Estimate::S) => sizes[0] += 1,
+            Some(Estimate::M) => sizes[1] += 1,
+            Some(Estimate::L) => sizes[2] += 1,
+            None => {}
+        }
+    }
+    for (n, label) in sizes.iter().zip(["S", "M", "L"]) {
+        if *n > 0 {
+            parts.push(format!("{n}×{label}"));
+        }
+    }
+
+    let mut statuses = [0usize; 5]; // done, in_progress, blocked, planned, cut
+    for t in &tasks {
+        let i = match t.status {
+            Status::Done => 0,
+            Status::InProgress => 1,
+            Status::Blocked => 2,
+            Status::Planned => 3,
+            Status::Cut => 4,
+        };
+        statuses[i] += 1;
+    }
+    if statuses.iter().filter(|&&n| n > 0).count() > 1 {
+        let labels = ["done", "in_progress", "blocked", "planned", "cut"];
+        for (n, label) in statuses.iter().zip(labels) {
+            if *n > 0 {
+                parts.push(format!("{n} {label}"));
+            }
+        }
+    }
+
+    parts.join(" · ")
+}
+
+/// The risk line's text plus whether any risk is high severity (the caller
+/// tints the line when it is). `None` when the plan has no risks at all —
+/// the caller omits the line entirely rather than showing "0 risks".
+fn summary_risk_line(plan: &Plan) -> Option<(String, bool)> {
+    if plan.risks.is_empty() {
+        return None;
+    }
+    let mut severities = [0usize; 3]; // high, medium, low
+    for r in &plan.risks {
+        match r.severity {
+            RiskLevel::High => severities[0] += 1,
+            RiskLevel::Medium => severities[1] += 1,
+            RiskLevel::Low => severities[2] += 1,
+        }
+    }
+    let parts: Vec<String> = severities
+        .iter()
+        .zip(["high", "medium", "low"])
+        .filter(|(n, _)| **n > 0)
+        .map(|(n, label)| format!("{n} {label}"))
+        .collect();
+    let line = format!(
+        "{} ({})",
+        count_label(plan.risks.len(), "risk"),
+        parts.join(", ")
+    );
+    Some((line, severities[0] > 0))
+}
+
+/// A collapsed phase's `summary` still needs to convey its size and heat:
+/// "(N tasks)", or "(N tasks · high risk)" when any task in it carries a
+/// high risk rating.
+fn phase_meta_text(phase: &Phase) -> String {
+    let n = phase.tasks.len();
+    let has_high = phase
+        .tasks
+        .iter()
+        .any(|t| matches!(t.risk, Some(RiskLevel::High)));
+    format!(
+        "({}{})",
+        count_label(n, "task"),
+        if has_high { " · high risk" } else { "" }
+    )
+}
+
 /// One task card: heading with status/risk/estimate badges, the markdown
 /// summary, a file touch list, an acceptance checklist, validation commands,
 /// and a "depends on" line linking to the other cards' anchors.
@@ -208,6 +332,9 @@ pub fn render(plan: &Plan) -> String {
     // its own subgraph too" — a phase graph would be redundant once the
     // whole plan already fits in one picture.
     let overview = svg::whole_plan_svg(plan);
+    let risk_line = summary_risk_line(plan);
+    let blocking: Vec<&crate::plan::model::OpenQuestion> =
+        plan.open_questions.iter().filter(|q| q.blocking).collect();
     let page = html! {
         (DOCTYPE)
         html lang="en" {
@@ -228,17 +355,39 @@ pub fn render(plan: &Plan) -> String {
                     }
                     (md(&plan.meta.goal_md))
                 }
-                @if let Some(overview_svg) = &overview {
-                    section.graph { h2 { "Dependencies" } (PreEscaped(overview_svg.as_str())) }
-                }
-                @for phase in &plan.phases {
-                    details.phase open data-plan-ref=(format!("phase:{}", phase.id)) {
-                        summary { h2 { (phase.title) } }
-                        (md(&phase.summary_md))
-                        @if overview.is_none() {
-                            @if let Some(g) = svg::phase_svg(plan, &phase.id) { (PreEscaped(g)) }
+                section.plan-summary {
+                    p.summary-counts { (summary_counts_line(plan)) }
+                    @if let Some((line, has_high)) = &risk_line {
+                        p class=(if *has_high { "summary-risks has-high" } else { "summary-risks" }) {
+                            (line)
                         }
-                        @for task in &phase.tasks { (task_card(task)) }
+                    }
+                    @if !blocking.is_empty() {
+                        div.summary-blocking {
+                            p.blocking-warn {
+                                (format!("⚠ {} blocking question(s)", blocking.len()))
+                            }
+                            ul.blocking-list {
+                                @for q in &blocking {
+                                    li {
+                                        a href=(format!("#question-{}", q.id)) {
+                                            (truncate_chars(&q.question_md, 100))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                @if !plan.open_questions.is_empty() {
+                    section.questions {
+                        h2 { "Open questions" }
+                        @for q in &plan.open_questions {
+                            div.task id=(format!("question-{}", q.id)) data-plan-ref=(format!("question:{}", q.id)) {
+                                @if q.blocking { span.badge.blocking { "blocking" } }
+                                (PreEscaped(crate::markdown::render_markdown(&q.question_md)))
+                            }
+                        }
                     }
                 }
                 @if !plan.risks.is_empty() {
@@ -258,15 +407,26 @@ pub fn render(plan: &Plan) -> String {
                         }
                     }
                 }
-                @if !plan.open_questions.is_empty() {
-                    section.questions {
-                        h2 { "Open questions" }
-                        @for q in &plan.open_questions {
-                            div.task data-plan-ref=(format!("question:{}", q.id)) {
-                                @if q.blocking { span.badge.blocking { "blocking" } }
-                                (PreEscaped(crate::markdown::render_markdown(&q.question_md)))
+                @for phase in &plan.phases {
+                    details.phase data-plan-ref=(format!("phase:{}", phase.id)) {
+                        summary {
+                            h2 {
+                                (phase.title)
+                                " "
+                                span.phase-meta { (phase_meta_text(phase)) }
                             }
                         }
+                        (md(&phase.summary_md))
+                        @if overview.is_none() {
+                            @if let Some(g) = svg::phase_svg(plan, &phase.id) { (PreEscaped(g)) }
+                        }
+                        @for task in &phase.tasks { (task_card(task)) }
+                    }
+                }
+                @if let Some(overview_svg) = &overview {
+                    details.graph {
+                        summary { "Dependency graph" }
+                        (PreEscaped(overview_svg.as_str()))
                     }
                 }
                 script type="application/json" id="plan-data" { (PreEscaped(island)) }
@@ -344,6 +504,42 @@ mod tests {
         // all the same. `!html.to_lowercase().contains("@import")` below
         // still guards the actual external-fetch vector.
         assert!(!html.to_lowercase().contains("@import"));
+    }
+
+    #[test]
+    fn summary_strip_and_order() {
+        let plan = plan_from("kitchen-sink.json");
+        let html = render(&plan);
+
+        // (a) summary strip present with the task/phase counts.
+        let summary_pos = html.find("plan-summary").expect("plan-summary present");
+        assert!(html.contains("5 tasks"), "{html}");
+        assert!(html.contains("2 phases"), "{html}");
+
+        // (b) blocking question link, anchored to its full entry.
+        assert!(html.contains("href=\"#question-q-ttl\""), "{html}");
+
+        // (c) order by byte position: summary < open questions < risks <
+        // first phase details < graph details.
+        let open_q_pos = html.find("Open questions").expect("open questions heading");
+        let risks_pos = html.find(">Risks<").expect("risks heading");
+        let phase_pos = html
+            .find("<details class=\"phase\"")
+            .expect("phase details");
+        let graph_pos = html
+            .find("<details class=\"graph\"")
+            .expect("graph details");
+        assert!(summary_pos < open_q_pos, "summary before open questions");
+        assert!(open_q_pos < risks_pos, "open questions before risks");
+        assert!(risks_pos < phase_pos, "risks before first phase");
+        assert!(phase_pos < graph_pos, "phases before the whole-plan graph");
+
+        // (d) phases (and the graph) are collapsed by default.
+        assert!(!html.contains("<details class=\"phase\" open"), "{html}");
+        assert!(!html.contains("<details class=\"graph\" open"), "{html}");
+
+        // (e) the blocking link's target anchor exists.
+        assert!(html.contains("id=\"question-q-ttl\""), "{html}");
     }
 
     #[test]

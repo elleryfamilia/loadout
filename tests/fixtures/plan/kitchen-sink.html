@@ -48,7 +48,8 @@ h1, h2, h3, h4 { line-height: 1.25; }
    link blue, which is unreadable on the dark palette. */
 a { color: var(--accent); }
 
-details.phase {
+details.phase,
+details.graph {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -56,7 +57,45 @@ details.phase {
   padding: 0.75rem 2.25rem 0.75rem 1rem;
 }
 
-details.phase > summary { cursor: pointer; font-weight: 600; }
+details.phase > summary,
+details.graph > summary { cursor: pointer; font-weight: 600; }
+
+.phase-meta { color: var(--muted); font-weight: 400; font-size: 0.85em; }
+
+/* Summary strip — the first thing a reviewer reads, so it gets its own
+   card: a plain counts line, an optional risk line (tinted when any risk is
+   high), and, loudest of all, the blocking-questions callout. */
+.plan-summary {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0 0 1rem;
+  padding: 0.9rem 1.1rem;
+}
+
+.summary-counts {
+  margin: 0 0 0.4rem;
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+.summary-risks { margin: 0; color: var(--muted); }
+.summary-risks.has-high { color: var(--danger); font-weight: 600; }
+
+.summary-blocking {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--border);
+}
+
+.blocking-warn {
+  margin: 0 0 0.35rem;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.blocking-list { margin: 0; padding-left: 1.25rem; }
+.blocking-list a { font-weight: 600; }
 
 [data-plan-ref] { position: relative; }
 
@@ -196,12 +235,12 @@ details.phase > summary { cursor: pointer; font-weight: 600; }
   font-weight: 600;
 }
 </style></head><body data-plan-fingerprint="sha256:e58b3199d2e615fe7238fab045b559848faca1b2af41ec508eb401c8ce8aac8f"><header><h1>Auth refactor</h1><p class="meta" data-plan-ref="meta:auth-refactor">plan <code>auth-refactor</code> · revision 2 · by claude</p><p>Extract <em>session</em> handling.</p>
-</header><section class="graph"><h2>Dependencies</h2><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 156" width="528" height="156" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><line class="edge" x1="160" y1="138" x2="184" y2="18" marker-end="url(#arrow)"/><line class="edge" x1="344" y1="18" x2="368" y2="18" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="160" height="36"/><text x="80" y="18">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="60" width="160" height="36"/><text x="80" y="78">Remove dead code</text></a><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="120" width="160" height="36"/><text x="80" y="138">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="184" y="0" width="160" height="36"/><text x="264" y="18">Introduce SessionStore…</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="368" y="0" width="160" height="36"/><text x="448" y="18">Redis backend</text></a></svg></section><details class="phase" open data-plan-ref="phase:p-core"><summary><h2>Core</h2></summary><p>The trait seam.</p>
+</header><section class="plan-summary"><p class="summary-counts">5 tasks · 2 phases · 1×S · 1×M · 1×L · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><p class="summary-risks has-high">1 risk (1 high)</p><div class="summary-blocking"><p class="blocking-warn">⚠ 1 blocking question(s)</p><ul class="blocking-list"><li><a href="#question-q-ttl">Session TTL?</a></li></ul></div></section><section class="questions"><h2>Open questions</h2><div class="task" id="question-q-ttl" data-plan-ref="question:q-ttl"><span class="badge blocking">blocking</span><p>Session TTL?</p>
+</div><div class="task" id="question-q-name" data-plan-ref="question:q-name"><p>Trait name?</p>
+</div></section><section class="risks"><h2>Risks</h2><div class="task" data-plan-ref="risk:r-locking"><h3 id="risk-r-locking">Lock contention <span class="badge risk-high">high</span></h3><p>Shard the store.</p>
+</div></section><details class="phase" data-plan-ref="phase:p-core"><summary><h2>Core <span class="phase-meta">(2 tasks)</span></h2></summary><p>The trait seam.</p>
 <div class="task" id="task-t-config-flag" data-plan-ref="task:t-config-flag"><h3>Config flag <span class="badge status-done">done</span> <span class="badge estimate-s">s</span></h3><ul class="acceptance"><li data-plan-ref="task:t-config-flag">flag parses</li></ul><ul class="validation"><li><code>cargo test config::</code></li></ul></div><div class="task" id="task-t-session-store" data-plan-ref="task:t-session-store"><h3>Introduce SessionStore trait <span class="badge status-planned">planned</span> <span class="badge risk-medium">medium</span> <span class="badge estimate-m">m</span></h3><p>Extract persistence behind a trait so <code>t-redis</code> can slot in.</p>
-<ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" open data-plan-ref="phase:p-backend"><summary><h2>Backend</h2></summary><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">l</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><section class="risks"><h2>Risks</h2><div class="task" data-plan-ref="risk:r-locking"><h3 id="risk-r-locking">Lock contention <span class="badge risk-high">high</span></h3><p>Shard the store.</p>
-</div></section><section class="questions"><h2>Open questions</h2><div class="task" data-plan-ref="question:q-ttl"><span class="badge blocking">blocking</span><p>Session TTL?</p>
-</div><div class="task" data-plan-ref="question:q-name"><p>Trait name?</p>
-</div></section><script type="application/json" id="plan-data">{"format":"loadout.plan/1","meta":{"id":"auth-refactor","title":"Auth refactor","goal_md":"\u003cp\u003eExtract \u003cem\u003esession\u003c/em\u003e handling.\u003c/p\u003e\n","agent":"claude","created":"2026-07-07","revision":2},"phases":[{"id":"p-core","title":"Core","summary_md":"\u003cp\u003eThe trait seam.\u003c/p\u003e\n","tasks":[{"id":"t-config-flag","title":"Config flag","status":"done","acceptance":["flag parses"],"validation":["cargo test config::"],"estimate":"s"},{"id":"t-session-store","title":"Introduce SessionStore trait","summary_md":"\u003cp\u003eExtract persistence behind a trait so \u003ccode\u003et-redis\u003c/code\u003e can slot in.\u003c/p\u003e\n","status":"planned","risk":"medium","depends_on":["t-config-flag"],"files":[{"path":"src/auth/session.rs","action":"modify","note":"extract trait"},{"path":"src/auth/store.rs","action":"create"},{"path":"tests/auth.rs","action":"test"}],"acceptance":["existing session tests pass unchanged","no direct sled calls outside the trait impl"],"validation":["cargo test auth::"],"estimate":"m"}]},{"id":"p-backend","title":"Backend","tasks":[{"id":"t-redis","title":"Redis backend","status":"blocked","risk":"high","depends_on":["t-session-store"],"estimate":"l"},{"id":"t-cleanup","title":"Remove dead code","status":"in_progress"},{"id":"t-bench","title":"Benchmarks","status":"cut","risk":"low"}]}],"risks":[{"id":"r-locking","title":"Lock contention","severity":"high","mitigation_md":"\u003cp\u003eShard the store.\u003c/p\u003e\n"}],"open_questions":[{"id":"q-ttl","question_md":"\u003cp\u003eSession TTL?\u003c/p\u003e\n","blocking":true},{"id":"q-name","question_md":"\u003cp\u003eTrait name?\u003c/p\u003e\n","blocking":false}]}</script><script>/* loadout plan viewer — progressive enhancement over server-rendered HTML.
+<ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" data-plan-ref="phase:p-backend"><summary><h2>Backend <span class="phase-meta">(3 tasks · high risk)</span></h2></summary><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">l</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><details class="graph"><summary>Dependency graph</summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 156" width="528" height="156" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><line class="edge" x1="160" y1="138" x2="184" y2="18" marker-end="url(#arrow)"/><line class="edge" x1="344" y1="18" x2="368" y2="18" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="160" height="36"/><text x="80" y="18">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="60" width="160" height="36"/><text x="80" y="78">Remove dead code</text></a><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="120" width="160" height="36"/><text x="80" y="138">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="184" y="0" width="160" height="36"/><text x="264" y="18">Introduce SessionStore…</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="368" y="0" width="160" height="36"/><text x="448" y="18">Redis backend</text></a></svg></details><script type="application/json" id="plan-data">{"format":"loadout.plan/1","meta":{"id":"auth-refactor","title":"Auth refactor","goal_md":"\u003cp\u003eExtract \u003cem\u003esession\u003c/em\u003e handling.\u003c/p\u003e\n","agent":"claude","created":"2026-07-07","revision":2},"phases":[{"id":"p-core","title":"Core","summary_md":"\u003cp\u003eThe trait seam.\u003c/p\u003e\n","tasks":[{"id":"t-config-flag","title":"Config flag","status":"done","acceptance":["flag parses"],"validation":["cargo test config::"],"estimate":"s"},{"id":"t-session-store","title":"Introduce SessionStore trait","summary_md":"\u003cp\u003eExtract persistence behind a trait so \u003ccode\u003et-redis\u003c/code\u003e can slot in.\u003c/p\u003e\n","status":"planned","risk":"medium","depends_on":["t-config-flag"],"files":[{"path":"src/auth/session.rs","action":"modify","note":"extract trait"},{"path":"src/auth/store.rs","action":"create"},{"path":"tests/auth.rs","action":"test"}],"acceptance":["existing session tests pass unchanged","no direct sled calls outside the trait impl"],"validation":["cargo test auth::"],"estimate":"m"}]},{"id":"p-backend","title":"Backend","tasks":[{"id":"t-redis","title":"Redis backend","status":"blocked","risk":"high","depends_on":["t-session-store"],"estimate":"l"},{"id":"t-cleanup","title":"Remove dead code","status":"in_progress"},{"id":"t-bench","title":"Benchmarks","status":"cut","risk":"low"}]}],"risks":[{"id":"r-locking","title":"Lock contention","severity":"high","mitigation_md":"\u003cp\u003eShard the store.\u003c/p\u003e\n"}],"open_questions":[{"id":"q-ttl","question_md":"\u003cp\u003eSession TTL?\u003c/p\u003e\n","blocking":true},{"id":"q-name","question_md":"\u003cp\u003eTrait name?\u003c/p\u003e\n","blocking":false}]}</script><script>/* loadout plan viewer — progressive enhancement over server-rendered HTML.
    Pure core first (no DOM), DOM layer second, #selftest harness last. */
 (function () {
   "use strict";

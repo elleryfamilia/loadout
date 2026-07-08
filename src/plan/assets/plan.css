@@ -47,7 +47,8 @@ h1, h2, h3, h4 { line-height: 1.25; }
    link blue, which is unreadable on the dark palette. */
 a { color: var(--accent); }
 
-details.phase {
+details.phase,
+details.graph {
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -55,7 +56,45 @@ details.phase {
   padding: 0.75rem 2.25rem 0.75rem 1rem;
 }
 
-details.phase > summary { cursor: pointer; font-weight: 600; }
+details.phase > summary,
+details.graph > summary { cursor: pointer; font-weight: 600; }
+
+.phase-meta { color: var(--muted); font-weight: 400; font-size: 0.85em; }
+
+/* Summary strip — the first thing a reviewer reads, so it gets its own
+   card: a plain counts line, an optional risk line (tinted when any risk is
+   high), and, loudest of all, the blocking-questions callout. */
+.plan-summary {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0 0 1rem;
+  padding: 0.9rem 1.1rem;
+}
+
+.summary-counts {
+  margin: 0 0 0.4rem;
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+.summary-risks { margin: 0; color: var(--muted); }
+.summary-risks.has-high { color: var(--danger); font-weight: 600; }
+
+.summary-blocking {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--border);
+}
+
+.blocking-warn {
+  margin: 0 0 0.35rem;
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.blocking-list { margin: 0; padding-left: 1.25rem; }
+.blocking-list a { font-weight: 600; }
 
 [data-plan-ref] { position: relative; }
 
