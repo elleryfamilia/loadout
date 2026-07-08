@@ -192,11 +192,12 @@ fn render_graph(nodes: &BTreeMap<String, Node>, edges: &[(String, String)]) -> S
     let width = (max_col + 1) * (NODE_W + GAP) - GAP;
     let height = max_rows as i64 * (NODE_H + GAP) - GAP;
 
+    let svg_w = width.max(NODE_W);
+    let svg_h = height.max(NODE_H);
     let mut out = String::new();
     out.push_str(&format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" class=\"plan-graph\">",
-        width.max(NODE_W),
-        height.max(NODE_H)
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {svg_w} {svg_h}\" \
+         width=\"{svg_w}\" height=\"{svg_h}\" class=\"plan-graph\">",
     ));
     out.push_str(
         "<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" \

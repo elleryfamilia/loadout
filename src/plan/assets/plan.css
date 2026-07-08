@@ -42,6 +42,11 @@ body {
 
 h1, h2, h3, h4 { line-height: 1.25; }
 
+/* --accent is themed per color scheme above (light: #2563eb, dark: #60a5fa),
+   so this stays readable against both backgrounds instead of the UA default
+   link blue, which is unreadable on the dark palette. */
+a { color: var(--accent); }
+
 details.phase {
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -98,8 +103,9 @@ details.phase > summary { cursor: pointer; font-weight: 600; }
 
 .orphan { border: 1px dashed var(--warn); background: transparent; }
 
-/* dependency graph SVG */
-.plan-graph { max-width: 100%; height: auto; }
+/* dependency graph SVG — width/height attrs on the element (see svg.rs) give
+   it intrinsic size; this only ever shrinks it on narrow viewports. */
+.plan-graph { display: block; max-width: 100%; height: auto; }
 .plan-graph .node { stroke: var(--border); stroke-width: 1; }
 .plan-graph .node.status-planned { fill: var(--gray); }
 .plan-graph .node.status-in_progress { fill: var(--accent); }
@@ -109,7 +115,7 @@ details.phase > summary { cursor: pointer; font-weight: 600; }
 .plan-graph .node.stub { stroke-dasharray: 4 3; fill-opacity: 0.55; }
 .plan-graph a:has(.node.status-cut) text { text-decoration: line-through; }
 .plan-graph .edge { stroke: var(--muted); stroke-width: 1.5; fill: none; }
-.plan-graph text { font-size: 11px; fill: var(--fg); pointer-events: none; }
+.plan-graph text { font-size: 12px; fill: var(--fg); pointer-events: none; }
 
 .comment-btn {
   position: absolute;
@@ -135,6 +141,8 @@ details.phase > summary { cursor: pointer; font-weight: 600; }
   gap: 0.5rem;
   max-width: 32rem;
 }
+
+.comment-box[hidden] { display: none; }
 
 .comment-box select,
 .comment-box textarea {

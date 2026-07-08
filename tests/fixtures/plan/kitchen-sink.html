@@ -43,6 +43,11 @@ body {
 
 h1, h2, h3, h4 { line-height: 1.25; }
 
+/* --accent is themed per color scheme above (light: #2563eb, dark: #60a5fa),
+   so this stays readable against both backgrounds instead of the UA default
+   link blue, which is unreadable on the dark palette. */
+a { color: var(--accent); }
+
 details.phase {
   background: var(--card-bg);
   border: 1px solid var(--border);
@@ -99,8 +104,9 @@ details.phase > summary { cursor: pointer; font-weight: 600; }
 
 .orphan { border: 1px dashed var(--warn); background: transparent; }
 
-/* dependency graph SVG */
-.plan-graph { max-width: 100%; height: auto; }
+/* dependency graph SVG — width/height attrs on the element (see svg.rs) give
+   it intrinsic size; this only ever shrinks it on narrow viewports. */
+.plan-graph { display: block; max-width: 100%; height: auto; }
 .plan-graph .node { stroke: var(--border); stroke-width: 1; }
 .plan-graph .node.status-planned { fill: var(--gray); }
 .plan-graph .node.status-in_progress { fill: var(--accent); }
@@ -110,7 +116,7 @@ details.phase > summary { cursor: pointer; font-weight: 600; }
 .plan-graph .node.stub { stroke-dasharray: 4 3; fill-opacity: 0.55; }
 .plan-graph a:has(.node.status-cut) text { text-decoration: line-through; }
 .plan-graph .edge { stroke: var(--muted); stroke-width: 1.5; fill: none; }
-.plan-graph text { font-size: 11px; fill: var(--fg); pointer-events: none; }
+.plan-graph text { font-size: 12px; fill: var(--fg); pointer-events: none; }
 
 .comment-btn {
   position: absolute;
@@ -136,6 +142,8 @@ details.phase > summary { cursor: pointer; font-weight: 600; }
   gap: 0.5rem;
   max-width: 32rem;
 }
+
+.comment-box[hidden] { display: none; }
 
 .comment-box select,
 .comment-box textarea {
@@ -188,7 +196,7 @@ details.phase > summary { cursor: pointer; font-weight: 600; }
   font-weight: 600;
 }
 </style></head><body data-plan-fingerprint="sha256:e58b3199d2e615fe7238fab045b559848faca1b2af41ec508eb401c8ce8aac8f"><header><h1>Auth refactor</h1><p class="meta" data-plan-ref="meta:auth-refactor">plan <code>auth-refactor</code> · revision 2 · by claude</p><p>Extract <em>session</em> handling.</p>
-</header><section class="graph"><h2>Dependencies</h2><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 156" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><line class="edge" x1="160" y1="138" x2="184" y2="18" marker-end="url(#arrow)"/><line class="edge" x1="344" y1="18" x2="368" y2="18" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="160" height="36"/><text x="80" y="18">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="60" width="160" height="36"/><text x="80" y="78">Remove dead code</text></a><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="120" width="160" height="36"/><text x="80" y="138">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="184" y="0" width="160" height="36"/><text x="264" y="18">Introduce SessionStore…</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="368" y="0" width="160" height="36"/><text x="448" y="18">Redis backend</text></a></svg></section><details class="phase" open data-plan-ref="phase:p-core"><summary><h2>Core</h2></summary><p>The trait seam.</p>
+</header><section class="graph"><h2>Dependencies</h2><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 156" width="528" height="156" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><line class="edge" x1="160" y1="138" x2="184" y2="18" marker-end="url(#arrow)"/><line class="edge" x1="344" y1="18" x2="368" y2="18" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="160" height="36"/><text x="80" y="18">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="60" width="160" height="36"/><text x="80" y="78">Remove dead code</text></a><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="120" width="160" height="36"/><text x="80" y="138">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="184" y="0" width="160" height="36"/><text x="264" y="18">Introduce SessionStore…</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="368" y="0" width="160" height="36"/><text x="448" y="18">Redis backend</text></a></svg></section><details class="phase" open data-plan-ref="phase:p-core"><summary><h2>Core</h2></summary><p>The trait seam.</p>
 <div class="task" id="task-t-config-flag" data-plan-ref="task:t-config-flag"><h3>Config flag <span class="badge status-done">done</span> <span class="badge estimate-s">s</span></h3><ul class="acceptance"><li data-plan-ref="task:t-config-flag">flag parses</li></ul><ul class="validation"><li><code>cargo test config::</code></li></ul></div><div class="task" id="task-t-session-store" data-plan-ref="task:t-session-store"><h3>Introduce SessionStore trait <span class="badge status-planned">planned</span> <span class="badge risk-medium">medium</span> <span class="badge estimate-m">m</span></h3><p>Extract persistence behind a trait so <code>t-redis</code> can slot in.</p>
 <ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" open data-plan-ref="phase:p-backend"><summary><h2>Backend</h2></summary><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">l</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><section class="risks"><h2>Risks</h2><div class="task" data-plan-ref="risk:r-locking"><h3 id="risk-r-locking">Lock contention <span class="badge risk-high">high</span></h3><p>Shard the store.</p>
 </div></section><section class="questions"><h2>Open questions</h2><div class="task" data-plan-ref="question:q-ttl"><span class="badge blocking">blocking</span><p>Session TTL?</p>
