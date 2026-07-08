@@ -250,13 +250,30 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
   position: absolute;
   top: 0.5rem;
   right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
   border: 1px solid var(--border);
   background: var(--card-bg);
-  border-radius: 4px;
+  color: var(--muted);
+  border-radius: 6px;
   cursor: pointer;
-  font-size: 0.85em;
+  font-size: 0.8em;
+  font-weight: 600;
+  font-family: inherit;
   line-height: 1;
-  padding: 0.15em 0.4em;
+  padding: 0.4em 0.7em;
+}
+
+.comment-btn:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.comment-btn-icon {
+  width: 15px;
+  height: 15px;
+  flex: none;
 }
 
 .comment-box {
@@ -273,7 +290,6 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
 
 .comment-box[hidden] { display: none; }
 
-.comment-box select,
 .comment-box textarea {
   font-family: inherit;
   font-size: 0.9em;
@@ -283,6 +299,23 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
   background: var(--card-bg);
   color: var(--fg);
 }
+
+.comment-box-blocking {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--warn);
+  cursor: pointer;
+}
+
+.comment-box-blocking input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.blocking-icon { width: 14px; height: 14px; flex: none; }
 
 .comment-box-actions { display: flex; gap: 0.5rem; }
 
@@ -329,35 +362,39 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
 </div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
 </li><li><p><strong>Redis backend</strong> (<code>t-redis</code>) is blocked on the trait boundary landing first.</p>
 </li><li><p><strong>Lock contention</strong> (<code>r-locking</code>) is mitigated by sharding the store, not by removing the lock.</p>
-</li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p><p class="summary-ask has-blocking">⚠ 1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></p><p class="summary-counts">5 tasks · 2 phases · 1×S · 1×M · 1×L · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><table class="summary-phases"><thead><tr><th>Phase</th><th>Tasks</th><th>Estimate</th><th>Risk</th></tr></thead><tbody><tr><td><a href="#phase-p-core">Core</a></td><td>2</td><td>1×S 1×M</td><td>1 medium</td></tr><tr><td><a href="#phase-p-backend">Backend</a></td><td>3</td><td>1×L</td><td>1 high</td></tr></tbody></table><p class="summary-risks has-high">1 risk (1 high)</p></section><section class="questions"><h2>Open questions</h2><div class="task" id="question-q-ttl" data-plan-ref="question:q-ttl"><span class="badge blocking">blocking</span><p>Session TTL?</p>
+</li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p><p class="summary-ask has-blocking">⚠ 1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></p><p class="summary-counts">5 tasks · 2 phases · 1 small · 1 medium · 1 large · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><table class="summary-phases"><thead><tr><th>Phase</th><th>Tasks</th><th>Estimate</th><th>Risk</th></tr></thead><tbody><tr><td><a href="#phase-p-core">Core</a></td><td>2</td><td>1 small, 1 medium</td><td>1 medium</td></tr><tr><td><a href="#phase-p-backend">Backend</a></td><td>3</td><td>1 large</td><td>1 high</td></tr></tbody></table><p class="summary-risks has-high">1 risk (1 high)</p></section><section class="questions"><h2>Open questions</h2><div class="task" id="question-q-ttl" data-plan-ref="question:q-ttl"><span class="badge blocking">blocking</span><p>Session TTL?</p>
 </div><div class="task" id="question-q-name" data-plan-ref="question:q-name"><p>Trait name?</p>
 </div></section><section class="risks"><h2>Risks</h2><div class="task" data-plan-ref="risk:r-locking"><h3 id="risk-r-locking">Lock contention <span class="badge risk-high">high</span></h3><p>Shard the store.</p>
 </div></section><details class="phase" id="phase-p-core" data-plan-ref="phase:p-core"><summary><h2>Core <span class="phase-meta">(2 tasks)</span></h2></summary><p>The trait seam.</p>
-<div class="task" id="task-t-config-flag" data-plan-ref="task:t-config-flag"><h3>Config flag <span class="badge status-done">done</span> <span class="badge estimate-s">s</span></h3><ul class="acceptance"><li data-plan-ref="task:t-config-flag">flag parses</li></ul><ul class="validation"><li><code>cargo test config::</code></li></ul></div><div class="task" id="task-t-session-store" data-plan-ref="task:t-session-store"><h3>Introduce SessionStore trait <span class="badge status-planned">planned</span> <span class="badge risk-medium">medium</span> <span class="badge estimate-m">m</span></h3><p>Extract persistence behind a trait so <code>t-redis</code> can slot in.</p>
-<ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" id="phase-p-backend" data-plan-ref="phase:p-backend"><summary><h2>Backend <span class="phase-meta">(3 tasks · high risk)</span></h2></summary><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">l</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><details class="graph"><summary>Dependency graph</summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 156" width="528" height="156" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><line class="edge" x1="160" y1="138" x2="184" y2="18" marker-end="url(#arrow)"/><line class="edge" x1="344" y1="18" x2="368" y2="18" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="160" height="36"/><text x="80" y="18">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="60" width="160" height="36"/><text x="80" y="78">Remove dead code</text></a><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="120" width="160" height="36"/><text x="80" y="138">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="184" y="0" width="160" height="36"/><text x="264" y="18">Introduce SessionStore…</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="368" y="0" width="160" height="36"/><text x="448" y="18">Redis backend</text></a></svg></details><script type="application/json" id="plan-data">{"format":"loadout.plan/1","meta":{"id":"auth-refactor","title":"Auth refactor","goal_md":"\u003cp\u003eExtract \u003cem\u003esession\u003c/em\u003e handling.\u003c/p\u003e\n","summary_md":"\u003cp\u003eThis refactor extracts \u003ccode\u003eSessionStore\u003c/code\u003e behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the \u003cem\u003elock contention\u003c/em\u003e risk by sharding the store. The ask: review the trait boundary in \u003ccode\u003et-session-store\u003c/code\u003e before Redis work starts.\u003c/p\u003e\n","key_points":["\u003cp\u003e\u003cstrong\u003eTrait extraction\u003c/strong\u003e decouples session persistence from its backing store, gated behind a config flag.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eRedis backend\u003c/strong\u003e (\u003ccode\u003et-redis\u003c/code\u003e) is blocked on the trait boundary landing first.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eLock contention\u003c/strong\u003e (\u003ccode\u003er-locking\u003c/code\u003e) is mitigated by sharding the store, not by removing the lock.\u003c/p\u003e\n"],"out_of_scope":["Migrating existing sessions between backends","Multi-region session replication"],"agent":"claude","created":"2026-07-07","revision":2},"phases":[{"id":"p-core","title":"Core","summary_md":"\u003cp\u003eThe trait seam.\u003c/p\u003e\n","tasks":[{"id":"t-config-flag","title":"Config flag","status":"done","acceptance":["flag parses"],"validation":["cargo test config::"],"estimate":"s"},{"id":"t-session-store","title":"Introduce SessionStore trait","summary_md":"\u003cp\u003eExtract persistence behind a trait so \u003ccode\u003et-redis\u003c/code\u003e can slot in.\u003c/p\u003e\n","status":"planned","risk":"medium","depends_on":["t-config-flag"],"files":[{"path":"src/auth/session.rs","action":"modify","note":"extract trait"},{"path":"src/auth/store.rs","action":"create"},{"path":"tests/auth.rs","action":"test"}],"acceptance":["existing session tests pass unchanged","no direct sled calls outside the trait impl"],"validation":["cargo test auth::"],"estimate":"m"}]},{"id":"p-backend","title":"Backend","tasks":[{"id":"t-redis","title":"Redis backend","status":"blocked","risk":"high","depends_on":["t-session-store"],"estimate":"l"},{"id":"t-cleanup","title":"Remove dead code","status":"in_progress"},{"id":"t-bench","title":"Benchmarks","status":"cut","risk":"low"}]}],"risks":[{"id":"r-locking","title":"Lock contention","severity":"high","mitigation_md":"\u003cp\u003eShard the store.\u003c/p\u003e\n"}],"open_questions":[{"id":"q-ttl","question_md":"\u003cp\u003eSession TTL?\u003c/p\u003e\n","blocking":true},{"id":"q-name","question_md":"\u003cp\u003eTrait name?\u003c/p\u003e\n","blocking":false}]}</script><script>/* loadout plan viewer — progressive enhancement over server-rendered HTML.
+<div class="task" id="task-t-config-flag" data-plan-ref="task:t-config-flag"><h3>Config flag <span class="badge status-done">done</span> <span class="badge estimate-s">small</span></h3><ul class="acceptance"><li data-plan-ref="task:t-config-flag">flag parses</li></ul><ul class="validation"><li><code>cargo test config::</code></li></ul></div><div class="task" id="task-t-session-store" data-plan-ref="task:t-session-store"><h3>Introduce SessionStore trait <span class="badge status-planned">planned</span> <span class="badge risk-medium">medium</span> <span class="badge estimate-m">medium</span></h3><p>Extract persistence behind a trait so <code>t-redis</code> can slot in.</p>
+<ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" id="phase-p-backend" data-plan-ref="phase:p-backend"><summary><h2>Backend <span class="phase-meta">(3 tasks · high risk)</span></h2></summary><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">large</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><details class="graph"><summary>Dependency graph</summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 156" width="528" height="156" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><line class="edge" x1="160" y1="138" x2="184" y2="18" marker-end="url(#arrow)"/><line class="edge" x1="344" y1="18" x2="368" y2="18" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="160" height="36"/><text x="80" y="18">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="60" width="160" height="36"/><text x="80" y="78">Remove dead code</text></a><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="120" width="160" height="36"/><text x="80" y="138">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="184" y="0" width="160" height="36"/><text x="264" y="18">Introduce SessionStore…</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="368" y="0" width="160" height="36"/><text x="448" y="18">Redis backend</text></a></svg></details><script type="application/json" id="plan-data">{"format":"loadout.plan/1","meta":{"id":"auth-refactor","title":"Auth refactor","goal_md":"\u003cp\u003eExtract \u003cem\u003esession\u003c/em\u003e handling.\u003c/p\u003e\n","summary_md":"\u003cp\u003eThis refactor extracts \u003ccode\u003eSessionStore\u003c/code\u003e behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the \u003cem\u003elock contention\u003c/em\u003e risk by sharding the store. The ask: review the trait boundary in \u003ccode\u003et-session-store\u003c/code\u003e before Redis work starts.\u003c/p\u003e\n","key_points":["\u003cp\u003e\u003cstrong\u003eTrait extraction\u003c/strong\u003e decouples session persistence from its backing store, gated behind a config flag.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eRedis backend\u003c/strong\u003e (\u003ccode\u003et-redis\u003c/code\u003e) is blocked on the trait boundary landing first.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eLock contention\u003c/strong\u003e (\u003ccode\u003er-locking\u003c/code\u003e) is mitigated by sharding the store, not by removing the lock.\u003c/p\u003e\n"],"out_of_scope":["Migrating existing sessions between backends","Multi-region session replication"],"agent":"claude","created":"2026-07-07","revision":2},"phases":[{"id":"p-core","title":"Core","summary_md":"\u003cp\u003eThe trait seam.\u003c/p\u003e\n","tasks":[{"id":"t-config-flag","title":"Config flag","status":"done","acceptance":["flag parses"],"validation":["cargo test config::"],"estimate":"s"},{"id":"t-session-store","title":"Introduce SessionStore trait","summary_md":"\u003cp\u003eExtract persistence behind a trait so \u003ccode\u003et-redis\u003c/code\u003e can slot in.\u003c/p\u003e\n","status":"planned","risk":"medium","depends_on":["t-config-flag"],"files":[{"path":"src/auth/session.rs","action":"modify","note":"extract trait"},{"path":"src/auth/store.rs","action":"create"},{"path":"tests/auth.rs","action":"test"}],"acceptance":["existing session tests pass unchanged","no direct sled calls outside the trait impl"],"validation":["cargo test auth::"],"estimate":"m"}]},{"id":"p-backend","title":"Backend","tasks":[{"id":"t-redis","title":"Redis backend","status":"blocked","risk":"high","depends_on":["t-session-store"],"estimate":"l"},{"id":"t-cleanup","title":"Remove dead code","status":"in_progress"},{"id":"t-bench","title":"Benchmarks","status":"cut","risk":"low"}]}],"risks":[{"id":"r-locking","title":"Lock contention","severity":"high","mitigation_md":"\u003cp\u003eShard the store.\u003c/p\u003e\n"}],"open_questions":[{"id":"q-ttl","question_md":"\u003cp\u003eSession TTL?\u003c/p\u003e\n","blocking":true},{"id":"q-name","question_md":"\u003cp\u003eTrait name?\u003c/p\u003e\n","blocking":false}]}</script><script>/* loadout plan viewer — progressive enhancement over server-rendered HTML.
    Pure core first (no DOM), DOM layer second, #selftest harness last. */
 (function () {
   "use strict";
 
   const core = {
     parseIsland(text) { return JSON.parse(text); },
-    makeComment(ref, type, quote, text) {
-      return { ref: ref, type: type, quote: quote || null, text: text };
+    /* `blocking` replaces the old 4-way `type` taxonomy: a comment either
+       blocks approval or it doesn't -- the free-form `text` carries whatever
+       nuance a category label used to gesture at. Defaults to false so
+       existing non-blocking callers don't need to pass it. */
+    makeComment(ref, quote, text, blocking) {
+      return { ref: ref, quote: quote || null, text: text, blocking: !!blocking };
     },
     buildFeedback(plan, fingerprint, comments) {
       const doc = {
         format: "loadout.plan-feedback/1",
         plan_id: plan.meta.id,
         plan_hash: fingerprint,
-        verdict: comments.some(c => c.type === "blocker") ? "request_changes" : "comment",
+        verdict: comments.some(c => c.blocking) ? "request_changes" : "comment",
         comments: comments.map((c, i) => ({
           id: "c-" + (i + 1),
-          ref: c.ref, type: c.type, quote: c.quote, text: c.text,
+          ref: c.ref, quote: c.quote, text: c.text, blocking: !!c.blocking,
         })),
       };
       const lines = ["## Plan feedback — " + plan.meta.id, ""];
       for (const c of doc.comments) {
-        lines.push("### " + c.ref + " — " + c.type);
+        lines.push("### " + c.ref + (c.blocking ? " — BLOCKS APPROVAL" : ""));
         /* Blockquote every line of free-form comment text so a "```" line
            in it reads as "> ```" -- that can't open a top-level fence, and
            any fence it does open stays contained inside the blockquote. */
@@ -392,9 +429,10 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
       const plan = core.parseIsland(document.getElementById("plan-data").textContent);
       const fp = document.body.getAttribute("data-plan-fingerprint");
       const fb = core.buildFeedback(plan, fp,
-        [core.makeComment("task:t-session-store", "blocker", "q", "needs work")]);
+        [core.makeComment("task:t-session-store", "q", "needs work", true)]);
       const parsed = JSON.parse(fb.json);
       if (parsed.verdict !== "request_changes") throw new Error("verdict");
+      if (parsed.comments[0].blocking !== true) throw new Error("blocking");
       if (parsed.plan_hash !== fp) throw new Error("hash");
       if (fb.combined.indexOf("```json") !== 0) throw new Error("combined shape");
     });
@@ -412,8 +450,51 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
 
   /* ---- DOM layer -------------------------------------------------- */
 
-  const COMMENT_TYPES = ["blocker", "question", "suggestion", "change_request"];
   const BANNER_TEXT = "comments live in this page — copy feedback before closing";
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  /* A small stroke-based icon built via createElementNS -- never innerHTML,
+     so the markup can't smuggle anything through it -- `paths` is a list of
+     `d` attribute strings, one <path> per entry. */
+  function svgIcon(className, paths) {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    svg.setAttribute("class", className);
+    paths.forEach(function (d) {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+    });
+    return svg;
+  }
+
+  /* Speech-bubble icon for the comment button: bubble outline plus two
+     short lines standing in for text. */
+  function commentIcon() {
+    return svgIcon("comment-btn-icon", [
+      "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+      "M7 8h10M7 12h6",
+    ]);
+  }
+
+  /* Warning-triangle icon for the "Blocks approval" checkbox: triangle
+     outline plus an exclamation mark (stem + dot as one path). */
+  function warningIcon() {
+    return svgIcon("blocking-icon", [
+      "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z",
+      "M12 9v4M12 17h.01",
+    ]);
+  }
 
   /* First 80 chars of the element's heading text: the element itself when
      it is a heading, else the first h1–h6 descendant, else its own
@@ -439,6 +520,16 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
       if (!stored || stored.fingerprint !== fingerprint || !Array.isArray(stored.comments)) {
         return [];
       }
+      /* Old draft shape carried a `type` field (blocker/question/suggestion/
+         change_request) instead of a `blocking` boolean. Restoring one of
+         those as-is would silently resurrect the retired taxonomy, so
+         discard the whole draft rather than partially restore it broken --
+         the fingerprint gate above already covers the "plan changed"
+         case; this covers "the draft's own shape changed". */
+      const hasOldShape = stored.comments.some(function (c) {
+        return c && Object.prototype.hasOwnProperty.call(c, "type");
+      });
+      if (hasOldShape) return [];
       return stored.comments;
     } catch (e) {
       return [];
@@ -579,24 +670,27 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "comment-btn";
-      btn.textContent = "💬";
+      btn.appendChild(commentIcon());
+      btn.appendChild(document.createTextNode("Comment"));
       btn.setAttribute("aria-label", "Add comment");
 
       const box = document.createElement("div");
       box.className = "comment-box";
       box.hidden = true;
 
-      const select = document.createElement("select");
-      COMMENT_TYPES.forEach(function (type) {
-        const opt = document.createElement("option");
-        opt.value = type;
-        opt.textContent = type.replace("_", " ");
-        select.appendChild(opt);
-      });
-
       const textarea = document.createElement("textarea");
       textarea.placeholder = "Add a comment…";
       textarea.rows = 3;
+
+      const blockingRow = document.createElement("label");
+      blockingRow.className = "comment-box-blocking";
+
+      const blockingBox = document.createElement("input");
+      blockingBox.type = "checkbox";
+
+      blockingRow.appendChild(blockingBox);
+      blockingRow.appendChild(warningIcon());
+      blockingRow.appendChild(document.createTextNode("Blocks approval"));
 
       const actions = document.createElement("div");
       actions.className = "comment-box-actions";
@@ -611,8 +705,8 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
 
       actions.appendChild(addBtn);
       actions.appendChild(cancelBtn);
-      box.appendChild(select);
       box.appendChild(textarea);
+      box.appendChild(blockingRow);
       box.appendChild(actions);
 
       btn.addEventListener("click", function () {
@@ -622,14 +716,16 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
 
       cancelBtn.addEventListener("click", function () {
         textarea.value = "";
+        blockingBox.checked = false;
         box.hidden = true;
       });
 
       addBtn.addEventListener("click", function () {
         const text = textarea.value.trim();
         if (!text) return;
-        comments.push(core.makeComment(ref, select.value, quote, text));
+        comments.push(core.makeComment(ref, quote, text, blockingBox.checked));
         textarea.value = "";
+        blockingBox.checked = false;
         box.hidden = true;
         renderCount();
         persist();

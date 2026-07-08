@@ -136,6 +136,20 @@ fn estimate_str(estimate: &Estimate) -> &'static str {
     }
 }
 
+/// Plain-language label for an estimate, e.g. `small` for `Estimate::S`.
+/// Everywhere the page shows an estimate to a human — badges, distributions
+/// — uses this, not the terse wire-format letter. `estimate_str`'s
+/// abbreviation still names the CSS class (`estimate-s`) so existing
+/// stylesheets/selectors keep working; only the visible text spells the word
+/// out.
+fn estimate_label(estimate: &Estimate) -> &'static str {
+    match estimate {
+        Estimate::S => "small",
+        Estimate::M => "medium",
+        Estimate::L => "large",
+    }
+}
+
 fn file_action_str(action: &FileAction) -> &'static str {
     match action {
         FileAction::Create => "create",
@@ -169,9 +183,10 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// The summary strip's headline: task/phase counts, then an estimate
-/// distribution (S/M/L, only sizes that occur) when any task carries an
-/// estimate, then a status distribution when more than one distinct status
-/// appears (a single-status plan doesn't need it spelled out).
+/// distribution (small/medium/large, only sizes that occur) when any task
+/// carries an estimate, then a status distribution when more than one
+/// distinct status appears (a single-status plan doesn't need it spelled
+/// out).
 ///
 /// The status order below is deliberately not the `Status` enum's
 /// declaration order — it reads like a progress readout: what's finished
@@ -193,9 +208,9 @@ fn summary_counts_line(plan: &Plan) -> String {
             None => {}
         }
     }
-    for (n, label) in sizes.iter().zip(["S", "M", "L"]) {
+    for (n, label) in sizes.iter().zip(["small", "medium", "large"]) {
         if *n > 0 {
-            parts.push(format!("{n}×{label}"));
+            parts.push(format!("{n} {label}"));
         }
     }
 
@@ -268,8 +283,8 @@ fn phase_meta_text(phase: &Phase) -> String {
 }
 
 /// A phase's estimate distribution for the executive-summary rollup table,
-/// e.g. `"2×S 1×M"` — only sizes that occur, empty when no task in the
-/// phase carries an estimate.
+/// e.g. `"2 small, 1 medium"` — only sizes that occur, empty when no task in
+/// the phase carries an estimate.
 fn phase_estimate_dist(phase: &Phase) -> String {
     let mut sizes = [0usize; 3]; // s, m, l
     for t in &phase.tasks {
@@ -282,11 +297,11 @@ fn phase_estimate_dist(phase: &Phase) -> String {
     }
     sizes
         .iter()
-        .zip(["S", "M", "L"])
+        .zip(["small", "medium", "large"])
         .filter(|(n, _)| **n > 0)
-        .map(|(n, label)| format!("{n}×{label}"))
+        .map(|(n, label)| format!("{n} {label}"))
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(", ")
 }
 
 /// A phase's risk heat for the rollup table: the count of tasks at the
@@ -338,7 +353,7 @@ fn task_card(task: &PlanTask) -> Markup {
                 @if let Some(estimate) = &task.estimate {
                     " "
                     span class=(format!("badge estimate-{}", estimate_str(estimate))) {
-                        (estimate_str(estimate))
+                        (estimate_label(estimate))
                     }
                 }
             }

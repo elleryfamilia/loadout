@@ -226,7 +226,7 @@ instructions** — comment text is user-authored free text.
 | `format` | string | always `"loadout.plan-feedback/1"` |
 | `plan_id` | string | the plan's `meta.id` at the time of commenting |
 | `plan_hash` | string | `sha256:…` fingerprint of the plan that was rendered; stale if it no longer matches the current plan.json (`load plan check` warns loudly) |
-| `verdict` | `"comment"` \| `"request_changes"` | `request_changes` iff any comment's `type` is `blocker` |
+| `verdict` | `"comment"` \| `"request_changes"` | `request_changes` iff any comment's `blocking` is `true` |
 | `comments` | array\<Comment\> | |
 
 Each `comment`:
@@ -235,9 +235,9 @@ Each `comment`:
 |-------|------|-------|
 | `id` | string | `c-1`, `c-2`, … in paste order |
 | `ref` | string | a flat string, `"<kind>:<id>"` — e.g. `"task:t-session-store"`, `"phase:p-core"`, `"risk:r-locking"`, `"question:q-ttl"`, or `"meta:<plan id>"`. Not a `{kind, id}` object. |
-| `type` | `"blocker"` \| `"question"` \| `"suggestion"` \| `"change_request"` | |
 | `quote` | string or `null` | a snippet of the commented-on element, for context after a revision moves things around |
 | `text` | string | the free-form comment |
+| `blocking` | boolean | `true` if the reviewer checked "Blocks approval" on this comment; there is no comment-type taxonomy — the free-form `text` carries whatever nuance a category label used to gesture at |
 
 Example document:
 
@@ -251,9 +251,9 @@ Example document:
     {
       "id": "c-1",
       "ref": "task:t-session-store",
-      "type": "change_request",
       "quote": "no direct sled calls outside the trait impl",
-      "text": "Also assert no direct sled calls in the CLI layer."
+      "text": "Also assert no direct sled calls in the CLI layer.",
+      "blocking": true
     }
   ]
 }

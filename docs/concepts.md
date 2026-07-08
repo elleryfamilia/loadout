@@ -186,12 +186,13 @@ thing after a re-render.
 
 **The feedback contract.** Each comment carries a `ref` (`"task:t-foo"`,
 `"phase:p-core"`, `"risk:r-locking"`, `"question:q-ttl"`, or `"meta:<plan
-id>"`), a `type` (`blocker` / `question` / `suggestion` / `change_request`),
-the free-form `text`, and a `quote` of the commented-on element for context.
-The feedback document also carries the `plan_hash` of the plan it was written
-against and an overall `verdict` (`request_changes` if any comment is a
-`blocker`, `comment` otherwise); `load plan check` warns loudly if
-`plan-feedback.json` targets a plan that no longer matches (stale feedback).
+id>"`), the free-form `text`, a `quote` of the commented-on element for
+context, and a `blocking` boolean — there is no comment-type taxonomy, just a
+single "Blocks approval" checkbox on the comment box. The feedback document
+also carries the `plan_hash` of the plan it was written against and an
+overall `verdict` (`request_changes` if any comment is `blocking`, `comment`
+otherwise); `load plan check` warns loudly if `plan-feedback.json` targets a
+plan that no longer matches (stale feedback).
 
 `load plan` (no subcommand) prints status — whether a plan exists, whether the
 render is fresh, whether feedback is pending — and `load plan clean` (also

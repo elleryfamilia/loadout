@@ -5,23 +5,27 @@
 
   const core = {
     parseIsland(text) { return JSON.parse(text); },
-    makeComment(ref, type, quote, text) {
-      return { ref: ref, type: type, quote: quote || null, text: text };
+    /* `blocking` replaces the old 4-way `type` taxonomy: a comment either
+       blocks approval or it doesn't -- the free-form `text` carries whatever
+       nuance a category label used to gesture at. Defaults to false so
+       existing non-blocking callers don't need to pass it. */
+    makeComment(ref, quote, text, blocking) {
+      return { ref: ref, quote: quote || null, text: text, blocking: !!blocking };
     },
     buildFeedback(plan, fingerprint, comments) {
       const doc = {
         format: "loadout.plan-feedback/1",
         plan_id: plan.meta.id,
         plan_hash: fingerprint,
-        verdict: comments.some(c => c.type === "blocker") ? "request_changes" : "comment",
+        verdict: comments.some(c => c.blocking) ? "request_changes" : "comment",
         comments: comments.map((c, i) => ({
           id: "c-" + (i + 1),
-          ref: c.ref, type: c.type, quote: c.quote, text: c.text,
+          ref: c.ref, quote: c.quote, text: c.text, blocking: !!c.blocking,
         })),
       };
       const lines = ["## Plan feedback — " + plan.meta.id, ""];
       for (const c of doc.comments) {
-        lines.push("### " + c.ref + " — " + c.type);
+        lines.push("### " + c.ref + (c.blocking ? " — BLOCKS APPROVAL" : ""));
         /* Blockquote every line of free-form comment text so a "```" line
            in it reads as "> ```" -- that can't open a top-level fence, and
            any fence it does open stays contained inside the blockquote. */
@@ -56,9 +60,10 @@
       const plan = core.parseIsland(document.getElementById("plan-data").textContent);
       const fp = document.body.getAttribute("data-plan-fingerprint");
       const fb = core.buildFeedback(plan, fp,
-        [core.makeComment("task:t-session-store", "blocker", "q", "needs work")]);
+        [core.makeComment("task:t-session-store", "q", "needs work", true)]);
       const parsed = JSON.parse(fb.json);
       if (parsed.verdict !== "request_changes") throw new Error("verdict");
+      if (parsed.comments[0].blocking !== true) throw new Error("blocking");
       if (parsed.plan_hash !== fp) throw new Error("hash");
       if (fb.combined.indexOf("```json") !== 0) throw new Error("combined shape");
     });
@@ -76,8 +81,51 @@
 
   /* ---- DOM layer -------------------------------------------------- */
 
-  const COMMENT_TYPES = ["blocker", "question", "suggestion", "change_request"];
   const BANNER_TEXT = "comments live in this page — copy feedback before closing";
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  /* A small stroke-based icon built via createElementNS -- never innerHTML,
+     so the markup can't smuggle anything through it -- `paths` is a list of
+     `d` attribute strings, one <path> per entry. */
+  function svgIcon(className, paths) {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    svg.setAttribute("class", className);
+    paths.forEach(function (d) {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+    });
+    return svg;
+  }
+
+  /* Speech-bubble icon for the comment button: bubble outline plus two
+     short lines standing in for text. */
+  function commentIcon() {
+    return svgIcon("comment-btn-icon", [
+      "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+      "M7 8h10M7 12h6",
+    ]);
+  }
+
+  /* Warning-triangle icon for the "Blocks approval" checkbox: triangle
+     outline plus an exclamation mark (stem + dot as one path). */
+  function warningIcon() {
+    return svgIcon("blocking-icon", [
+      "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z",
+      "M12 9v4M12 17h.01",
+    ]);
+  }
 
   /* First 80 chars of the element's heading text: the element itself when
      it is a heading, else the first h1–h6 descendant, else its own
@@ -103,6 +151,16 @@
       if (!stored || stored.fingerprint !== fingerprint || !Array.isArray(stored.comments)) {
         return [];
       }
+      /* Old draft shape carried a `type` field (blocker/question/suggestion/
+         change_request) instead of a `blocking` boolean. Restoring one of
+         those as-is would silently resurrect the retired taxonomy, so
+         discard the whole draft rather than partially restore it broken --
+         the fingerprint gate above already covers the "plan changed"
+         case; this covers "the draft's own shape changed". */
+      const hasOldShape = stored.comments.some(function (c) {
+        return c && Object.prototype.hasOwnProperty.call(c, "type");
+      });
+      if (hasOldShape) return [];
       return stored.comments;
     } catch (e) {
       return [];
@@ -243,24 +301,27 @@
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "comment-btn";
-      btn.textContent = "💬";
+      btn.appendChild(commentIcon());
+      btn.appendChild(document.createTextNode("Comment"));
       btn.setAttribute("aria-label", "Add comment");
 
       const box = document.createElement("div");
       box.className = "comment-box";
       box.hidden = true;
 
-      const select = document.createElement("select");
-      COMMENT_TYPES.forEach(function (type) {
-        const opt = document.createElement("option");
-        opt.value = type;
-        opt.textContent = type.replace("_", " ");
-        select.appendChild(opt);
-      });
-
       const textarea = document.createElement("textarea");
       textarea.placeholder = "Add a comment…";
       textarea.rows = 3;
+
+      const blockingRow = document.createElement("label");
+      blockingRow.className = "comment-box-blocking";
+
+      const blockingBox = document.createElement("input");
+      blockingBox.type = "checkbox";
+
+      blockingRow.appendChild(blockingBox);
+      blockingRow.appendChild(warningIcon());
+      blockingRow.appendChild(document.createTextNode("Blocks approval"));
 
       const actions = document.createElement("div");
       actions.className = "comment-box-actions";
@@ -275,8 +336,8 @@
 
       actions.appendChild(addBtn);
       actions.appendChild(cancelBtn);
-      box.appendChild(select);
       box.appendChild(textarea);
+      box.appendChild(blockingRow);
       box.appendChild(actions);
 
       btn.addEventListener("click", function () {
@@ -286,14 +347,16 @@
 
       cancelBtn.addEventListener("click", function () {
         textarea.value = "";
+        blockingBox.checked = false;
         box.hidden = true;
       });
 
       addBtn.addEventListener("click", function () {
         const text = textarea.value.trim();
         if (!text) return;
-        comments.push(core.makeComment(ref, select.value, quote, text));
+        comments.push(core.makeComment(ref, quote, text, blockingBox.checked));
         textarea.value = "";
+        blockingBox.checked = false;
         box.hidden = true;
         renderCount();
         persist();
