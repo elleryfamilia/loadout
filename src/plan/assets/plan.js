@@ -120,6 +120,35 @@
     }
   }
 
+  function reviewedKey(planId, fingerprint) {
+    return "loadout-plan-reviewed:" + planId + ":" + fingerprint;
+  }
+
+  function loadReviewed(planId, fingerprint) {
+    try {
+      const raw = window.localStorage.getItem(reviewedKey(planId, fingerprint));
+      if (!raw) return [];
+      const stored = JSON.parse(raw);
+      if (!stored || stored.fingerprint !== fingerprint || !Array.isArray(stored.refs)) {
+        return [];
+      }
+      return stored.refs;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveReviewed(planId, fingerprint, refs) {
+    try {
+      window.localStorage.setItem(
+        reviewedKey(planId, fingerprint),
+        JSON.stringify({ fingerprint: fingerprint, refs: refs })
+      );
+    } catch (e) {
+      /* best-effort only — same caveats as saveDrafts above */
+    }
+  }
+
   function copyToClipboard(text, done) {
     function fallback() {
       const ta = document.createElement("textarea");
@@ -175,6 +204,10 @@
     const count = document.createElement("span");
     count.className = "feedback-bar-count";
     bar.appendChild(count);
+
+    const reviewedCount = document.createElement("span");
+    reviewedCount.className = "feedback-bar-reviewed";
+    bar.appendChild(reviewedCount);
 
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
@@ -276,6 +309,115 @@
       el.appendChild(btn);
       el.appendChild(box);
     });
+
+    /* ---- expand/collapse all ---- */
+    const firstPhase = document.querySelector("details.phase");
+    if (firstPhase) {
+      function collapsibles() {
+        return document.querySelectorAll("details.phase, details.graph");
+      }
+
+      const ctl = document.createElement("div");
+      ctl.className = "expand-ctl";
+
+      const expandBtn = document.createElement("button");
+      expandBtn.type = "button";
+      expandBtn.textContent = "Expand all";
+      expandBtn.addEventListener("click", function () {
+        collapsibles().forEach(function (d) { d.open = true; });
+      });
+
+      const collapseBtn = document.createElement("button");
+      collapseBtn.type = "button";
+      collapseBtn.textContent = "Collapse all";
+      collapseBtn.addEventListener("click", function () {
+        collapsibles().forEach(function (d) { d.open = false; });
+      });
+
+      ctl.appendChild(expandBtn);
+      ctl.appendChild(collapseBtn);
+      firstPhase.parentNode.insertBefore(ctl, firstPhase);
+
+      /* Printing (or a reader stepping through word-by-word with find-in-
+         page) needs every phase/graph visible -- expand everything just
+         before print, then restore whatever state the user had before. */
+      let preprintState = null;
+      window.addEventListener("beforeprint", function () {
+        preprintState = Array.from(collapsibles()).map(function (d) { return d.open; });
+        collapsibles().forEach(function (d) { d.open = true; });
+      });
+      window.addEventListener("afterprint", function () {
+        if (!preprintState) return;
+        collapsibles().forEach(function (d, i) { d.open = preprintState[i]; });
+        preprintState = null;
+      });
+    }
+
+    /* ---- reviewed-state checkboxes ---- */
+    const reviewed = new Set(loadReviewed(plan.meta.id, fingerprint));
+    function persistReviewed() {
+      saveReviewed(plan.meta.id, fingerprint, Array.from(reviewed));
+    }
+
+    /* Only real task cards (data-plan-ref="task:…") count toward the K/N
+       ratio in the feedback bar. Phases also get a reviewed checkbox (on
+       their summary line) so a reviewer can mark a whole phase read at a
+       glance, but a phase isn't a task, so folding it into the same
+       denominator would mix units and complicate the arithmetic — N stays
+       exactly "how many tasks", full stop. */
+    const taskEls = document.querySelectorAll('.task[data-plan-ref^="task:"]');
+
+    function renderReviewedCount() {
+      let k = 0;
+      taskEls.forEach(function (el) {
+        if (reviewed.has(el.getAttribute("data-plan-ref"))) k++;
+      });
+      reviewedCount.textContent = k + "/" + taskEls.length + " reviewed";
+    }
+
+    function addReviewedBox(container, ref) {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.className = "reviewed-box";
+      box.setAttribute("aria-label", "mark reviewed");
+      box.checked = reviewed.has(ref);
+      if (box.checked) container.classList.add("is-reviewed");
+      box.addEventListener("click", function (e) {
+        /* A checkbox nested inside a <summary> still bubbles its click up
+           to the <summary>'s default action (toggling the parent
+           <details> open/closed) unless stopped here -- checking the box
+           should not also collapse or expand the phase. */
+        e.stopPropagation();
+      });
+      box.addEventListener("change", function () {
+        if (box.checked) {
+          reviewed.add(ref);
+          container.classList.add("is-reviewed");
+        } else {
+          reviewed.delete(ref);
+          container.classList.remove("is-reviewed");
+        }
+        persistReviewed();
+        renderReviewedCount();
+      });
+      return box;
+    }
+
+    document.querySelectorAll("details.phase").forEach(function (details) {
+      const ref = details.getAttribute("data-plan-ref");
+      const heading = details.querySelector("summary h2");
+      if (!ref || !heading) return;
+      heading.appendChild(addReviewedBox(details, ref));
+    });
+
+    taskEls.forEach(function (el) {
+      const ref = el.getAttribute("data-plan-ref");
+      if (!ref) return;
+      const heading = el.querySelector("h3") || el;
+      heading.appendChild(addReviewedBox(el, ref));
+    });
+
+    renderReviewedCount();
   }
 
   function run() {
