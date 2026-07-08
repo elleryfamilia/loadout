@@ -8,6 +8,54 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.13.0 — 2026-07-08
+
+A security-focused release. loadout now guarantees that no secret reaches an
+agent — not the generated context files, and not the launch prompt — tracks
+out-of-band changes to your scripts, lints imported workflow text for prompt
+injection, and adds a security review to the packaged verify step. Everything
+runs at render time; nothing stays resident and no new LLM calls are made.
+
+### Added
+
+- **Secret redaction is now a guarantee, not a best effort.** Every value
+  loadout renders — fragment guidance, params, fragment titles, and the output
+  of a script or provider (both its text and its structured data) — is scanned
+  for token-like secrets before it is written. A match is replaced with
+  `***REDACTED***` and you get one warning naming the fragment. A final pass at
+  the point of writing re-checks the overlay and every generated command file,
+  and provider data is scrubbed before it is cached to disk. Content authored by
+  the repo itself (e.g. an `AGENTS.md` copied into the override) is deliberately
+  left alone.
+- **`load doctor` scans your config for secrets.** It reads the raw text of each
+  config file, including the private `local.toml`, and points at the file and
+  line so you remove the credential at its source (multi-line private keys
+  included).
+- **Config health checks run on every `load refresh`.** The fast, read-only
+  subset of `load doctor` (dangling references, ambiguous default loadout,
+  gitignore coverage, the new secret and injection scans, and more) now runs
+  automatically during refresh. A healthy config adds no output; problems show
+  as warning lines. `load doctor` remains the full diagnostic.
+- **Per-machine script trust.** loadout records a hash of each fragment and
+  target script the first time it sees it (silently), stored per machine and
+  never synced. If a script later changes outside loadout — a hand edit, a
+  `load sync` pull — you are warned before it runs, everywhere a script runs
+  (`refresh`, `run`, `doctor`, target detection), until you re-approve it with
+  `load fragments trust <id>` or `load targets trust <id>`. Editing through
+  `load studio` or `load edit` counts as approval. `load trust` shows the store;
+  `load trust --rebuild` recovers a corrupted one. The script still runs this
+  release — the policy is warn, not block.
+- **Prompt-injection lint on imported workflows.** Imported `[[workflows]]` step
+  text is checked for instruction-override phrasing, role reassignment,
+  concealment, exfiltration-shaped URLs, and hidden Unicode, surfaced in
+  `load doctor` and `load refresh` as warnings.
+- **Security review in the verify step.** The generated `verify` command now
+  asks Claude Code to run its `/code-review` and `/security-review`; agents
+  without native review commands get a vendored copy of Anthropic's
+  security-review prompt instead.
+- **Verified install channels** are documented in the README so a binary from
+  anywhere else reads as untrusted.
+
 ## 0.12.0 — 2026-07-03
 
 ### Added
