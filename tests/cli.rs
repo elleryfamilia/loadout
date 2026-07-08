@@ -2465,3 +2465,63 @@ fn hook_remove_honors_dry_run() {
         .stdout(predicate::str::contains("dry run — would remove"));
     assert_eq!(before, fx.read_home(".cursor/hooks.json"));
 }
+
+#[test]
+fn plan_status_ensures_gitignore_before_any_artifact_exists() {
+    let f = Fixture::new();
+    f.git_init();
+    f.cmd().args(["plan"]).assert().success();
+    let ignore = f.read(".gitignore");
+    assert!(ignore.contains(".loadout/workflow/artifacts/plan.json"));
+    assert!(ignore.contains(".loadout/workflow/artifacts/plan-feedback.json"));
+    assert!(ignore.contains(".loadout/generated/"));
+    // Status reports the missing input rather than failing.
+    f.cmd()
+        .args(["plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no plan.json"));
+}
+
+#[test]
+fn plan_check_reports_pointer_errors_as_json() {
+    let f = Fixture::new();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A", "depends_on": ["t-ghost"] } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "check", "--json"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("\"code\":\"unknown_ref\""))
+        .stdout(predicate::str::contains("/phases/0/tasks/0/depends_on/0"));
+}
+
+#[test]
+fn plan_check_passes_valid_input_and_warns_on_stale_feedback() {
+    let f = Fixture::new();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("plan.json is valid"));
+    f.write(
+        ".loadout/workflow/artifacts/plan-feedback.json",
+        r#"{ "format": "loadout.plan-feedback/1", "plan_id": "other",
+             "plan_hash": "sha256:dead", "comments": [] }"#,
+    );
+    f.cmd()
+        .args(["plan", "check"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("feedback"));
+}
