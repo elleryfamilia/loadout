@@ -1,4 +1,4 @@
-<!-- loadout:generated context=sha256:e58b3199d2e615fe7238fab045b559848faca1b2af41ec508eb401c8ce8aac8f -->
+<!-- loadout:generated context=sha256:d18dd490db010a952aa91383df54e468d6456110f1dc4cce9dcef2a65b463c6b -->
 <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Auth refactor — loadout plan</title><style>/* loadout plan viewer — inline stylesheet, no external URLs of any kind. */
 
 :root {
@@ -73,29 +73,118 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
   padding: 0.9rem 1.1rem;
 }
 
+/* Executive summary — the first thing in the summary card, slightly larger
+   than body text since it carries the most weight per word on the page. */
+.summary-exec {
+  font-size: 1.05em;
+  margin: 0 0 0.6rem;
+}
+
+.summary-exec p { margin: 0 0 0.5rem; }
+.summary-exec p:last-child { margin-bottom: 0; }
+
+.summary-missing {
+  margin: 0;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.summary-keypoints {
+  margin: 0 0 0.75rem;
+  padding-left: 1.25rem;
+}
+
+.summary-keypoints li { margin: 0.3rem 0; }
+/* render_markdown wraps each bullet's text in <p>…</p> — un-block it so a
+   one-line bullet doesn't get its own paragraph spacing inside the <li>. */
+.summary-keypoints li p { display: inline; margin: 0; }
+
+.summary-outofscope {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+}
+
+.summary-outofscope strong { color: var(--fg); }
+
 .summary-counts {
-  margin: 0 0 0.4rem;
+  margin: 0 0 0.5rem;
   font-size: 1.1em;
   font-weight: 600;
 }
 
-.summary-risks { margin: 0; color: var(--muted); }
+.summary-risks { margin: 0.5rem 0 0; color: var(--muted); }
 .summary-risks.has-high { color: var(--danger); font-weight: 600; }
 
-.summary-blocking {
-  margin-top: 0.6rem;
-  padding-top: 0.6rem;
-  border-top: 1px dashed var(--border);
+/* The ask banner — computed, not authored: loud red when something is
+   blocking, calm green once nothing is. */
+.summary-ask {
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 6px;
+  font-weight: 600;
 }
 
-.blocking-warn {
-  margin: 0 0 0.35rem;
+.summary-ask.has-blocking {
   color: var(--danger);
-  font-weight: 700;
+  border: 1px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
-.blocking-list { margin: 0; padding-left: 1.25rem; }
-.blocking-list a { font-weight: 600; }
+.summary-ask:not(.has-blocking) {
+  color: var(--success);
+  border: 1px solid var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+
+.summary-ask a { color: inherit; text-decoration: underline; }
+
+.summary-phases {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 0.25rem;
+  font-size: 0.9em;
+}
+
+.summary-phases th,
+.summary-phases td {
+  text-align: left;
+  padding: 0.3rem 0.6rem 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.summary-phases th { color: var(--muted); font-weight: 600; }
+.summary-phases tbody tr:last-child td { border-bottom: none; }
+
+/* Expand/collapse-all control, injected just above the phase list. */
+.expand-ctl {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.expand-ctl button {
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 0.25em 0.7em;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.expand-ctl button:hover { color: var(--fg); border-color: var(--accent); }
+
+/* Reviewed-state tracking: a small checkbox on a phase's summary line or a
+   task card's heading; checking it dims the whole card slightly. */
+.reviewed-box {
+  width: 1rem;
+  height: 1rem;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.is-reviewed { opacity: 0.6; }
 
 [data-plan-ref] { position: relative; }
 
@@ -224,6 +313,7 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
 .feedback-bar-banner { color: var(--muted); flex: 1; }
 .feedback-bar-restored { color: var(--accent); }
 .feedback-bar-count { color: var(--fg); font-weight: 600; }
+.feedback-bar-reviewed { color: var(--fg); font-weight: 600; }
 
 .feedback-bar-copy {
   border: 1px solid var(--accent);
@@ -234,13 +324,17 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
   cursor: pointer;
   font-weight: 600;
 }
-</style></head><body data-plan-fingerprint="sha256:e58b3199d2e615fe7238fab045b559848faca1b2af41ec508eb401c8ce8aac8f"><header><h1>Auth refactor</h1><p class="meta" data-plan-ref="meta:auth-refactor">plan <code>auth-refactor</code> · revision 2 · by claude</p><p>Extract <em>session</em> handling.</p>
-</header><section class="plan-summary"><p class="summary-counts">5 tasks · 2 phases · 1×S · 1×M · 1×L · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><p class="summary-risks has-high">1 risk (1 high)</p><div class="summary-blocking"><p class="blocking-warn">⚠ 1 blocking question(s)</p><ul class="blocking-list"><li><a href="#question-q-ttl">Session TTL?</a></li></ul></div></section><section class="questions"><h2>Open questions</h2><div class="task" id="question-q-ttl" data-plan-ref="question:q-ttl"><span class="badge blocking">blocking</span><p>Session TTL?</p>
+</style></head><body data-plan-fingerprint="sha256:d18dd490db010a952aa91383df54e468d6456110f1dc4cce9dcef2a65b463c6b"><header><h1>Auth refactor</h1><p class="meta" data-plan-ref="meta:auth-refactor">plan <code>auth-refactor</code> · revision 2 · by claude</p><p>Extract <em>session</em> handling.</p>
+</header><section class="plan-summary"><div class="summary-exec"><p>This refactor extracts <code>SessionStore</code> behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the <em>lock contention</em> risk by sharding the store. The ask: review the trait boundary in <code>t-session-store</code> before Redis work starts.</p>
+</div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
+</li><li><p><strong>Redis backend</strong> (<code>t-redis</code>) is blocked on the trait boundary landing first.</p>
+</li><li><p><strong>Lock contention</strong> (<code>r-locking</code>) is mitigated by sharding the store, not by removing the lock.</p>
+</li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p><p class="summary-ask has-blocking">⚠ 1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></p><p class="summary-counts">5 tasks · 2 phases · 1×S · 1×M · 1×L · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><table class="summary-phases"><thead><tr><th>Phase</th><th>Tasks</th><th>Estimate</th><th>Risk</th></tr></thead><tbody><tr><td><a href="#phase-p-core">Core</a></td><td>2</td><td>1×S 1×M</td><td>1 medium</td></tr><tr><td><a href="#phase-p-backend">Backend</a></td><td>3</td><td>1×L</td><td>1 high</td></tr></tbody></table><p class="summary-risks has-high">1 risk (1 high)</p></section><section class="questions"><h2>Open questions</h2><div class="task" id="question-q-ttl" data-plan-ref="question:q-ttl"><span class="badge blocking">blocking</span><p>Session TTL?</p>
 </div><div class="task" id="question-q-name" data-plan-ref="question:q-name"><p>Trait name?</p>
 </div></section><section class="risks"><h2>Risks</h2><div class="task" data-plan-ref="risk:r-locking"><h3 id="risk-r-locking">Lock contention <span class="badge risk-high">high</span></h3><p>Shard the store.</p>
-</div></section><details class="phase" data-plan-ref="phase:p-core"><summary><h2>Core <span class="phase-meta">(2 tasks)</span></h2></summary><p>The trait seam.</p>
+</div></section><details class="phase" id="phase-p-core" data-plan-ref="phase:p-core"><summary><h2>Core <span class="phase-meta">(2 tasks)</span></h2></summary><p>The trait seam.</p>
 <div class="task" id="task-t-config-flag" data-plan-ref="task:t-config-flag"><h3>Config flag <span class="badge status-done">done</span> <span class="badge estimate-s">s</span></h3><ul class="acceptance"><li data-plan-ref="task:t-config-flag">flag parses</li></ul><ul class="validation"><li><code>cargo test config::</code></li></ul></div><div class="task" id="task-t-session-store" data-plan-ref="task:t-session-store"><h3>Introduce SessionStore trait <span class="badge status-planned">planned</span> <span class="badge risk-medium">medium</span> <span class="badge estimate-m">m</span></h3><p>Extract persistence behind a trait so <code>t-redis</code> can slot in.</p>
-<ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" data-plan-ref="phase:p-backend"><summary><h2>Backend <span class="phase-meta">(3 tasks · high risk)</span></h2></summary><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">l</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><details class="graph"><summary>Dependency graph</summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 156" width="528" height="156" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><line class="edge" x1="160" y1="138" x2="184" y2="18" marker-end="url(#arrow)"/><line class="edge" x1="344" y1="18" x2="368" y2="18" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="160" height="36"/><text x="80" y="18">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="60" width="160" height="36"/><text x="80" y="78">Remove dead code</text></a><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="120" width="160" height="36"/><text x="80" y="138">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="184" y="0" width="160" height="36"/><text x="264" y="18">Introduce SessionStore…</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="368" y="0" width="160" height="36"/><text x="448" y="18">Redis backend</text></a></svg></details><script type="application/json" id="plan-data">{"format":"loadout.plan/1","meta":{"id":"auth-refactor","title":"Auth refactor","goal_md":"\u003cp\u003eExtract \u003cem\u003esession\u003c/em\u003e handling.\u003c/p\u003e\n","agent":"claude","created":"2026-07-07","revision":2},"phases":[{"id":"p-core","title":"Core","summary_md":"\u003cp\u003eThe trait seam.\u003c/p\u003e\n","tasks":[{"id":"t-config-flag","title":"Config flag","status":"done","acceptance":["flag parses"],"validation":["cargo test config::"],"estimate":"s"},{"id":"t-session-store","title":"Introduce SessionStore trait","summary_md":"\u003cp\u003eExtract persistence behind a trait so \u003ccode\u003et-redis\u003c/code\u003e can slot in.\u003c/p\u003e\n","status":"planned","risk":"medium","depends_on":["t-config-flag"],"files":[{"path":"src/auth/session.rs","action":"modify","note":"extract trait"},{"path":"src/auth/store.rs","action":"create"},{"path":"tests/auth.rs","action":"test"}],"acceptance":["existing session tests pass unchanged","no direct sled calls outside the trait impl"],"validation":["cargo test auth::"],"estimate":"m"}]},{"id":"p-backend","title":"Backend","tasks":[{"id":"t-redis","title":"Redis backend","status":"blocked","risk":"high","depends_on":["t-session-store"],"estimate":"l"},{"id":"t-cleanup","title":"Remove dead code","status":"in_progress"},{"id":"t-bench","title":"Benchmarks","status":"cut","risk":"low"}]}],"risks":[{"id":"r-locking","title":"Lock contention","severity":"high","mitigation_md":"\u003cp\u003eShard the store.\u003c/p\u003e\n"}],"open_questions":[{"id":"q-ttl","question_md":"\u003cp\u003eSession TTL?\u003c/p\u003e\n","blocking":true},{"id":"q-name","question_md":"\u003cp\u003eTrait name?\u003c/p\u003e\n","blocking":false}]}</script><script>/* loadout plan viewer — progressive enhancement over server-rendered HTML.
+<ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" id="phase-p-backend" data-plan-ref="phase:p-backend"><summary><h2>Backend <span class="phase-meta">(3 tasks · high risk)</span></h2></summary><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">l</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><details class="graph"><summary>Dependency graph</summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 528 156" width="528" height="156" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><line class="edge" x1="160" y1="138" x2="184" y2="18" marker-end="url(#arrow)"/><line class="edge" x1="344" y1="18" x2="368" y2="18" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="160" height="36"/><text x="80" y="18">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="60" width="160" height="36"/><text x="80" y="78">Remove dead code</text></a><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="120" width="160" height="36"/><text x="80" y="138">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="184" y="0" width="160" height="36"/><text x="264" y="18">Introduce SessionStore…</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="368" y="0" width="160" height="36"/><text x="448" y="18">Redis backend</text></a></svg></details><script type="application/json" id="plan-data">{"format":"loadout.plan/1","meta":{"id":"auth-refactor","title":"Auth refactor","goal_md":"\u003cp\u003eExtract \u003cem\u003esession\u003c/em\u003e handling.\u003c/p\u003e\n","summary_md":"\u003cp\u003eThis refactor extracts \u003ccode\u003eSessionStore\u003c/code\u003e behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the \u003cem\u003elock contention\u003c/em\u003e risk by sharding the store. The ask: review the trait boundary in \u003ccode\u003et-session-store\u003c/code\u003e before Redis work starts.\u003c/p\u003e\n","key_points":["\u003cp\u003e\u003cstrong\u003eTrait extraction\u003c/strong\u003e decouples session persistence from its backing store, gated behind a config flag.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eRedis backend\u003c/strong\u003e (\u003ccode\u003et-redis\u003c/code\u003e) is blocked on the trait boundary landing first.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eLock contention\u003c/strong\u003e (\u003ccode\u003er-locking\u003c/code\u003e) is mitigated by sharding the store, not by removing the lock.\u003c/p\u003e\n"],"out_of_scope":["Migrating existing sessions between backends","Multi-region session replication"],"agent":"claude","created":"2026-07-07","revision":2},"phases":[{"id":"p-core","title":"Core","summary_md":"\u003cp\u003eThe trait seam.\u003c/p\u003e\n","tasks":[{"id":"t-config-flag","title":"Config flag","status":"done","acceptance":["flag parses"],"validation":["cargo test config::"],"estimate":"s"},{"id":"t-session-store","title":"Introduce SessionStore trait","summary_md":"\u003cp\u003eExtract persistence behind a trait so \u003ccode\u003et-redis\u003c/code\u003e can slot in.\u003c/p\u003e\n","status":"planned","risk":"medium","depends_on":["t-config-flag"],"files":[{"path":"src/auth/session.rs","action":"modify","note":"extract trait"},{"path":"src/auth/store.rs","action":"create"},{"path":"tests/auth.rs","action":"test"}],"acceptance":["existing session tests pass unchanged","no direct sled calls outside the trait impl"],"validation":["cargo test auth::"],"estimate":"m"}]},{"id":"p-backend","title":"Backend","tasks":[{"id":"t-redis","title":"Redis backend","status":"blocked","risk":"high","depends_on":["t-session-store"],"estimate":"l"},{"id":"t-cleanup","title":"Remove dead code","status":"in_progress"},{"id":"t-bench","title":"Benchmarks","status":"cut","risk":"low"}]}],"risks":[{"id":"r-locking","title":"Lock contention","severity":"high","mitigation_md":"\u003cp\u003eShard the store.\u003c/p\u003e\n"}],"open_questions":[{"id":"q-ttl","question_md":"\u003cp\u003eSession TTL?\u003c/p\u003e\n","blocking":true},{"id":"q-name","question_md":"\u003cp\u003eTrait name?\u003c/p\u003e\n","blocking":false}]}</script><script>/* loadout plan viewer — progressive enhancement over server-rendered HTML.
    Pure core first (no DOM), DOM layer second, #selftest harness last. */
 (function () {
   "use strict";
@@ -362,6 +456,35 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
     }
   }
 
+  function reviewedKey(planId, fingerprint) {
+    return "loadout-plan-reviewed:" + planId + ":" + fingerprint;
+  }
+
+  function loadReviewed(planId, fingerprint) {
+    try {
+      const raw = window.localStorage.getItem(reviewedKey(planId, fingerprint));
+      if (!raw) return [];
+      const stored = JSON.parse(raw);
+      if (!stored || stored.fingerprint !== fingerprint || !Array.isArray(stored.refs)) {
+        return [];
+      }
+      return stored.refs;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveReviewed(planId, fingerprint, refs) {
+    try {
+      window.localStorage.setItem(
+        reviewedKey(planId, fingerprint),
+        JSON.stringify({ fingerprint: fingerprint, refs: refs })
+      );
+    } catch (e) {
+      /* best-effort only — same caveats as saveDrafts above */
+    }
+  }
+
   function copyToClipboard(text, done) {
     function fallback() {
       const ta = document.createElement("textarea");
@@ -417,6 +540,10 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
     const count = document.createElement("span");
     count.className = "feedback-bar-count";
     bar.appendChild(count);
+
+    const reviewedCount = document.createElement("span");
+    reviewedCount.className = "feedback-bar-reviewed";
+    bar.appendChild(reviewedCount);
 
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
@@ -518,6 +645,115 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
       el.appendChild(btn);
       el.appendChild(box);
     });
+
+    /* ---- expand/collapse all ---- */
+    const firstPhase = document.querySelector("details.phase");
+    if (firstPhase) {
+      function collapsibles() {
+        return document.querySelectorAll("details.phase, details.graph");
+      }
+
+      const ctl = document.createElement("div");
+      ctl.className = "expand-ctl";
+
+      const expandBtn = document.createElement("button");
+      expandBtn.type = "button";
+      expandBtn.textContent = "Expand all";
+      expandBtn.addEventListener("click", function () {
+        collapsibles().forEach(function (d) { d.open = true; });
+      });
+
+      const collapseBtn = document.createElement("button");
+      collapseBtn.type = "button";
+      collapseBtn.textContent = "Collapse all";
+      collapseBtn.addEventListener("click", function () {
+        collapsibles().forEach(function (d) { d.open = false; });
+      });
+
+      ctl.appendChild(expandBtn);
+      ctl.appendChild(collapseBtn);
+      firstPhase.parentNode.insertBefore(ctl, firstPhase);
+
+      /* Printing (or a reader stepping through word-by-word with find-in-
+         page) needs every phase/graph visible -- expand everything just
+         before print, then restore whatever state the user had before. */
+      let preprintState = null;
+      window.addEventListener("beforeprint", function () {
+        preprintState = Array.from(collapsibles()).map(function (d) { return d.open; });
+        collapsibles().forEach(function (d) { d.open = true; });
+      });
+      window.addEventListener("afterprint", function () {
+        if (!preprintState) return;
+        collapsibles().forEach(function (d, i) { d.open = preprintState[i]; });
+        preprintState = null;
+      });
+    }
+
+    /* ---- reviewed-state checkboxes ---- */
+    const reviewed = new Set(loadReviewed(plan.meta.id, fingerprint));
+    function persistReviewed() {
+      saveReviewed(plan.meta.id, fingerprint, Array.from(reviewed));
+    }
+
+    /* Only real task cards (data-plan-ref="task:…") count toward the K/N
+       ratio in the feedback bar. Phases also get a reviewed checkbox (on
+       their summary line) so a reviewer can mark a whole phase read at a
+       glance, but a phase isn't a task, so folding it into the same
+       denominator would mix units and complicate the arithmetic — N stays
+       exactly "how many tasks", full stop. */
+    const taskEls = document.querySelectorAll('.task[data-plan-ref^="task:"]');
+
+    function renderReviewedCount() {
+      let k = 0;
+      taskEls.forEach(function (el) {
+        if (reviewed.has(el.getAttribute("data-plan-ref"))) k++;
+      });
+      reviewedCount.textContent = k + "/" + taskEls.length + " reviewed";
+    }
+
+    function addReviewedBox(container, ref) {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.className = "reviewed-box";
+      box.setAttribute("aria-label", "mark reviewed");
+      box.checked = reviewed.has(ref);
+      if (box.checked) container.classList.add("is-reviewed");
+      box.addEventListener("click", function (e) {
+        /* A checkbox nested inside a <summary> still bubbles its click up
+           to the <summary>'s default action (toggling the parent
+           <details> open/closed) unless stopped here -- checking the box
+           should not also collapse or expand the phase. */
+        e.stopPropagation();
+      });
+      box.addEventListener("change", function () {
+        if (box.checked) {
+          reviewed.add(ref);
+          container.classList.add("is-reviewed");
+        } else {
+          reviewed.delete(ref);
+          container.classList.remove("is-reviewed");
+        }
+        persistReviewed();
+        renderReviewedCount();
+      });
+      return box;
+    }
+
+    document.querySelectorAll("details.phase").forEach(function (details) {
+      const ref = details.getAttribute("data-plan-ref");
+      const heading = details.querySelector("summary h2");
+      if (!ref || !heading) return;
+      heading.appendChild(addReviewedBox(details, ref));
+    });
+
+    taskEls.forEach(function (el) {
+      const ref = el.getAttribute("data-plan-ref");
+      if (!ref) return;
+      const heading = el.querySelector("h3") || el;
+      heading.appendChild(addReviewedBox(el, ref));
+    });
+
+    renderReviewedCount();
   }
 
   function run() {

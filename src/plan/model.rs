@@ -4,7 +4,17 @@ pub const FORMAT: &str = "loadout.plan/1";
 pub const MAX_INPUT_BYTES: usize = 2 * 1024 * 1024;
 
 pub const PLAN_FIELDS: &[&str] = &["format", "meta", "phases", "risks", "open_questions"];
-pub const META_FIELDS: &[&str] = &["id", "title", "goal_md", "agent", "created", "revision"];
+pub const META_FIELDS: &[&str] = &[
+    "id",
+    "title",
+    "goal_md",
+    "summary_md",
+    "key_points",
+    "out_of_scope",
+    "agent",
+    "created",
+    "revision",
+];
 pub const PHASE_FIELDS: &[&str] = &["id", "title", "summary_md", "tasks"];
 pub const TASK_FIELDS: &[&str] = &[
     "id",
@@ -40,6 +50,17 @@ pub struct Meta {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_md: Option<String>,
+    /// Executive summary (markdown). Rendered at the very top of the page,
+    /// above open questions/risks/phases — see `render::render`'s
+    /// `section.plan-summary`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_md: Option<String>,
+    /// Bullet points backing the executive summary (each item is markdown).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub key_points: Vec<String>,
+    /// Explicit non-goals, rendered as plain text (no markdown).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub out_of_scope: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -317,6 +338,8 @@ pub const MAX_RISKS: usize = 100;
 pub const MAX_QUESTIONS: usize = 100;
 pub const MAX_EDGES: usize = 2000;
 pub const MAX_STRING: usize = 10_000;
+pub const MAX_KEY_POINTS: usize = 25;
+pub const MAX_OUT_OF_SCOPE: usize = 25;
 const ID_HINT: &str = "ids match ^[a-z][a-z0-9_-]{0,63}$ and are unique document-wide";
 
 fn id_ok(id: &str) -> bool {
@@ -369,6 +392,42 @@ fn check_strings(plan: &Plan, errs: &mut Vec<Issue>) {
                 "/meta/created",
                 "string_too_long",
                 format!("created is {} chars (limit {MAX_STRING})", created.len()),
+            ));
+        }
+    }
+    if let Some(summary_md) = &plan.meta.summary_md {
+        if summary_md.len() > MAX_STRING {
+            errs.push(Issue::new(
+                "/meta/summary_md",
+                "string_too_long",
+                format!(
+                    "summary_md is {} chars (limit {MAX_STRING})",
+                    summary_md.len()
+                ),
+            ));
+        }
+    }
+    for (ki, item) in plan.meta.key_points.iter().enumerate() {
+        if item.len() > MAX_STRING {
+            errs.push(Issue::new(
+                format!("/meta/key_points/{ki}"),
+                "string_too_long",
+                format!(
+                    "key_points item is {} chars (limit {MAX_STRING})",
+                    item.len()
+                ),
+            ));
+        }
+    }
+    for (oi, item) in plan.meta.out_of_scope.iter().enumerate() {
+        if item.len() > MAX_STRING {
+            errs.push(Issue::new(
+                format!("/meta/out_of_scope/{oi}"),
+                "string_too_long",
+                format!(
+                    "out_of_scope item is {} chars (limit {MAX_STRING})",
+                    item.len()
+                ),
             ));
         }
     }
@@ -614,6 +673,18 @@ pub fn validate(plan: &Plan) -> Vec<Issue> {
             "/open_questions",
         ),
         ("dependency edges", edges.len(), MAX_EDGES, "/phases"),
+        (
+            "key_points",
+            plan.meta.key_points.len(),
+            MAX_KEY_POINTS,
+            "/meta/key_points",
+        ),
+        (
+            "out_of_scope",
+            plan.meta.out_of_scope.len(),
+            MAX_OUT_OF_SCOPE,
+            "/meta/out_of_scope",
+        ),
     ] {
         if n > max {
             errs.push(Issue::new(
@@ -851,5 +922,17 @@ mod tests {
     fn kitchen_sink_is_fully_valid() {
         let p = parse(&fixture("kitchen-sink.json"), false).unwrap().plan;
         assert!(validate(&p).is_empty());
+    }
+
+    #[test]
+    fn too_many_key_points_is_rejected() {
+        let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
+        p.meta.key_points = (0..26).map(|i| format!("point {i}")).collect();
+        let errs = validate(&p);
+        assert!(
+            errs.iter()
+                .any(|e| e.code == "too_many" && e.path == "/meta/key_points"),
+            "{errs:?}"
+        );
     }
 }

@@ -45,9 +45,13 @@ fn md(text: &Option<String>) -> Markup {
     }
 }
 
-/// A copy of `plan` with every markdown field (`goal_md`, `summary_md`,
-/// `mitigation_md`, `question_md`) replaced by its sanitized HTML rendering,
-/// for the JSON data island.
+/// A copy of `plan` with every markdown field (`goal_md`, `meta.summary_md`,
+/// `meta.key_points`, phase/task `summary_md`, `mitigation_md`,
+/// `question_md`) replaced by its sanitized HTML rendering, for the JSON
+/// data island. `meta.out_of_scope` is left as-is: the visible page renders
+/// it as plain escaped text (never through the markdown sanitizer), so
+/// there's nothing to sanitize here either — same rationale as `title` and
+/// other plain-text fields, which this function also leaves untouched.
 ///
 /// `escape_json_island`'s character escaping (below) already makes the
 /// island inert as HTML/script content — `</script>` and `<!--` can't
@@ -71,6 +75,17 @@ fn sanitized_for_island(plan: &Plan) -> Plan {
         .goal_md
         .as_deref()
         .map(crate::markdown::render_markdown);
+    p.meta.summary_md = p
+        .meta
+        .summary_md
+        .as_deref()
+        .map(crate::markdown::render_markdown);
+    p.meta.key_points = p
+        .meta
+        .key_points
+        .iter()
+        .map(|s| crate::markdown::render_markdown(s))
+        .collect();
     for phase in &mut p.phases {
         phase.summary_md = phase
             .summary_md
@@ -252,6 +267,52 @@ fn phase_meta_text(phase: &Phase) -> String {
     )
 }
 
+/// A phase's estimate distribution for the executive-summary rollup table,
+/// e.g. `"2×S 1×M"` — only sizes that occur, empty when no task in the
+/// phase carries an estimate.
+fn phase_estimate_dist(phase: &Phase) -> String {
+    let mut sizes = [0usize; 3]; // s, m, l
+    for t in &phase.tasks {
+        match t.estimate {
+            Some(Estimate::S) => sizes[0] += 1,
+            Some(Estimate::M) => sizes[1] += 1,
+            Some(Estimate::L) => sizes[2] += 1,
+            None => {}
+        }
+    }
+    sizes
+        .iter()
+        .zip(["S", "M", "L"])
+        .filter(|(n, _)| **n > 0)
+        .map(|(n, label)| format!("{n}×{label}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A phase's risk heat for the rollup table: the count of tasks at the
+/// *highest* risk severity present in the phase, e.g. `"1 high"`. A phase
+/// with one high-risk task and two medium-risk tasks reports only "1 high"
+/// — once a higher severity is present, the lower counts don't also need
+/// spelling out in this compact a cell. Empty when no task in the phase
+/// carries a risk rating.
+fn phase_risk_heat(phase: &Phase) -> String {
+    let mut counts = [0usize; 3]; // high, medium, low
+    for t in &phase.tasks {
+        match t.risk {
+            Some(RiskLevel::High) => counts[0] += 1,
+            Some(RiskLevel::Medium) => counts[1] += 1,
+            Some(RiskLevel::Low) => counts[2] += 1,
+            None => {}
+        }
+    }
+    counts
+        .iter()
+        .zip(["high", "medium", "low"])
+        .find(|(n, _)| **n > 0)
+        .map(|(n, label)| format!("{n} {label}"))
+        .unwrap_or_default()
+}
+
 /// One task card: heading with status/risk/estimate badges, the markdown
 /// summary, a file touch list, an acceptance checklist, validation commands,
 /// and a "depends on" line linking to the other cards' anchors.
@@ -355,26 +416,78 @@ pub fn render(plan: &Plan) -> String {
                     (md(&plan.meta.goal_md))
                 }
                 section.plan-summary {
-                    p.summary-counts { (summary_counts_line(plan)) }
-                    @if let Some((line, has_high)) = &risk_line {
-                        p class=(if *has_high { "summary-risks has-high" } else { "summary-risks" }) {
-                            (line)
+                    // (a) The executive summary itself — the top of the page,
+                    // so a reader who stops here still gets a correct
+                    // high-level picture. Never fabricated: absent summary_md
+                    // gets a plain note, not invented content.
+                    div.summary-exec {
+                        @if let Some(summary) = &plan.meta.summary_md {
+                            (PreEscaped(crate::markdown::render_markdown(summary)))
+                        } @else {
+                            p.summary-missing {
+                                "No executive summary — the plan author can set meta.summary_md."
+                            }
                         }
                     }
-                    @if !blocking.is_empty() {
-                        div.summary-blocking {
-                            p.blocking-warn {
-                                (format!("⚠ {} blocking question(s)", blocking.len()))
+                    // (b) Supporting bullets, one per major workstream/decision.
+                    @if !plan.meta.key_points.is_empty() {
+                        ul.summary-keypoints {
+                            @for kp in &plan.meta.key_points {
+                                li { (PreEscaped(crate::markdown::render_markdown(kp))) }
                             }
-                            ul.blocking-list {
-                                @for q in &blocking {
-                                    li {
-                                        a href=(format!("#question-{}", q.id)) {
-                                            (truncate_chars(&q.question_md, 100))
-                                        }
+                        }
+                    }
+                    // (c) Explicit non-goals, plain text (no markdown).
+                    @if !plan.meta.out_of_scope.is_empty() {
+                        p.summary-outofscope {
+                            strong { "Out of scope: " }
+                            @for (i, item) in plan.meta.out_of_scope.iter().enumerate() {
+                                @if i > 0 { ", " }
+                                (item)
+                            }
+                        }
+                    }
+                    // (d) The ask: whether this plan can move forward as-is.
+                    p class=(if !blocking.is_empty() { "summary-ask has-blocking" } else { "summary-ask" }) {
+                        @if !blocking.is_empty() {
+                            (format!(
+                                "⚠ {} blocking question(s) must be resolved before implementation: ",
+                                blocking.len()
+                            ))
+                            @for (i, q) in blocking.iter().enumerate() {
+                                @if i > 0 { ", " }
+                                a href=(format!("#question-{}", q.id)) {
+                                    (truncate_chars(&q.question_md, 100))
+                                }
+                            }
+                        } @else {
+                            "No blocking questions — plan is ready to review and approve."
+                        }
+                    }
+                    // (e) Whole-plan counts, then a per-phase rollup table,
+                    // then the risk register counts (distinct from the
+                    // per-task risk heat shown per phase below).
+                    p.summary-counts { (summary_counts_line(plan)) }
+                    @if !plan.phases.is_empty() {
+                        table.summary-phases {
+                            thead {
+                                tr { th { "Phase" } th { "Tasks" } th { "Estimate" } th { "Risk" } }
+                            }
+                            tbody {
+                                @for phase in &plan.phases {
+                                    tr {
+                                        td { a href=(format!("#phase-{}", phase.id)) { (phase.title) } }
+                                        td { (phase.tasks.len().to_string()) }
+                                        td { (phase_estimate_dist(phase)) }
+                                        td { (phase_risk_heat(phase)) }
                                     }
                                 }
                             }
+                        }
+                    }
+                    @if let Some((line, has_high)) = &risk_line {
+                        p class=(if *has_high { "summary-risks has-high" } else { "summary-risks" }) {
+                            (line)
                         }
                     }
                 }
@@ -407,7 +520,7 @@ pub fn render(plan: &Plan) -> String {
                     }
                 }
                 @for phase in &plan.phases {
-                    details.phase data-plan-ref=(format!("phase:{}", phase.id)) {
+                    details.phase id=(format!("phase-{}", phase.id)) data-plan-ref=(format!("phase:{}", phase.id)) {
                         summary {
                             h2 {
                                 (phase.title)
@@ -517,11 +630,66 @@ mod tests {
         assert!(html.contains("5 tasks"), "{html}");
         assert!(html.contains("2 phases"), "{html}");
 
-        // (b) blocking question link, anchored to its full entry.
+        // (b) executive summary block: present, with a distinctive
+        // substring from the fixture's summary_md (through the sanitizer,
+        // so the backtick becomes a <code> tag — assert on surrounding
+        // plain text instead).
+        let exec_pos = html
+            .find("<div class=\"summary-exec\">")
+            .expect("summary-exec");
+        assert!(
+            html.contains("closes the <em>lock contention</em> risk"),
+            "{html}"
+        );
+        // (checked against the body markup, not a bare substring match —
+        // the class name also appears once in the embedded <style> block's
+        // `.summary-missing { … }` rule regardless of whether it's used).
+        assert!(!html.contains("<p class=\"summary-missing\">"), "{html}");
+
+        // (c) key points: 3 <li> inside summary-keypoints.
+        let keypoints_start = html
+            .find("<ul class=\"summary-keypoints\">")
+            .expect("summary-keypoints");
+        let keypoints_end = html[keypoints_start..]
+            .find("</ul>")
+            .map(|i| keypoints_start + i)
+            .expect("summary-keypoints closes");
+        let keypoints_html = &html[keypoints_start..keypoints_end];
+        assert_eq!(
+            keypoints_html.matches("<li>").count(),
+            3,
+            "{keypoints_html}"
+        );
+        assert!(
+            keypoints_html.contains("<strong>Trait extraction</strong>"),
+            "{keypoints_html}"
+        );
+
+        // (d) out-of-scope line.
+        assert!(
+            html.contains("<p class=\"summary-outofscope\"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p>"),
+            "{html}"
+        );
+
+        // (e) ask banner: has-blocking, with the q-ttl link.
+        let ask_pos = html
+            .find("<p class=\"summary-ask has-blocking\">")
+            .expect("summary-ask has-blocking");
+        assert!(
+            html.contains("⚠ 1 blocking question(s) must be resolved before implementation"),
+            "{html}"
+        );
         assert!(html.contains("href=\"#question-q-ttl\""), "{html}");
 
-        // (c) order by byte position: summary < open questions < risks <
-        // first phase details < graph details.
+        // (f) phase rollup table: link to #phase-p-core, matching anchor id
+        // on the phase's own details element.
+        assert!(html.contains("<table class=\"summary-phases\">"), "{html}");
+        assert!(html.contains("href=\"#phase-p-core\""), "{html}");
+        assert!(html.contains("id=\"phase-p-core\""), "{html}");
+
+        // (g) order by byte position: summary block pieces in document
+        // order, summary < open questions < risks < first phase details <
+        // graph details.
         let open_q_pos = html.find("Open questions").expect("open questions heading");
         let risks_pos = html.find(">Risks<").expect("risks heading");
         let phase_pos = html
@@ -530,17 +698,46 @@ mod tests {
         let graph_pos = html
             .find("<details class=\"graph\"")
             .expect("graph details");
+        assert!(summary_pos < exec_pos, "summary section before exec block");
+        assert!(exec_pos < ask_pos, "exec block before ask banner");
         assert!(summary_pos < open_q_pos, "summary before open questions");
         assert!(open_q_pos < risks_pos, "open questions before risks");
         assert!(risks_pos < phase_pos, "risks before first phase");
         assert!(phase_pos < graph_pos, "phases before the whole-plan graph");
 
-        // (d) phases (and the graph) are collapsed by default.
+        // (h) phases (and the graph) are collapsed by default.
         assert!(!html.contains("<details class=\"phase\" open"), "{html}");
         assert!(!html.contains("<details class=\"graph\" open"), "{html}");
 
-        // (e) the blocking link's target anchor exists.
+        // (i) the blocking link's target anchor exists.
         assert!(html.contains("id=\"question-q-ttl\""), "{html}");
+    }
+
+    #[test]
+    fn no_summary_shows_missing_note_and_ready_state() {
+        let plan = plan_from("minimal.json");
+        let html = render(&plan);
+
+        assert!(plan.meta.summary_md.is_none());
+        assert!(plan.open_questions.is_empty());
+
+        assert!(
+            html.contains(
+                "<p class=\"summary-missing\">No executive summary — the plan author can set meta.summary_md.</p>"
+            ),
+            "{html}"
+        );
+        // (checked against the elements the renderer would emit, not a bare
+        // substring match — both class names also appear once in the
+        // embedded <style> block's rules regardless of whether they're used).
+        assert!(!html.contains("<ul class=\"summary-keypoints\">"), "{html}");
+        assert!(!html.contains("<p class=\"summary-outofscope\">"), "{html}");
+        assert!(
+            html.contains(
+                "<p class=\"summary-ask\">No blocking questions — plan is ready to review and approve.</p>"
+            ),
+            "{html}"
+        );
     }
 
     #[test]

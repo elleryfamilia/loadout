@@ -1,7 +1,15 @@
 {
   "format": "loadout.plan/1",
   "meta": { "id": "auth-refactor", "title": "Auth refactor",
-            "goal_md": "Extract *session* handling.", "agent": "claude",
+            "goal_md": "Extract *session* handling.",
+            "summary_md": "This refactor extracts `SessionStore` behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the *lock contention* risk by sharding the store. The ask: review the trait boundary in `t-session-store` before Redis work starts.",
+            "key_points": [
+              "**Trait extraction** decouples session persistence from its backing store, gated behind a config flag.",
+              "**Redis backend** (`t-redis`) is blocked on the trait boundary landing first.",
+              "**Lock contention** (`r-locking`) is mitigated by sharding the store, not by removing the lock."
+            ],
+            "out_of_scope": [ "Migrating existing sessions between backends", "Multi-region session replication" ],
+            "agent": "claude",
             "created": "2026-07-07", "revision": 2 },
   "phases": [
     { "id": "p-core", "title": "Core", "summary_md": "The trait seam.",
