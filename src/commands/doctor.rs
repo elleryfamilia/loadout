@@ -283,6 +283,13 @@ fn check_script_dropouts(c: &mut Checks, prep: &super::Prepared) {
     println!("\nScript fragments ({} probed)", scripts.len());
     let mut clean = 0usize;
     for f in scripts {
+        // Doctor is a script execution site too: warn on an out-of-band change
+        // before running the script, same as render/run/refresh and target
+        // detection do — otherwise `load doctor` would silently run a changed
+        // script while every other path warns.
+        if let Some(hashes) = crate::trust::fragment_hashes(f) {
+            crate::trust::check_and_warn(crate::trust::Kind::Fragment, &f.id, &hashes);
+        }
         let cmd = f.command.as_deref().unwrap_or_default();
         let out = crate::providers::run_once_in(cmd, f.script_lang.as_deref(), &prep.repo_base);
         let status = out.data.get("status").and_then(serde_json::Value::as_i64);

@@ -812,6 +812,36 @@ fn doctor_flags_repo_declared_caps_and_profiles() {
 }
 
 #[test]
+fn doctor_warns_when_a_script_fragment_changed_outside_loadout() {
+    // `load doctor` executes script fragments to diagnose output-dropping, so it
+    // is a script execution site and must warn on an out-of-band change like the
+    // render/run/refresh paths do.
+    let fx = Fixture::new();
+    fx.rust_project();
+    let cfg = "[[fragments]]\n\
+               id = \"probe\"\n\
+               command = \"echo hi\"\n\
+               guidance = \"{{ provider.output }}\"\n";
+    fx.author(cfg);
+    // First doctor run records the script hash (TOFU), silently.
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("changed outside loadout").not());
+    // Change the script body out-of-band (hand edit / sync pull).
+    fx.author(&cfg.replace("echo hi", "echo bye"));
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "script fragment 'probe' changed outside loadout",
+        ))
+        .stderr(predicate::str::contains("load fragments trust probe"));
+}
+
+#[test]
 fn off_repo_launch_prompt_redacts_workflow_map_secrets() {
     // Off-repo (cwd == $HOME), Claude's context is delivered at launch via
     // `--append-system-prompt` built from `profile_guidance`, which embeds the
