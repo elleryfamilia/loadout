@@ -1,15 +1,16 @@
 # Testing loadout
 
-Two levels: the **automated suite** (fast, zero side effects) and a **hands-on
-walkthrough** that drives the real CLI in a sandbox. The output below is real
-(trimmed; machine-specific values shown as placeholders).
+Three levels: the **automated suite** (fast, zero side effects), a **hands-on
+walkthrough** that drives the real CLI in a sandbox, and a **browser smoke test**
+for the plan viewer. The output below is real (trimmed; machine-specific values
+shown as placeholders).
 
 ## Level 1 — Automated tests (~30s, no side effects)
 
 ```bash
 git clone https://github.com/elleryfamilia/loadout
 cd loadout
-cargo test                      # → 263 tests passing
+cargo test                      # → full suite passes
 cargo clippy --all-targets      # → no warnings
 cargo fmt --check               # → clean
 ```

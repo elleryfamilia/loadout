@@ -23,9 +23,9 @@ version and date (see [RELEASING.md](RELEASING.md)).
   them too). Rendering is deterministic (same `plan.json` + same loadout
   version → byte-identical HTML) and fully self-contained — no CDN, no
   external fetches. See [docs/concepts.md](docs/concepts.md#plan-previews-implemented).
-- **Per-skill install/remove toggles** — `load studio`'s skills card now lets
-  you install or remove each embedded skill individually, instead of only
-  all-or-nothing via `load skill install`/`remove`.
+- **Per-skill install/remove toggles** — Studio: per-skill install/remove toggles
+  on the skills card (previously the card only offered install-all; the CLI's
+  `load skill install/remove <id>` already supported single skills).
 
 ### Security
 
