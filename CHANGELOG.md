@@ -23,6 +23,15 @@ version and date (see [RELEASING.md](RELEASING.md)).
   them too). Rendering is deterministic (same `plan.json` + same loadout
   version → byte-identical HTML) and fully self-contained — no CDN, no
   external fetches. See [docs/concepts.md](docs/concepts.md#plan-previews-implemented).
+  The page is built to be reviewed: an agent-authored executive summary with
+  key points and out-of-scope (`meta.summary_md` / `key_points` /
+  `out_of_scope`), a computed ask banner and per-phase rollup table, blocking
+  questions surfaced first, phases collapsed behind labeled ordinals with
+  expand-all, a phase-level dependency graph, per-task reviewed checkboxes,
+  and a 16-icon vocabulary (`icon` on phases/tasks, vendored Lucide) — set in
+  embedded Inter (vendored, OFL). Reviewer comments are plain text plus one
+  "Blocks approval" checkbox; "Copy feedback" emits a `loadout.plan-feedback/1`
+  document whose `verdict` is `request_changes` iff any comment blocks.
 - **Per-skill install/remove toggles** — Studio: per-skill install/remove toggles
   on the skills card (previously the card only offered install-all; the CLI's
   `load skill install/remove <id>` already supported single skills).
