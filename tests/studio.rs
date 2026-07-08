@@ -28,6 +28,9 @@ fn spawn_studio_args(extra: &[&str]) -> (Child, tempfile::TempDir, u16, String) 
         .args(extra)
         // Isolate the global config dir so the test never touches ~/.config.
         .env("LOADOUT_CONFIG_DIR", dir.path().join("empty-global"))
+        // Isolate the per-machine trust store so this test never touches the
+        // developer's real state dir.
+        .env("LOADOUT_STATE_DIR", dir.path().join("state"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

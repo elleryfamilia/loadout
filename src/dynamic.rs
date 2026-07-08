@@ -76,6 +76,11 @@ pub fn resolve(
                 error: None,
             });
         }
+        if live {
+            if let Some(hashes) = crate::trust::fragment_hashes(cap) {
+                crate::trust::check_and_warn(crate::trust::Kind::Fragment, &cap.id, &hashes);
+            }
+        }
         let key = format!("cmd-{}", cap.id);
         let (output, error) = match providers::run_command(
             command,

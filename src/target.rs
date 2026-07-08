@@ -399,6 +399,20 @@ pub fn detect_custom(custom: &[TargetDef], repo_base: &Path, live: bool) -> Vec<
         if t.disabled || reserved.contains(&t.id) || matched.contains(&t.id) {
             continue;
         }
+        // Trust check is per-target (the whole hash SET), before any of its
+        // scripts run — see src/trust.rs. Live only: cache-only evaluation
+        // never executes, so it must never warn either. Unlike the fragment
+        // site (which sits after its allow_exec gate), the SET deliberately
+        // covers nested scripts even when `allow_exec = false` — nothing
+        // executes for those; warning on the whole target definition is
+        // defense-in-depth.
+        if live && t.rule.has_script() {
+            crate::trust::check_and_warn(
+                crate::trust::Kind::Target,
+                &t.id,
+                &crate::trust::target_hashes(t),
+            );
+        }
         if eval_rule(&t.rule, &t.id, repo_base, live) {
             matched.push(t.id.clone());
         }
@@ -429,11 +443,13 @@ fn eval_rule(rule: &TargetRule, id: &str, repo_base: &Path, live: bool) -> bool 
                 .and_then(crate::providers::parse_duration)
                 .unwrap_or(DEFAULT_SCRIPT_TTL);
             // Key by target id + a hash of the script body, so editing the
-            // script busts the cached verdict.
+            // script busts the cached verdict. Shares its recipe with
+            // `trust::script_hash` (the trust-store hash) so the two can
+            // never silently desync.
             let key = format!(
                 "target-{}-{}",
                 id,
-                crate::hash::context_hash(&(command, script_lang))
+                crate::trust::script_hash(command, script_lang.as_deref())
             );
             crate::providers::run_predicate(
                 command,

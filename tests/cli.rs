@@ -63,6 +63,9 @@ impl Fixture {
         // Isolate $HOME so agent dotfile writes (e.g. Gemini's
         // ~/.gemini/settings.json registration) never touch the real home.
         c.env("HOME", self.global.path().join("home"));
+        // Isolate the per-machine trust store (the HOME override already
+        // covers the fallback path; the explicit var makes asserts addressable).
+        c.env("LOADOUT_STATE_DIR", self.global.path().join("state"));
         c.arg("--cwd").arg(self.repo.path());
         c
     }
@@ -2657,4 +2660,145 @@ fn refresh_healthy_config_adds_no_warning_lines() {
         .assert()
         .success()
         .stdout(predicate::str::contains("⚠").not());
+}
+
+#[test]
+fn script_change_outside_loadout_warns_on_refresh() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    let cfg = "[[fragments]]\n\
+               id = \"probe\"\n\
+               command = \"echo one\"\n\
+               guidance = \"{{ provider.output }}\"\n\
+               \n\
+               [[loadouts]]\n\
+               name = \"dev\"\n\
+               fragments = [\"probe\"]\n";
+    fx.author(cfg);
+    // First sighting: TOFU records silently.
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("changed outside loadout").not());
+    assert!(fx.global.path().join("state").join("trust.json").exists());
+    // Rewriting the config file simulates a hand edit / `load sync` pull.
+    fx.author(&cfg.replace("echo one", "echo two"));
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "script fragment 'probe' changed outside loadout",
+        ))
+        .stderr(predicate::str::contains("load fragments trust probe"));
+}
+
+#[test]
+fn target_script_change_warns_with_targets_trust_hint() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    let cfg = "[[targets]]\n\
+               id = \"has-make\"\n\
+               rule = { kind = \"script\", command = \"test -f Makefile\" }\n";
+    fx.author(cfg);
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success();
+    fx.author(&cfg.replace("test -f Makefile", "test -f makefile"));
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "target 'has-make' script changed outside loadout",
+        ))
+        .stderr(predicate::str::contains("load targets trust has-make"));
+}
+
+#[test]
+fn fragments_trust_clears_a_change_warning() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    let cfg = "[[fragments]]\n\
+               id = \"probe\"\n\
+               command = \"echo one\"\n\
+               guidance = \"{{ provider.output }}\"\n\
+               \n\
+               [[loadouts]]\n\
+               name = \"dev\"\n\
+               fragments = [\"probe\"]\n";
+    fx.author(cfg);
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success(); // TOFU
+    fx.author(&cfg.replace("echo one", "echo two"));
+    fx.cmd()
+        .args(["fragments", "trust", "probe"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("trusted fragment 'probe'"));
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("changed outside loadout").not());
+}
+
+#[test]
+fn fragments_trust_rejects_unknown_and_scriptless_ids() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    fx.cmd()
+        .args(["fragments", "trust", "nope"])
+        .assert()
+        .failure();
+    fx.cmd()
+        .args(["fragments", "trust", "rust-conventions"]) // static fragment
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no script"));
+}
+
+#[test]
+fn corrupt_trust_store_is_loud_and_rebuild_recovers() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\n\
+         id = \"probe\"\n\
+         command = \"echo one\"\n\
+         guidance = \"{{ provider.output }}\"\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"dev\"\n\
+         fragments = [\"probe\"]\n",
+    );
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success(); // TOFU
+    let trust_path = fx.global.path().join("state").join("trust.json");
+    std::fs::write(&trust_path, "{ not json").unwrap();
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("trust store is unreadable"));
+    // NOT treated as empty: nothing was re-recorded over the corrupt bytes.
+    assert_eq!(std::fs::read_to_string(&trust_path).unwrap(), "{ not json");
+    fx.cmd()
+        .args(["trust", "--rebuild"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rebuilt"));
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("trust store").not())
+        .stderr(predicate::str::contains("changed outside loadout").not());
 }

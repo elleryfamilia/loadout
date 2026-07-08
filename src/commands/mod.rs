@@ -18,6 +18,7 @@ pub mod refresh;
 pub mod run;
 pub mod skill;
 pub mod sync;
+pub mod trust;
 pub mod update;
 
 use std::path::PathBuf;
