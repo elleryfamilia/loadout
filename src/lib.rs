@@ -38,6 +38,7 @@ pub mod hash;
 pub mod lint;
 pub mod markdown;
 pub mod pack;
+pub mod plan;
 pub mod profile;
 pub mod providers;
 pub mod redact;

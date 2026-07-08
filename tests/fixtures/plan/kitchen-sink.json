@@ -1,0 +1,32 @@
+{
+  "format": "loadout.plan/1",
+  "meta": { "id": "auth-refactor", "title": "Auth refactor",
+            "goal_md": "Extract *session* handling.", "agent": "claude",
+            "created": "2026-07-07", "revision": 2 },
+  "phases": [
+    { "id": "p-core", "title": "Core", "summary_md": "The trait seam.",
+      "tasks": [
+        { "id": "t-config-flag", "title": "Config flag", "status": "done",
+          "estimate": "s", "acceptance": ["flag parses"], "validation": ["cargo test config::"] },
+        { "id": "t-session-store", "title": "Introduce SessionStore trait",
+          "summary_md": "Extract persistence behind a trait so `t-redis` can slot in.",
+          "status": "planned", "risk": "medium", "depends_on": ["t-config-flag"],
+          "files": [ { "path": "src/auth/session.rs", "action": "modify", "note": "extract trait" },
+                     { "path": "src/auth/store.rs", "action": "create" },
+                     { "path": "tests/auth.rs", "action": "test" } ],
+          "acceptance": [ "existing session tests pass unchanged",
+                          "no direct sled calls outside the trait impl" ],
+          "validation": [ "cargo test auth::" ], "estimate": "m" }
+      ] },
+    { "id": "p-backend", "title": "Backend", "tasks": [
+        { "id": "t-redis", "title": "Redis backend", "status": "blocked",
+          "risk": "high", "depends_on": ["t-session-store"], "estimate": "l" },
+        { "id": "t-cleanup", "title": "Remove dead code", "status": "in_progress" },
+        { "id": "t-bench", "title": "Benchmarks", "status": "cut", "risk": "low" }
+      ] }
+  ],
+  "risks": [ { "id": "r-locking", "title": "Lock contention", "severity": "high",
+               "mitigation_md": "Shard the store." } ],
+  "open_questions": [ { "id": "q-ttl", "question_md": "Session TTL?", "blocking": true },
+                      { "id": "q-name", "question_md": "Trait name?" } ]
+}
