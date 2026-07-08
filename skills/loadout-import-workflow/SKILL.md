@@ -124,6 +124,9 @@ already ships — they can bind it directly instead of importing a duplicate.
 9. **Validate** (and fix anything flagged):
    - `load doctor` — should print `active workflow: '<id>'` (global) or
      `loadout '<profile>' → workflow '<id>'`, and no workflow warnings.
+     If doctor flags any imported step text (injection lint or otherwise),
+     show the warnings to the user verbatim and get an explicit go-ahead —
+     or strip the flagged text — before declaring the import done.
    - `load refresh` (or `load run <agent>`) — regenerates the
      `.claude/commands/loadout/*.md` (and other agents') so the six commands
      now carry the imported workflow's steps. Spot-check one.

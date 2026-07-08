@@ -93,6 +93,8 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     report(&mut c, checks::public_leaks(&prep.config));
     // Secret-looking strings in any config source layer (incl. local.toml).
     report(&mut c, checks::secret_leaks(&prep.config));
+    // Prompt-injection-shaped phrasing in imported workflow step text.
+    report(&mut c, checks::injection(&prep.config));
     // Script fragments whose output loadout would silently drop (non-zero exit).
     check_script_dropouts(&mut c, &prep);
 

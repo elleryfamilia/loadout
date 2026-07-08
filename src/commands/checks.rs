@@ -236,6 +236,34 @@ pub fn workflows(cfg: &config::Config) -> Vec<Finding> {
     findings
 }
 
+/// Injection lint over imported instruction-bearing content: your
+/// `[[workflows]]` step text. Built-ins are vendored verbatim and covered by
+/// the lint's own corpus test, so they are not re-scanned here.
+pub fn injection(cfg: &config::Config) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for wf in &cfg.workflows {
+        for st in &wf.stages {
+            for text in [st.purpose.as_deref(), st.instructions.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                for label in crate::lint::find_injection(text) {
+                    findings.push(Finding::warn(format!(
+                        "workflow '{}' step '{}': {label} — review the imported text or remove it",
+                        wf.id, st.name,
+                    )));
+                }
+            }
+        }
+    }
+    if findings.is_empty() {
+        findings.push(Finding::ok(
+            "no injection-shaped text in imported workflows",
+        ));
+    }
+    findings
+}
+
 pub fn gitignore(repo_base: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
     let gi = std::fs::read_to_string(repo_base.join(".gitignore")).unwrap_or_default();
@@ -280,6 +308,7 @@ pub fn refresh_subset(cfg: &config::Config, repo_base: &std::path::Path) -> Vec<
     out.extend(dangling_fragment_refs(cfg));
     out.extend(default_loadout(cfg));
     out.extend(workflows(cfg));
+    out.extend(injection(cfg));
     // Repo-file checks only where loadout is actually wired into this repo —
     // an off-repo refresh must stay silent (see commit b23e225).
     if config::repo_dir(repo_base).exists() {
