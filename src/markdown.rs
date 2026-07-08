@@ -89,7 +89,8 @@ pub fn render_markdown(md: &str) -> String {
 }
 
 /// Whether a link destination is allowed: http(s), mailto, an intra-document
-/// fragment, or a scheme-less relative reference. Checked case-insensitively
+/// fragment, or a scheme-less relative reference (protocol-relative `//host`
+/// forms are rejected — they navigate externally). Checked case-insensitively
 /// after stripping ASCII control and whitespace characters (defeats
 /// `java\tscript:`-style smuggling).
 fn safe_url(dest: &str) -> bool {
@@ -102,7 +103,7 @@ fn safe_url(dest: &str) -> bool {
         || lower.starts_with("http://")
         || lower.starts_with("https://")
         || lower.starts_with("mailto:")
-        || !lower.contains(':')
+        || (!lower.contains(':') && !lower.starts_with("//"))
 }
 
 /// Strip leading `<!-- … -->` comments (generated headers) before rendering.
@@ -136,6 +137,8 @@ mod tests {
             "[x](java\tscript:alert(1))",
             "[x](data:text/html,hi)",
             "[x](vbscript:x)",
+            "[x](//evil.example)",
+            "[x](\t//evil.example)",
         ] {
             let out = render_markdown(md);
             assert!(!out.contains("href"), "should de-link: {md} -> {out}");
@@ -151,6 +154,7 @@ mod tests {
             "[x](mailto:a@b.c)",
             "[x](#task-t1)",
             "[x](relative/path.md)",
+            "[x](/absolute/path.md)",
         ] {
             let out = render_markdown(md);
             assert!(out.contains("<a href="), "should link: {md} -> {out}");
