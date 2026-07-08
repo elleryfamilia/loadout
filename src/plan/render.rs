@@ -9,7 +9,7 @@
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 use crate::plan::model::{
-    plan_hash, Estimate, FileAction, Phase, Plan, PlanTask, RiskLevel, Status,
+    plan_hash, Estimate, FileAction, OpenQuestion, Phase, Plan, PlanTask, RiskLevel, Status,
 };
 use crate::plan::svg;
 
@@ -333,8 +333,7 @@ pub fn render(plan: &Plan) -> String {
     // whole plan already fits in one picture.
     let overview = svg::whole_plan_svg(plan);
     let risk_line = summary_risk_line(plan);
-    let blocking: Vec<&crate::plan::model::OpenQuestion> =
-        plan.open_questions.iter().filter(|q| q.blocking).collect();
+    let blocking: Vec<&OpenQuestion> = plan.open_questions.iter().filter(|q| q.blocking).collect();
     let page = html! {
         (DOCTYPE)
         html lang="en" {
@@ -512,7 +511,9 @@ mod tests {
         let html = render(&plan);
 
         // (a) summary strip present with the task/phase counts.
-        let summary_pos = html.find("plan-summary").expect("plan-summary present");
+        let summary_pos = html
+            .find("<section class=\"plan-summary\"")
+            .expect("plan-summary present");
         assert!(html.contains("5 tasks"), "{html}");
         assert!(html.contains("2 phases"), "{html}");
 
