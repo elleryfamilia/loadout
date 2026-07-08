@@ -55,6 +55,13 @@ fn md(text: &Option<String>) -> Markup {
 /// onerror=…>` text): nothing client-side reads these fields today (`plan.js`
 /// only ever reads `plan.meta.id`), so there's no fidelity cost to carrying
 /// the same sanitized form already used for the visible document body.
+///
+/// The island embeds a DISPLAY-SANITIZED copy of the plan: markdown fields are
+/// pre-rendered through the sanitizer so the artifact never contains raw
+/// javascript:/HTML payloads anywhere, even inertly. The island is therefore
+/// NOT the canonical model and is not what `data-plan-fingerprint` hashes
+/// (that covers the original plan.json model); consumers needing the canonical
+/// plan read plan.json from disk.
 fn sanitized_for_island(plan: &Plan) -> Plan {
     let mut p = plan.clone();
     p.meta.goal_md = p
@@ -305,7 +312,7 @@ mod tests {
         assert!(!html.contains("javascript:"));
         assert!(!html.contains("<img"));
         assert!(!html.contains("evil.example/p.png\" ")); // no fetching attr context
-                                                          // Island still parses back to the same model.
+                                                          // Island still parses as valid JSON with the same ids (markdown fields are display-sanitized, so it is not byte-identical to the input model).
         let island = html
             .split("id=\"plan-data\">")
             .nth(1)
