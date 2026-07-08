@@ -63,6 +63,19 @@ pub fn icon_svg(name: &str) -> Option<&'static str> {
     }
 }
 
+/// The vendored `chevron-right` SVG (same pinned Lucide commit as the
+/// vocabulary above — see `vendored/sources.toml`'s lucide note) — the
+/// disclosure-triangle replacement the renderer draws at the start of every
+/// `<details>` summary line (phases + the phase-dependency graph).
+///
+/// Deliberately NOT part of `icon_names()`/`icon_svg()`: it isn't something a
+/// `plan.json` author can select via `Phase.icon`/`PlanTask.icon`, it's fixed
+/// UI chrome the renderer always draws — so it stays out of the vocabulary,
+/// `unknown_icon`'s hint, and `reference.md`'s documented icon list.
+pub fn ui_chevron() -> &'static str {
+    include_str!("../../vendored/lucide/chevron-right.svg")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +95,10 @@ mod tests {
     /// them. This is the sanity check backing that assumption: verbatim
     /// downloads from an external repo, so assert none of them smuggle a
     /// `<script` element before we ever trust one enough to inline it.
+    ///
+    /// Covers `ui_chevron()` too, not just the `icon_names()` vocabulary —
+    /// it's `PreEscaped` by the renderer the same way, just outside the
+    /// author-facing vocabulary (see its doc comment).
     #[test]
     fn vendored_svgs_carry_no_script_tags() {
         for name in icon_names() {
@@ -99,6 +116,26 @@ mod tests {
                 "{name}: doesn't end with </svg>"
             );
         }
+
+        let chevron = ui_chevron();
+        assert!(
+            !chevron.to_lowercase().contains("<script"),
+            "chevron-right: vendored SVG contains a <script tag"
+        );
+        assert!(
+            chevron.trim_start().starts_with("<svg"),
+            "chevron-right: doesn't start with <svg"
+        );
+        assert!(
+            chevron.trim_end().ends_with("</svg>"),
+            "chevron-right: doesn't end with </svg>"
+        );
+    }
+
+    #[test]
+    fn ui_chevron_is_not_in_the_author_vocabulary() {
+        assert!(!icon_names().contains(&"chevron-right"));
+        assert!(icon_svg("chevron-right").is_none());
     }
 
     #[test]

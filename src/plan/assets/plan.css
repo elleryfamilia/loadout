@@ -130,14 +130,32 @@ header p:not(.meta),
   max-width: 72ch;
 }
 
+/* Section/phase-heading icons (the Summary/Risks/Phases section headings,
+   the questions section heading, each phase row's own heading, and the
+   dependency-graph disclosure): sized to
+   read as a real glyph next to the heading text, not a small bullet.
+   `vertical-align` is a negative offset (not `middle`) because these icons
+   are taller than the heading's own line-height -- an inline replaced
+   element taller than the line grows the line box to fit it, and a fixed
+   offset from the text baseline centers the glyph against the cap-height
+   text above that grown box reliably, the same technique the previous
+   17px/-3px pair already used, just rescaled. */
 .pv-icon {
-  width: 17px;
-  height: 17px;
-  vertical-align: -3px;
+  width: 32px;
+  height: 32px;
+  vertical-align: -9px;
   flex: none;
   /* A step quieter than the heading text it sits beside -- the icon is a
      scanning aid, not a second title. */
   color: var(--muted);
+}
+
+/* A task heading (render.rs's `task_card`) sits one level down the visual
+   hierarchy from a section/phase heading, so its icon stays smaller. */
+.task h3 .pv-icon {
+  width: 24px;
+  height: 24px;
+  vertical-align: -6px;
 }
 
 details.phase,
@@ -153,8 +171,43 @@ details.graph {
   box-shadow: var(--shadow);
 }
 
+/* flex + align-items: center puts the chevron on the same row as the
+   heading/text next to it and vertically centers the two against each
+   other -- the chevron (16px) and the heading's own icon+text (which can
+   run taller than one text line once .pv-icon grows to 32px) would
+   otherwise need matching vertical-align offsets tuned by hand; flex here
+   does that centering unconditionally, regardless of content height. */
 details.phase > summary,
-details.graph > summary { cursor: pointer; font-weight: 600; }
+details.graph > summary {
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+/* The default disclosure-triangle marker is replaced by the chevron below
+   (`.pv-chevron`, rendered by render.rs's `chevron_markup`) -- these are the
+   two rules that suppress it across engines: `list-style: none` covers
+   browsers that implement the marker as `::marker`/`list-style`
+   (Firefox, current Chrome/Safari), `::-webkit-details-marker` covers
+   older WebKit/Blink, which used a distinct, non-standard pseudo-element
+   before adopting `::marker`. */
+summary { list-style: none; }
+summary::-webkit-details-marker { display: none; }
+
+.pv-chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+/* Points right when collapsed, rotates down to point at the now-visible
+   content when open -- the one piece of this that has to be conditional on
+   `[open]` rather than always-on, so it can't just live on `.pv-chevron`. */
+details[open] > summary .pv-chevron { transform: rotate(90deg); }
 
 .phase-meta { color: var(--muted); font-weight: 400; font-size: 0.85em; letter-spacing: normal; }
 

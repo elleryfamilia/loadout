@@ -173,10 +173,7 @@ fn file_action_str(action: &FileAction) -> &'static str {
 /// rejects that before `render()` ever runs on a real CLI path, so this is a
 /// quiet fallback for any other caller, not a panic.
 fn icon_markup(name: &str) -> Option<Markup> {
-    let raw = icons::icon_svg(name)?;
-    let inner_start = raw.find('>')? + 1;
-    let inner_end = raw.rfind("</svg>")?;
-    let inner = &raw[inner_start..inner_end];
+    let inner = strip_svg_wrapper(icons::icon_svg(name)?)?;
     Some(html! {
         svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -188,12 +185,43 @@ fn icon_markup(name: &str) -> Option<Markup> {
 
 /// `icon_markup(name)` followed by a space, or nothing for `None` — shared by
 /// phase/task headings (the author-chosen `icon` field) and the handful of
-/// section headings with a fixed icon (risks, open questions, phase
-/// dependencies).
+/// section headings with a fixed icon (summary, risks, open questions,
+/// phases, phase dependencies).
 fn icon_prefix(name: Option<&str>) -> Markup {
     match name.and_then(icon_markup) {
         Some(svg) => html! { (svg) " " },
         None => PreEscaped(String::new()),
+    }
+}
+
+/// The inner content of a vendored `<svg>…</svg>` document (everything
+/// between the opening tag's `>` and the closing tag) — shared by
+/// `icon_markup` and `chevron_markup`, both of which drop the vendored
+/// file's own wrapper attributes and re-wrap the inner paths in their own
+/// `<svg class="…">` with the sizing/styling this renderer wants.
+fn strip_svg_wrapper(raw: &str) -> Option<&str> {
+    let inner_start = raw.find('>')? + 1;
+    let inner_end = raw.rfind("</svg>")?;
+    Some(&raw[inner_start..inner_end])
+}
+
+/// The disclosure chevron drawn at the start of every `<details>` summary
+/// line (phases + the phase-dependency graph) — UI chrome, not part of the
+/// author-facing icon vocabulary (see `icons::ui_chevron`'s doc comment).
+/// `class="pv-chevron"` is what `plan.css` sizes, colors, and rotates 90°
+/// via `details[open] > summary .pv-chevron` — CSS-only, no JS involved.
+/// `aria-hidden` for the same reason `icon_markup`'s icons are: native
+/// `<details>` already conveys expanded/collapsed state to assistive tech,
+/// so this is decoration layered on top, not a second source of truth.
+fn chevron_markup() -> Markup {
+    let inner =
+        strip_svg_wrapper(icons::ui_chevron()).expect("vendored chevron-right.svg is well-formed");
+    html! {
+        svg class="pv-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            aria-hidden="true" focusable="false" {
+            (PreEscaped(inner))
+        }
     }
 }
 
@@ -469,6 +497,12 @@ pub fn render(plan: &Plan) -> String {
                     }
                     (md(&plan.meta.goal_md))
                 }
+                // A labeled section heading, same convention as Open
+                // questions/Risks below: an h2 with a fixed icon, sitting
+                // OUTSIDE the card it introduces (those sections' h2s sit
+                // outside each individual question/risk card; this one sits
+                // outside the single .plan-summary card).
+                h2 { (icon_prefix(Some("file-text"))) "Summary" }
                 section.plan-summary {
                     // (a) The executive summary itself — the top of the page,
                     // so a reader who stops here still gets a correct
@@ -573,11 +607,27 @@ pub fn render(plan: &Plan) -> String {
                         }
                     }
                 }
-                @for phase in &plan.phases {
+                // A "Phases" section heading, same convention as Open
+                // questions/Risks above (icon + h2, outside the phase list
+                // it introduces). `layout-dashboard` over `git-branch` here:
+                // `git-branch` already means something specific on this page
+                // (the phase-DEPENDENCY graph below) — reusing it on a plain
+                // "here's the list" heading would suggest a relationship
+                // that isn't there; `layout-dashboard` reads as a neutral
+                // "a list of sections" glyph instead. The expand/collapse
+                // control (JS-injected right before the first `details.phase`
+                // — see plan.js) lands between this heading and the phase
+                // list, not before it.
+                @if !plan.phases.is_empty() {
+                    h2 { (icon_prefix(Some("layout-dashboard"))) "Phases" }
+                }
+                @for (i, phase) in plan.phases.iter().enumerate() {
                     details.phase id=(format!("phase-{}", phase.id)) data-plan-ref=(format!("phase:{}", phase.id)) {
                         summary {
+                            (chevron_markup())
                             h2 {
                                 (icon_prefix(phase.icon.as_deref()))
+                                (format!("Phase {} · ", i + 1))
                                 (phase.title)
                                 " "
                                 span.phase-meta { (phase_meta_text(phase)) }
@@ -590,7 +640,10 @@ pub fn render(plan: &Plan) -> String {
                 }
                 @if let Some(g) = &phase_graph {
                     details.graph {
-                        summary { (icon_prefix(Some("git-branch"))) "Phase dependencies" }
+                        summary {
+                            (chevron_markup())
+                            (icon_prefix(Some("git-branch"))) "Phase dependencies"
+                        }
                         (PreEscaped(g.as_str()))
                     }
                 }
@@ -759,25 +812,46 @@ mod tests {
         assert!(html.contains("id=\"phase-p-core\""), "{html}");
 
         // (g) order by byte position: summary block pieces in document
-        // order, summary < open questions < risks < first phase details <
-        // graph details.
+        // order, "Summary" heading < summary card < open questions < risks <
+        // "Phases" heading < first phase details < graph details.
+        //
+        // Each section heading now carries a fixed icon before its text
+        // (see `icon_prefix`), so none of these are anchored on the `<h2>`
+        // opening tag directly abutting the word.
+        let summary_heading_pos = html.find("Summary</h2>").expect("summary heading");
         let open_q_pos = html.find("Open questions").expect("open questions heading");
-        // Not anchored on ">Risks<" -- the risks heading now has a fixed
-        // `shield` icon before the text (see `icon_prefix`), so "Risks" no
-        // longer directly follows the <h2>'s opening tag.
         let risks_pos = html.find("Risks</h2>").expect("risks heading");
+        let phases_heading_pos = html.find("Phases</h2>").expect("phases heading");
         let phase_pos = html
             .find("<details class=\"phase\"")
             .expect("phase details");
         let graph_pos = html
             .find("<details class=\"graph\"")
             .expect("graph details");
+        assert!(
+            summary_heading_pos < summary_pos,
+            "\"Summary\" heading before the summary card"
+        );
         assert!(summary_pos < exec_pos, "summary section before exec block");
         assert!(exec_pos < ask_pos, "exec block before ask banner");
         assert!(summary_pos < open_q_pos, "summary before open questions");
         assert!(open_q_pos < risks_pos, "open questions before risks");
-        assert!(risks_pos < phase_pos, "risks before first phase");
+        assert!(
+            risks_pos < phases_heading_pos,
+            "risks before \"Phases\" heading"
+        );
+        assert!(
+            phases_heading_pos < phase_pos,
+            "\"Phases\" heading before first phase details"
+        );
         assert!(phase_pos < graph_pos, "phases before the phase graph");
+
+        // (g2) each phase's `<details>` summary line carries a 1-based,
+        // document-order ordinal prefix ahead of its title — owner-requested
+        // affordance so a reader always knows which phase they're looking
+        // at, even scrolled deep into a long plan.
+        assert!(html.contains("Phase 1 · Core"), "{html}");
+        assert!(html.contains("Phase 2 · Backend"), "{html}");
 
         // (h) phases (and the graph) are collapsed by default.
         assert!(!html.contains("<details class=\"phase\" open"), "{html}");

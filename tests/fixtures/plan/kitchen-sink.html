@@ -131,14 +131,32 @@ header p:not(.meta),
   max-width: 72ch;
 }
 
+/* Section/phase-heading icons (the Summary/Risks/Phases section headings,
+   the questions section heading, each phase row's own heading, and the
+   dependency-graph disclosure): sized to
+   read as a real glyph next to the heading text, not a small bullet.
+   `vertical-align` is a negative offset (not `middle`) because these icons
+   are taller than the heading's own line-height -- an inline replaced
+   element taller than the line grows the line box to fit it, and a fixed
+   offset from the text baseline centers the glyph against the cap-height
+   text above that grown box reliably, the same technique the previous
+   17px/-3px pair already used, just rescaled. */
 .pv-icon {
-  width: 17px;
-  height: 17px;
-  vertical-align: -3px;
+  width: 32px;
+  height: 32px;
+  vertical-align: -9px;
   flex: none;
   /* A step quieter than the heading text it sits beside -- the icon is a
      scanning aid, not a second title. */
   color: var(--muted);
+}
+
+/* A task heading (render.rs's `task_card`) sits one level down the visual
+   hierarchy from a section/phase heading, so its icon stays smaller. */
+.task h3 .pv-icon {
+  width: 24px;
+  height: 24px;
+  vertical-align: -6px;
 }
 
 details.phase,
@@ -154,8 +172,43 @@ details.graph {
   box-shadow: var(--shadow);
 }
 
+/* flex + align-items: center puts the chevron on the same row as the
+   heading/text next to it and vertically centers the two against each
+   other -- the chevron (16px) and the heading's own icon+text (which can
+   run taller than one text line once .pv-icon grows to 32px) would
+   otherwise need matching vertical-align offsets tuned by hand; flex here
+   does that centering unconditionally, regardless of content height. */
 details.phase > summary,
-details.graph > summary { cursor: pointer; font-weight: 600; }
+details.graph > summary {
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+/* The default disclosure-triangle marker is replaced by the chevron below
+   (`.pv-chevron`, rendered by render.rs's `chevron_markup`) -- these are the
+   two rules that suppress it across engines: `list-style: none` covers
+   browsers that implement the marker as `::marker`/`list-style`
+   (Firefox, current Chrome/Safari), `::-webkit-details-marker` covers
+   older WebKit/Blink, which used a distinct, non-standard pseudo-element
+   before adopting `::marker`. */
+summary { list-style: none; }
+summary::-webkit-details-marker { display: none; }
+
+.pv-chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+/* Points right when collapsed, rotates down to point at the now-visible
+   content when open -- the one piece of this that has to be conditional on
+   `[open]` rather than always-on, so it can't just live on `.pv-chevron`. */
+details[open] > summary .pv-chevron { transform: rotate(90deg); }
 
 .phase-meta { color: var(--muted); font-weight: 400; font-size: 0.85em; letter-spacing: normal; }
 
@@ -487,7 +540,13 @@ section.risks {
   font-weight: 600;
 }
 </style></head><body data-plan-fingerprint="sha256:699871414238a39a2db87e400affe5dfdc397fbf6bbcde124e0b394ab04812cf"><header><h1>Auth refactor</h1><p class="meta" data-plan-ref="meta:auth-refactor">plan <code>auth-refactor</code> · revision 2 · by claude</p><p>Extract <em>session</em> handling.</p>
-</header><section class="plan-summary"><div class="summary-exec"><p>This refactor extracts <code>SessionStore</code> behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the <em>lock contention</em> risk by sharding the store. The ask: review the trait boundary in <code>t-session-store</code> before Redis work starts.</p>
+</header><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" />
+  <path d="M14 2v5a1 1 0 0 0 1 1h5" />
+  <path d="M10 9H8" />
+  <path d="M16 13H8" />
+  <path d="M16 17H8" />
+</svg> Summary</h2><section class="plan-summary"><div class="summary-exec"><p>This refactor extracts <code>SessionStore</code> behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the <em>lock contention</em> risk by sharding the store. The ask: review the trait boundary in <code>t-session-store</code> before Redis work starts.</p>
 </div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
 </li><li><p><strong>Redis backend</strong> (<code>t-redis</code>) is blocked on the trait boundary landing first.</p>
 </li><li><p><strong>Lock contention</strong> (<code>r-locking</code>) is mitigated by sharding the store, not by removing the lock.</p>
@@ -499,17 +558,28 @@ section.risks {
 </div></section><section class="risks"><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
 </svg> Risks</h2><div class="task" data-plan-ref="risk:r-locking"><h3 id="risk-r-locking">Lock contention <span class="badge risk-high">high</span></h3><p>Shard the store.</p>
-</div></section><details class="phase" id="phase-p-core" data-plan-ref="phase:p-core"><summary><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+</div></section><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  <rect width="7" height="9" x="3" y="3" rx="1" />
+  <rect width="7" height="5" x="14" y="3" rx="1" />
+  <rect width="7" height="9" x="14" y="12" rx="1" />
+  <rect width="7" height="5" x="3" y="16" rx="1" />
+</svg> Phases</h2><details class="phase" id="phase-p-core" data-plan-ref="phase:p-core"><summary><svg class="pv-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  <path d="m9 18 6-6-6-6" />
+</svg><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" />
-</svg> Core <span class="phase-meta">(2 tasks)</span></h2></summary><p>The trait seam.</p>
+</svg> Phase 1 · Core <span class="phase-meta">(2 tasks)</span></h2></summary><p>The trait seam.</p>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 40" width="432" height="40" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="edge" d="M 200 20 H 216 V 20 H 232" marker-end="url(#arrow)"/><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="0" width="200" height="40" rx="6"/><text x="100" y="20">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="232" y="0" width="200" height="40" rx="6"/><text x="332" y="20">Introduce SessionStore trait</text></a></svg><div class="task" id="task-t-config-flag" data-plan-ref="task:t-config-flag"><h3>Config flag <span class="badge status-done">done</span> <span class="badge estimate-s">small</span></h3><ul class="acceptance"><li data-plan-ref="task:t-config-flag">flag parses</li></ul><ul class="validation"><li><code>cargo test config::</code></li></ul></div><div class="task" id="task-t-session-store" data-plan-ref="task:t-session-store"><h3><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
 </svg> Introduce SessionStore trait <span class="badge status-planned">planned</span> <span class="badge risk-medium">medium</span> <span class="badge estimate-m">medium</span></h3><p>Extract persistence behind a trait so <code>t-redis</code> can slot in.</p>
-<ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" id="phase-p-backend" data-plan-ref="phase:p-backend"><summary><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+<ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" id="phase-p-backend" data-plan-ref="phase:p-backend"><summary><svg class="pv-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  <path d="m9 18 6-6-6-6" />
+</svg><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <ellipse cx="12" cy="5" rx="9" ry="3" />
   <path d="M3 5V19A9 3 0 0 0 21 19V5" />
   <path d="M3 12A9 3 0 0 0 21 12" />
-</svg> Backend <span class="phase-meta">(3 tasks · high risk)</span></h2></summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 184" width="432" height="184" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="edge" d="M 200 164 H 216 V 20 H 232" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="200" height="40" rx="6"/><text x="100" y="20">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="72" width="200" height="40" rx="6"/><text x="100" y="92">Remove dead code</text></a><a href="#task-t-session-store"><rect class="node stub status-planned risk-medium" x="0" y="144" width="200" height="40" rx="6"/><text x="100" y="164">Introduce SessionStore trait</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="232" y="0" width="200" height="40" rx="6"/><text x="332" y="20">Redis backend</text></a></svg><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">large</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><details class="graph"><summary><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+</svg> Phase 2 · Backend <span class="phase-meta">(3 tasks · high risk)</span></h2></summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 184" width="432" height="184" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="edge" d="M 200 164 H 216 V 20 H 232" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="200" height="40" rx="6"/><text x="100" y="20">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="72" width="200" height="40" rx="6"/><text x="100" y="92">Remove dead code</text></a><a href="#task-t-session-store"><rect class="node stub status-planned risk-medium" x="0" y="144" width="200" height="40" rx="6"/><text x="100" y="164">Introduce SessionStore trait</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="232" y="0" width="200" height="40" rx="6"/><text x="332" y="20">Redis backend</text></a></svg><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">large</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><details class="graph"><summary><svg class="pv-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  <path d="m9 18 6-6-6-6" />
+</svg><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M15 6a9 9 0 0 0-9 9V3" />
   <circle cx="18" cy="6" r="3" />
   <circle cx="6" cy="18" r="3" />

@@ -150,6 +150,11 @@ time (see `render::icon_markup`) rather than the vendored file being \
 pre-edited, so a drift diff against upstream stays a straight file compare. \
 Upstream has no `icons/layout.svg` (renamed); `layout-dashboard` is used in \
 its place.
+
+A 17th file, chevron-right, is also vendored from the same pinned commit but \
+is NOT part of that vocabulary — it's fixed UI chrome (the `<details>` \
+disclosure marker; see `plan::icons::ui_chevron`), not a name a `plan.json` \
+author can set via `Phase.icon`/`PlanTask.icon`.
 """
 
 [[source]]
