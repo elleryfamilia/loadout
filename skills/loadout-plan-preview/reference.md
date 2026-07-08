@@ -61,6 +61,11 @@ Exact serde spellings — lowercase / snake_case, used verbatim in JSON:
 | `risk` (task field) / risk `severity` | `low` \| `medium` \| `high` |
 | task `estimate` | `s` \| `m` \| `l` |
 | file `action` | `create` \| `modify` \| `delete` \| `test` |
+| `icon` (phase/task field) | `book-open` \| `bug` \| `database` \| `file-text` \| `flask-conical` \| `git-branch` \| `globe` \| `layout-dashboard` \| `package` \| `paintbrush` \| `rocket` \| `search` \| `shield` \| `terminal` \| `wrench` \| `zap` |
+
+`icon` is a vendored Lucide icon name, not free text — a value outside this
+list is a hard error (`unknown_icon`) naming every valid icon. Set icons on
+phases and optionally on notable tasks; omit rather than repeat.
 
 ## Fields
 
@@ -117,6 +122,7 @@ their time. Write for both readers at once:
 |-------|------|----------|-------|
 | `id` | string | yes | id rule |
 | `title` | string | yes | |
+| `icon` | string | no | vendored Lucide icon name — see Enums; shown before the title in the phase's summary line |
 | `summary_md` | string | no | markdown |
 | `tasks` | array\<PlanTask\> | no (default `[]`) | |
 
@@ -126,6 +132,7 @@ their time. Write for both readers at once:
 |-------|------|----------|-------|
 | `id` | string | yes | id rule; referenced by other tasks' `depends_on` |
 | `title` | string | yes | |
+| `icon` | string | no | vendored Lucide icon name — see Enums; reserve for notable tasks |
 | `summary_md` | string | no | markdown |
 | `status` | enum | no (default `planned`) | see Enums |
 | `risk` | enum | no | see Enums |
@@ -185,11 +192,11 @@ parses and validates cleanly.
             "agent": "claude",
             "created": "2026-07-07", "revision": 2 },
   "phases": [
-    { "id": "p-core", "title": "Core", "summary_md": "The trait seam.",
+    { "id": "p-core", "title": "Core", "icon": "wrench", "summary_md": "The trait seam.",
       "tasks": [
         { "id": "t-config-flag", "title": "Config flag", "status": "done",
           "estimate": "s", "acceptance": ["flag parses"], "validation": ["cargo test config::"] },
-        { "id": "t-session-store", "title": "Introduce SessionStore trait",
+        { "id": "t-session-store", "title": "Introduce SessionStore trait", "icon": "shield",
           "summary_md": "Extract persistence behind a trait so `t-redis` can slot in.",
           "status": "planned", "risk": "medium", "depends_on": ["t-config-flag"],
           "files": [ { "path": "src/auth/session.rs", "action": "modify", "note": "extract trait" },
@@ -199,7 +206,7 @@ parses and validates cleanly.
                           "no direct sled calls outside the trait impl" ],
           "validation": [ "cargo test auth::" ], "estimate": "m" }
       ] },
-    { "id": "p-backend", "title": "Backend", "tasks": [
+    { "id": "p-backend", "title": "Backend", "icon": "database", "tasks": [
         { "id": "t-redis", "title": "Redis backend", "status": "blocked",
           "risk": "high", "depends_on": ["t-session-store"], "estimate": "l" },
         { "id": "t-cleanup", "title": "Remove dead code", "status": "in_progress" },

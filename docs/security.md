@@ -74,6 +74,12 @@ defends on several layers:
   in guidance markdown rendered as a real, clickable `<a href="javascript:…">`.
   Guidance text can come from a cloned repo's fragments, so that was a
   latent XSS. It's closed now, in both surfaces.
+- **`icon` is a closed vocabulary, not free text.** A phase's or task's
+  `icon` field must name one of 16 vendored Lucide icons (`unknown_icon`
+  rejects anything else); the renderer inlines the matching SVG directly,
+  which is only safe *because* the value can never be attacker-controlled
+  markup — it's a lookup key into loadout's own vendored assets, not
+  `plan.json`-supplied SVG content.
 - **The embedded JSON data island is escaped, not just serialized.** The
   rendered page includes a `<script type="application/json">` copy of the
   plan for the client-side comment tooling. Before embedding, `<`, `>`, `&`,
@@ -93,11 +99,14 @@ defends on several layers:
   the island.
 - **Strict CSP.** The document ships its own
   `Content-Security-Policy`: `default-src 'none'; style-src 'unsafe-inline';
-  script-src 'unsafe-inline'; img-src data:`. Nothing on the page can fetch
-  an external resource — no images, no scripts, no stylesheets, no fonts —
-  which is also why the renderer never uses a CDN: the page is self-contained
-  by construction, and the CSP would block a CDN reference even if one were
-  added by mistake.
+  script-src 'unsafe-inline'; img-src data:; font-src data:`. Nothing on the
+  page can fetch an external resource — no images, no scripts, no
+  stylesheets, no fonts — which is also why the renderer never uses a CDN:
+  the page is self-contained by construction, and the CSP would block a CDN
+  reference even if one were added by mistake. `font-src data:` allows the
+  embedded Inter font — base64-encoded directly into `plan.css`'s
+  `@font-face` rules, not fetched — and nothing else; a `url(https://…)`
+  reference would still be blocked.
 - **Input limits bound the blast radius of a runaway or hostile plan.json**
   before any rendering happens: 2 MiB input size; 500 tasks; 50 phases; 100
   risks; 100 open questions; 2000 dependency edges; 10,000 characters per

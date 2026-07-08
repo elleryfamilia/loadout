@@ -15,10 +15,11 @@ pub const META_FIELDS: &[&str] = &[
     "created",
     "revision",
 ];
-pub const PHASE_FIELDS: &[&str] = &["id", "title", "summary_md", "tasks"];
+pub const PHASE_FIELDS: &[&str] = &["id", "title", "icon", "summary_md", "tasks"];
 pub const TASK_FIELDS: &[&str] = &[
     "id",
     "title",
+    "icon",
     "summary_md",
     "status",
     "risk",
@@ -73,6 +74,12 @@ pub struct Meta {
 pub struct Phase {
     pub id: String,
     pub title: String,
+    /// A name from `plan::icons::icon_names()`, shown before the title in
+    /// the phase's summary line. Optional — omit rather than force one on
+    /// every phase; `validate()` rejects a name outside the vocabulary
+    /// (`unknown_icon`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_md: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -83,6 +90,11 @@ pub struct Phase {
 pub struct PlanTask {
     pub id: String,
     pub title: String,
+    /// See `Phase::icon` — same vocabulary, same validation. Reserve this
+    /// for notable tasks rather than setting it on every task; the phase
+    /// icon already carries the section's theme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_md: Option<String>,
     #[serde(default)]
@@ -618,12 +630,33 @@ pub fn validate(plan: &Plan) -> Vec<Issue> {
         }
     };
 
+    // Icons are validated against the closed vendored vocabulary (see
+    // `plan::icons`), not the id-syntax/uniqueness rules `check_id` covers —
+    // a separate closure so the hint (naming every valid icon) doesn't leak
+    // into `check_id`'s.
+    let check_icon = |icon: &str, path: String, errs: &mut Vec<Issue>| {
+        if !crate::plan::icons::icon_names().contains(&icon) {
+            let mut e = Issue::new(path, "unknown_icon", format!("unknown icon `{icon}`"));
+            e.hint = Some(format!(
+                "known icons: {}",
+                crate::plan::icons::icon_names().join(", ")
+            ));
+            errs.push(e);
+        }
+    };
+
     check_id(&plan.meta.id, "/meta/id".into(), &mut errs);
     let mut task_ids = std::collections::BTreeSet::new();
     for (pi, phase) in plan.phases.iter().enumerate() {
         check_id(&phase.id, format!("/phases/{pi}/id"), &mut errs);
+        if let Some(icon) = &phase.icon {
+            check_icon(icon, format!("/phases/{pi}/icon"), &mut errs);
+        }
         for (ti, t) in phase.tasks.iter().enumerate() {
             check_id(&t.id, format!("/phases/{pi}/tasks/{ti}/id"), &mut errs);
+            if let Some(icon) = &t.icon {
+                check_icon(icon, format!("/phases/{pi}/tasks/{ti}/icon"), &mut errs);
+            }
             task_ids.insert(t.id.as_str());
         }
     }
@@ -850,6 +883,33 @@ mod tests {
     }
 
     #[test]
+    fn unknown_icon_is_rejected_with_full_vocabulary_hint() {
+        let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
+        p.phases[0].icon = Some("not-a-real-icon".into());
+        p.phases[0].tasks[0].icon = Some("shield".into()); // a valid one alongside — should not also error
+        let errs = validate(&p);
+        let e = errs
+            .iter()
+            .find(|e| e.code == "unknown_icon" && e.path == "/phases/0/icon")
+            .unwrap_or_else(|| panic!("expected unknown_icon at /phases/0/icon, got {errs:?}"));
+        let hint = e.hint.as_deref().unwrap_or("");
+        for name in crate::plan::icons::icon_names() {
+            assert!(hint.contains(name), "hint should list `{name}`: {hint}");
+        }
+        assert!(
+            !errs.iter().any(|e| e.path == "/phases/0/tasks/0/icon"),
+            "valid task icon should not error: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn known_icon_is_accepted() {
+        let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
+        p.phases[0].icon = Some("database".into());
+        assert!(validate(&p).is_empty());
+    }
+
+    #[test]
     fn collection_and_string_limits_enforced() {
         let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
         p.phases[0].tasks[0].summary_md = Some("y".repeat(10_001));
@@ -858,6 +918,7 @@ mod tests {
             p.phases[0].tasks.push(PlanTask {
                 id: format!("t-x{i}"),
                 title: "x".into(),
+                icon: None,
                 summary_md: None,
                 status: Status::Planned,
                 risk: None,
@@ -897,6 +958,7 @@ mod tests {
             p.phases[0].tasks.push(PlanTask {
                 id: format!("t-x{i:05}"),
                 title: "x".into(),
+                icon: None,
                 summary_md: None,
                 status: Status::Planned,
                 risk: None,

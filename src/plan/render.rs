@@ -8,6 +8,7 @@
 
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
+use crate::plan::icons;
 use crate::plan::model::{
     plan_hash, Estimate, FileAction, OpenQuestion, Phase, Plan, PlanTask, RiskLevel, Status,
 };
@@ -15,8 +16,8 @@ use crate::plan::svg;
 
 const CSS: &str = include_str!("assets/plan.css");
 const JS: &str = include_str!("assets/plan.js");
-const CSP: &str =
-    "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:";
+const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; \
+                    img-src data:; font-src data:";
 
 /// Escape the canonical JSON for a `<script type="application/json">` island:
 /// `<`, `>`, `&`, U+2028, U+2029 become JSON unicode escapes, so the island
@@ -156,6 +157,43 @@ fn file_action_str(action: &FileAction) -> &'static str {
         FileAction::Modify => "modify",
         FileAction::Delete => "delete",
         FileAction::Test => "test",
+    }
+}
+
+/// One vendored icon (see `plan::icons`), inlined as `<svg class="pv-icon">`.
+/// The vendored file's own 24x24 `width`/`height` attributes are dropped —
+/// `plan.css`'s `.pv-icon` rule sizes it instead — everything else (viewBox,
+/// stroke, line caps/joins) is copied through unchanged so the glyph reads
+/// exactly like upstream Lucide. `aria-hidden` because these sit right next
+/// to the text that already says the same thing (a title, a section
+/// heading); they're decoration, not information a screen reader needs to
+/// announce separately.
+///
+/// `None` for a name outside the vocabulary. `validate()` (see `plan::model`)
+/// rejects that before `render()` ever runs on a real CLI path, so this is a
+/// quiet fallback for any other caller, not a panic.
+fn icon_markup(name: &str) -> Option<Markup> {
+    let raw = icons::icon_svg(name)?;
+    let inner_start = raw.find('>')? + 1;
+    let inner_end = raw.rfind("</svg>")?;
+    let inner = &raw[inner_start..inner_end];
+    Some(html! {
+        svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            aria-hidden="true" focusable="false" {
+            (PreEscaped(inner))
+        }
+    })
+}
+
+/// `icon_markup(name)` followed by a space, or nothing for `None` — shared by
+/// phase/task headings (the author-chosen `icon` field) and the handful of
+/// section headings with a fixed icon (risks, open questions, phase
+/// dependencies).
+fn icon_prefix(name: Option<&str>) -> Markup {
+    match name.and_then(icon_markup) {
+        Some(svg) => html! { (svg) " " },
+        None => PreEscaped(String::new()),
     }
 }
 
@@ -341,6 +379,7 @@ fn task_card(task: &PlanTask) -> Markup {
     html! {
         div.task id=(format!("task-{}", task.id)) data-plan-ref=(task_ref) {
             h3 {
+                (icon_prefix(task.icon.as_deref()))
                 (task.title)
                 " "
                 span class=(format!("badge status-{}", status_str(&task.status))) {
@@ -508,7 +547,7 @@ pub fn render(plan: &Plan) -> String {
                 }
                 @if !plan.open_questions.is_empty() {
                     section.questions {
-                        h2 { "Open questions" }
+                        h2 { (icon_prefix(Some("search"))) "Open questions" }
                         @for q in &plan.open_questions {
                             div.task id=(format!("question-{}", q.id)) data-plan-ref=(format!("question:{}", q.id)) {
                                 @if q.blocking { span.badge.blocking { "blocking" } }
@@ -519,7 +558,7 @@ pub fn render(plan: &Plan) -> String {
                 }
                 @if !plan.risks.is_empty() {
                     section.risks {
-                        h2 { "Risks" }
+                        h2 { (icon_prefix(Some("shield"))) "Risks" }
                         @for r in &plan.risks {
                             div.task data-plan-ref=(format!("risk:{}", r.id)) {
                                 h3 id=(format!("risk-{}", r.id)) {
@@ -538,6 +577,7 @@ pub fn render(plan: &Plan) -> String {
                     details.phase id=(format!("phase-{}", phase.id)) data-plan-ref=(format!("phase:{}", phase.id)) {
                         summary {
                             h2 {
+                                (icon_prefix(phase.icon.as_deref()))
                                 (phase.title)
                                 " "
                                 span.phase-meta { (phase_meta_text(phase)) }
@@ -550,7 +590,7 @@ pub fn render(plan: &Plan) -> String {
                 }
                 @if let Some(g) = &phase_graph {
                     details.graph {
-                        summary { "Phase dependencies" }
+                        summary { (icon_prefix(Some("git-branch"))) "Phase dependencies" }
                         (PreEscaped(g.as_str()))
                     }
                 }
@@ -629,6 +669,24 @@ mod tests {
         // all the same. `!html.to_lowercase().contains("@import")` below
         // still guards the actual external-fetch vector.
         assert!(!html.to_lowercase().contains("@import"));
+        // The embedded stylesheet's only url() references are the Inter
+        // font's data: URIs — a url(http…)/url(//…) would be a fetch, which
+        // the self-containment contract (and the CSP) forbids. Checked over
+        // the stylesheet, not the whole document, because task summaries can
+        // legitimately contain the literal text `url(` inside code spans.
+        for (i, _) in CSS.match_indices("url(") {
+            let after = &CSS[i + "url(".len()..];
+            let after = after.trim_start_matches(['"', '\'']);
+            assert!(
+                after.starts_with("data:"),
+                "plan.css url() must be a data: URI, found: {}",
+                &CSS[i..CSS.len().min(i + 60)]
+            );
+        }
+        assert!(!CSS.contains("url(http"), "no external url() in plan.css");
+        // And the font did actually land: two @font-face blocks (400 + 600).
+        assert_eq!(CSS.matches("@font-face").count(), 2);
+        assert_eq!(CSS.matches("url(\"data:font/woff2;base64,").count(), 2);
     }
 
     #[test]
@@ -704,7 +762,10 @@ mod tests {
         // order, summary < open questions < risks < first phase details <
         // graph details.
         let open_q_pos = html.find("Open questions").expect("open questions heading");
-        let risks_pos = html.find(">Risks<").expect("risks heading");
+        // Not anchored on ">Risks<" -- the risks heading now has a fixed
+        // `shield` icon before the text (see `icon_prefix`), so "Risks" no
+        // longer directly follows the <h2>'s opening tag.
+        let risks_pos = html.find("Risks</h2>").expect("risks heading");
         let phase_pos = html
             .find("<details class=\"phase\"")
             .expect("phase details");

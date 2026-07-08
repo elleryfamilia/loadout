@@ -12,11 +12,11 @@
             "agent": "claude",
             "created": "2026-07-07", "revision": 2 },
   "phases": [
-    { "id": "p-core", "title": "Core", "summary_md": "The trait seam.",
+    { "id": "p-core", "title": "Core", "icon": "wrench", "summary_md": "The trait seam.",
       "tasks": [
         { "id": "t-config-flag", "title": "Config flag", "status": "done",
           "estimate": "s", "acceptance": ["flag parses"], "validation": ["cargo test config::"] },
-        { "id": "t-session-store", "title": "Introduce SessionStore trait",
+        { "id": "t-session-store", "title": "Introduce SessionStore trait", "icon": "shield",
           "summary_md": "Extract persistence behind a trait so `t-redis` can slot in.",
           "status": "planned", "risk": "medium", "depends_on": ["t-config-flag"],
           "files": [ { "path": "src/auth/session.rs", "action": "modify", "note": "extract trait" },
@@ -26,7 +26,7 @@
                           "no direct sled calls outside the trait impl" ],
           "validation": [ "cargo test auth::" ], "estimate": "m" }
       ] },
-    { "id": "p-backend", "title": "Backend", "tasks": [
+    { "id": "p-backend", "title": "Backend", "icon": "database", "tasks": [
         { "id": "t-redis", "title": "Redis backend", "status": "blocked",
           "risk": "high", "depends_on": ["t-session-store"], "estimate": "l" },
         { "id": "t-cleanup", "title": "Remove dead code", "status": "in_progress" },

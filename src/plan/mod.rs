@@ -4,6 +4,7 @@
 //! renders it to a self-contained `plan.html`. See
 //! `.loadout/workflow/artifacts/design-plan-visualizer.md` for the design.
 
+pub mod icons;
 pub mod model;
 pub mod render;
 pub mod svg;
