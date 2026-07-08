@@ -311,6 +311,321 @@ pub fn plan_hash(plan: &Plan) -> String {
     crate::hash::context_hash(plan)
 }
 
+pub const MAX_TASKS: usize = 500;
+pub const MAX_PHASES: usize = 50;
+pub const MAX_RISKS: usize = 100;
+pub const MAX_QUESTIONS: usize = 100;
+pub const MAX_EDGES: usize = 2000;
+pub const MAX_STRING: usize = 10_000;
+const ID_HINT: &str = "ids match ^[a-z][a-z0-9_-]{0,63}$ and are unique document-wide";
+
+fn id_ok(id: &str) -> bool {
+    let mut chars = id.chars();
+    matches!(chars.next(), Some('a'..='z'))
+        && id.len() <= 64
+        && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '-'))
+}
+
+fn check_strings(plan: &Plan, errs: &mut Vec<Issue>) {
+    // Meta fields
+    if plan.meta.title.len() > MAX_STRING {
+        errs.push(Issue::new(
+            "/meta/title",
+            "string_too_long",
+            format!(
+                "title is {} chars (limit {MAX_STRING})",
+                plan.meta.title.len()
+            ),
+        ));
+    }
+    if let Some(goal_md) = &plan.meta.goal_md {
+        if goal_md.len() > MAX_STRING {
+            errs.push(Issue::new(
+                "/meta/goal_md",
+                "string_too_long",
+                format!("goal_md is {} chars (limit {MAX_STRING})", goal_md.len()),
+            ));
+        }
+    }
+    if let Some(agent) = &plan.meta.agent {
+        if agent.len() > MAX_STRING {
+            errs.push(Issue::new(
+                "/meta/agent",
+                "string_too_long",
+                format!("agent is {} chars (limit {MAX_STRING})", agent.len()),
+            ));
+        }
+    }
+    if let Some(created) = &plan.meta.created {
+        if created.len() > MAX_STRING {
+            errs.push(Issue::new(
+                "/meta/created",
+                "string_too_long",
+                format!("created is {} chars (limit {MAX_STRING})", created.len()),
+            ));
+        }
+    }
+
+    // Phase and task fields
+    for (pi, phase) in plan.phases.iter().enumerate() {
+        if phase.title.len() > MAX_STRING {
+            errs.push(Issue::new(
+                format!("/phases/{pi}/title"),
+                "string_too_long",
+                format!("title is {} chars (limit {MAX_STRING})", phase.title.len()),
+            ));
+        }
+        if let Some(summary_md) = &phase.summary_md {
+            if summary_md.len() > MAX_STRING {
+                errs.push(Issue::new(
+                    format!("/phases/{pi}/summary_md"),
+                    "string_too_long",
+                    format!(
+                        "summary_md is {} chars (limit {MAX_STRING})",
+                        summary_md.len()
+                    ),
+                ));
+            }
+        }
+
+        for (ti, task) in phase.tasks.iter().enumerate() {
+            if task.title.len() > MAX_STRING {
+                errs.push(Issue::new(
+                    format!("/phases/{pi}/tasks/{ti}/title"),
+                    "string_too_long",
+                    format!("title is {} chars (limit {MAX_STRING})", task.title.len()),
+                ));
+            }
+            if let Some(summary_md) = &task.summary_md {
+                if summary_md.len() > MAX_STRING {
+                    errs.push(Issue::new(
+                        format!("/phases/{pi}/tasks/{ti}/summary_md"),
+                        "string_too_long",
+                        format!(
+                            "summary_md is {} chars (limit {MAX_STRING})",
+                            summary_md.len()
+                        ),
+                    ));
+                }
+            }
+            for (di, item) in task.depends_on.iter().enumerate() {
+                if item.len() > MAX_STRING {
+                    errs.push(Issue::new(
+                        format!("/phases/{pi}/tasks/{ti}/depends_on/{di}"),
+                        "string_too_long",
+                        format!(
+                            "depends_on item is {} chars (limit {MAX_STRING})",
+                            item.len()
+                        ),
+                    ));
+                }
+            }
+            for (ai, item) in task.acceptance.iter().enumerate() {
+                if item.len() > MAX_STRING {
+                    errs.push(Issue::new(
+                        format!("/phases/{pi}/tasks/{ti}/acceptance/{ai}"),
+                        "string_too_long",
+                        format!(
+                            "acceptance item is {} chars (limit {MAX_STRING})",
+                            item.len()
+                        ),
+                    ));
+                }
+            }
+            for (vi, item) in task.validation.iter().enumerate() {
+                if item.len() > MAX_STRING {
+                    errs.push(Issue::new(
+                        format!("/phases/{pi}/tasks/{ti}/validation/{vi}"),
+                        "string_too_long",
+                        format!(
+                            "validation item is {} chars (limit {MAX_STRING})",
+                            item.len()
+                        ),
+                    ));
+                }
+            }
+            for (fi, file) in task.files.iter().enumerate() {
+                if file.path.len() > MAX_STRING {
+                    errs.push(Issue::new(
+                        format!("/phases/{pi}/tasks/{ti}/files/{fi}/path"),
+                        "string_too_long",
+                        format!("path is {} chars (limit {MAX_STRING})", file.path.len()),
+                    ));
+                }
+                if let Some(note) = &file.note {
+                    if note.len() > MAX_STRING {
+                        errs.push(Issue::new(
+                            format!("/phases/{pi}/tasks/{ti}/files/{fi}/note"),
+                            "string_too_long",
+                            format!("note is {} chars (limit {MAX_STRING})", note.len()),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Risk fields
+    for (ri, risk) in plan.risks.iter().enumerate() {
+        if risk.title.len() > MAX_STRING {
+            errs.push(Issue::new(
+                format!("/risks/{ri}/title"),
+                "string_too_long",
+                format!("title is {} chars (limit {MAX_STRING})", risk.title.len()),
+            ));
+        }
+        if let Some(mitigation_md) = &risk.mitigation_md {
+            if mitigation_md.len() > MAX_STRING {
+                errs.push(Issue::new(
+                    format!("/risks/{ri}/mitigation_md"),
+                    "string_too_long",
+                    format!(
+                        "mitigation_md is {} chars (limit {MAX_STRING})",
+                        mitigation_md.len()
+                    ),
+                ));
+            }
+        }
+    }
+
+    // Open question fields
+    for (qi, question) in plan.open_questions.iter().enumerate() {
+        if question.question_md.len() > MAX_STRING {
+            errs.push(Issue::new(
+                format!("/open_questions/{qi}/question_md"),
+                "string_too_long",
+                format!(
+                    "question_md is {} chars (limit {MAX_STRING})",
+                    question.question_md.len()
+                ),
+            ));
+        }
+    }
+}
+
+pub fn validate(plan: &Plan) -> Vec<Issue> {
+    let mut errs = Vec::new();
+    let mut seen = std::collections::BTreeMap::new(); // id -> first path
+
+    let mut check_id = |id: &str, path: String, errs: &mut Vec<Issue>| {
+        if !id_ok(id) {
+            let mut e = Issue::new(path.clone(), "bad_id", format!("invalid id `{id}`"));
+            e.hint = Some(ID_HINT.into());
+            errs.push(e);
+        }
+        if let Some(first) = seen.insert(id.to_string(), path.clone()) {
+            errs.push(Issue::new(
+                path,
+                "duplicate_id",
+                format!("id `{id}` already used at {first}"),
+            ));
+        }
+    };
+
+    check_id(&plan.meta.id, "/meta/id".into(), &mut errs);
+    let mut task_ids = std::collections::BTreeSet::new();
+    for (pi, phase) in plan.phases.iter().enumerate() {
+        check_id(&phase.id, format!("/phases/{pi}/id"), &mut errs);
+        for (ti, t) in phase.tasks.iter().enumerate() {
+            check_id(&t.id, format!("/phases/{pi}/tasks/{ti}/id"), &mut errs);
+            task_ids.insert(t.id.as_str());
+        }
+    }
+    for (ri, r) in plan.risks.iter().enumerate() {
+        check_id(&r.id, format!("/risks/{ri}/id"), &mut errs);
+    }
+    for (qi, q) in plan.open_questions.iter().enumerate() {
+        check_id(&q.id, format!("/open_questions/{qi}/id"), &mut errs);
+    }
+
+    // depends_on refs + cycle detection over the task graph.
+    let mut edges: Vec<(&str, &str)> = Vec::new();
+    for (pi, phase) in plan.phases.iter().enumerate() {
+        for (ti, t) in phase.tasks.iter().enumerate() {
+            for (di, dep) in t.depends_on.iter().enumerate() {
+                if task_ids.contains(dep.as_str()) {
+                    edges.push((t.id.as_str(), dep.as_str()));
+                } else {
+                    let mut e = Issue::new(
+                        format!("/phases/{pi}/tasks/{ti}/depends_on/{di}"),
+                        "unknown_ref",
+                        format!("depends_on `{dep}` matches no task id"),
+                    );
+                    e.hint = Some(format!(
+                        "declared task ids: {}",
+                        task_ids.iter().cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                    errs.push(e);
+                }
+            }
+        }
+    }
+    if let Some(cycle_node) = find_cycle(&task_ids, &edges) {
+        errs.push(Issue::new(
+            "/phases",
+            "dependency_cycle",
+            format!("dependency cycle involving `{cycle_node}`"),
+        ));
+    }
+
+    // Limits.
+    let n_tasks: usize = plan.phases.iter().map(|p| p.tasks.len()).sum();
+    for (what, n, max, path) in [
+        ("tasks", n_tasks, MAX_TASKS, "/phases"),
+        ("phases", plan.phases.len(), MAX_PHASES, "/phases"),
+        ("risks", plan.risks.len(), MAX_RISKS, "/risks"),
+        (
+            "open_questions",
+            plan.open_questions.len(),
+            MAX_QUESTIONS,
+            "/open_questions",
+        ),
+        ("dependency edges", edges.len(), MAX_EDGES, "/phases"),
+    ] {
+        if n > max {
+            errs.push(Issue::new(
+                path,
+                "too_many",
+                format!("{n} {what} (limit {max})"),
+            ));
+        }
+    }
+    check_strings(plan, &mut errs);
+    errs
+}
+
+/// DFS three-color cycle detection; returns a node on a cycle.
+fn find_cycle<'a>(
+    nodes: &std::collections::BTreeSet<&'a str>,
+    edges: &[(&'a str, &'a str)],
+) -> Option<&'a str> {
+    let mut adj: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for (a, b) in edges {
+        adj.entry(a).or_default().push(b);
+    }
+    let mut state: std::collections::BTreeMap<&str, u8> = Default::default();
+    fn dfs<'a>(
+        n: &'a str,
+        adj: &std::collections::BTreeMap<&'a str, Vec<&'a str>>,
+        state: &mut std::collections::BTreeMap<&'a str, u8>,
+    ) -> Option<&'a str> {
+        match state.get(n) {
+            Some(1) => return Some(n),
+            Some(2) => return None,
+            _ => {}
+        }
+        state.insert(n, 1);
+        for m in adj.get(n).into_iter().flatten() {
+            if let Some(c) = dfs(m, adj, state) {
+                return Some(c);
+            }
+        }
+        state.insert(n, 2);
+        None
+    }
+    nodes.iter().find_map(|n| dfs(n, &adj, &mut state))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +704,59 @@ mod tests {
         for k in &keys {
             assert!(TASK_FIELDS.contains(k), "walker missing field {k}");
         }
+    }
+
+    #[test]
+    fn dangling_ref_cycle_and_dup_are_caught() {
+        for (fix, code, path_frag) in [
+            ("invalid-dangling-ref.json", "unknown_ref", "/depends_on/0"),
+            ("invalid-cycle.json", "dependency_cycle", "/phases"),
+            ("invalid-dup-id.json", "duplicate_id", "/phases"),
+        ] {
+            let p = parse(&fixture(fix), false).unwrap().plan;
+            let errs = validate(&p);
+            assert!(
+                errs.iter()
+                    .any(|e| e.code == code && e.path.contains(path_frag)),
+                "{fix}: {errs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bad_slug_is_rejected_with_hint() {
+        let bad = fixture("minimal.json").replace("\"id\": \"t-a\"", "\"id\": \"T A!\"");
+        let p = parse(&bad, false).unwrap().plan;
+        let errs = validate(&p);
+        let e = errs.iter().find(|e| e.code == "bad_id").unwrap();
+        assert!(e.hint.as_deref().unwrap_or("").contains("^[a-z]"));
+    }
+
+    #[test]
+    fn collection_and_string_limits_enforced() {
+        let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
+        p.phases[0].tasks[0].summary_md = Some("y".repeat(10_001));
+        assert!(validate(&p).iter().any(|e| e.code == "string_too_long"));
+        for i in 0..501 {
+            p.phases[0].tasks.push(PlanTask {
+                id: format!("t-x{i}"),
+                title: "x".into(),
+                summary_md: None,
+                status: Status::Planned,
+                risk: None,
+                depends_on: vec![],
+                files: vec![],
+                acceptance: vec![],
+                validation: vec![],
+                estimate: None,
+            });
+        }
+        assert!(validate(&p).iter().any(|e| e.code == "too_many"));
+    }
+
+    #[test]
+    fn kitchen_sink_is_fully_valid() {
+        let p = parse(&fixture("kitchen-sink.json"), false).unwrap().plan;
+        assert!(validate(&p).is_empty());
     }
 }

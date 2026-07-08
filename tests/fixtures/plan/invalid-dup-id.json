@@ -1,0 +1,9 @@
+{
+  "format": "loadout.plan/1",
+  "meta": { "id": "demo", "title": "Demo plan" },
+  "phases": [
+    { "id": "t-a", "title": "Phase one", "tasks": [
+      { "id": "t-a", "title": "Task A" }
+    ] }
+  ]
+}
