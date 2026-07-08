@@ -802,23 +802,37 @@ mod tests {
 
     #[test]
     fn long_dependency_chain_reports_too_many_without_overflowing_stack() {
-        // ~10,000 tasks in a single dependency chain fits under the 2 MiB
+        // 35,000 tasks in a single dependency chain fits under the 2 MiB
         // input cap, but would overflow the stack if cycle detection's
         // recursive DFS ran before the MAX_TASKS collection-limit check.
+        //
+        // The shape here is deliberate, not incidental: ids are zero-padded
+        // so BTreeSet iteration order (lexicographic) matches chain order
+        // (numeric), and each task depends on the *next* task rather than
+        // the previous one. That means the very first node `find_cycle`
+        // visits (`t-x00000`, lexicographically smallest) has a forward
+        // edge into `t-x00001`, which has a forward edge into `t-x00002`,
+        // and so on to the end of the chain — so the first DFS call made by
+        // `find_cycle` descends the *entire* chain in one recursion, giving
+        // a descent depth of exactly `n` on ungated code. (An earlier
+        // version of this test pointed `depends_on` at the previous task
+        // with unpadded ids; lexicographic iteration over unpadded ids does
+        // not match chain order, which only ever produced a ~900-frame
+        // descent at n=10,000 — not enough to actually exercise the guard.)
         let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
         p.phases[0].tasks.clear();
-        let n = 10_000;
+        let n = 35_000;
         for i in 0..n {
             p.phases[0].tasks.push(PlanTask {
-                id: format!("t-x{i}"),
+                id: format!("t-x{i:05}"),
                 title: "x".into(),
                 summary_md: None,
                 status: Status::Planned,
                 risk: None,
-                depends_on: if i == 0 {
+                depends_on: if i == n - 1 {
                     vec![]
                 } else {
-                    vec![format!("t-x{}", i - 1)]
+                    vec![format!("t-x{:05}", i + 1)]
                 },
                 files: vec![],
                 acceptance: vec![],
