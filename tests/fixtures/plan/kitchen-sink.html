@@ -210,6 +210,27 @@ summary::-webkit-details-marker { display: none; }
    `[open]` rather than always-on, so it can't just live on `.pv-chevron`. */
 details[open] > summary .pv-chevron { transform: rotate(90deg); }
 
+/* Expanded phase body: indent every direct child of the phase except the
+   summary/title row -- the phase's own markdown summary, its mini
+   dependency graph, and every task card -- so the body reads as nested
+   under the phase heading instead of sitting flush with it. `.task` is
+   excluded from the border-left/padding-left half below on purpose: a task
+   card already uses ITS OWN border-left to colour-code risk (see
+   `.task.risk-high` etc. below), and this selector's higher specificity
+   would otherwise win the cascade and quietly thin/regrey that colour. Both
+   rules share the same `margin-left`, so a task's own coloured border lands
+   on the exact same edge the thin rail draws for everything else -- the
+   line simply continues, thicker and coloured, through each task card,
+   rather than two borders competing for the same edge. */
+details.phase > :not(summary) {
+  margin-left: 1.75rem;
+}
+
+details.phase > :not(summary):not(.task) {
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+}
+
 .phase-meta { color: var(--muted); font-weight: 400; font-size: 0.85em; letter-spacing: normal; }
 
 /* Summary strip — the first thing a reviewer reads, so it gets its own
