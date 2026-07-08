@@ -104,20 +104,26 @@ fn clean(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
 pub(crate) fn clean_artifacts(repo_base: &Path, dry_run: bool) -> crate::Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
     let html = plan_html_path(repo_base);
-    if let Ok(content) = std::fs::read_to_string(&html) {
-        if content.starts_with(crate::render::header::GENERATED_MARKER) {
-            if !dry_run {
-                std::fs::remove_file(&html)?;
+    match std::fs::read_to_string(&html) {
+        Ok(content) => {
+            if content.starts_with(crate::render::header::GENERATED_MARKER) {
+                if !dry_run {
+                    std::fs::remove_file(&html)
+                        .map_err(|e| anyhow::anyhow!("cannot remove {}: {e}", html.display()))?;
+                }
+                removed.push(html);
+            } else {
+                println!("  skipping {} (not loadout-generated)", html.display());
             }
-            removed.push(html);
-        } else {
-            println!("  skipping {} (not loadout-generated)", html.display());
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => bail!("cannot read {}: {e}", html.display()),
     }
     let fb = feedback_path(repo_base);
     if fb.exists() {
         if !dry_run {
-            std::fs::remove_file(&fb)?;
+            std::fs::remove_file(&fb)
+                .map_err(|e| anyhow::anyhow!("cannot remove {}: {e}", fb.display()))?;
         }
         removed.push(fb);
     }

@@ -2600,6 +2600,55 @@ fn plan_clean_removes_only_marked_html() {
     assert!(f.exists(".loadout/generated/plan.html"));
 }
 
+/// An unreadable (but present) plan.html must surface as a hard error, not
+/// get folded into the "no plan artifacts" silent-skip path.
+#[cfg(unix)]
+#[test]
+fn plan_clean_errors_on_unreadable_html_instead_of_skipping() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // chmod 000 has no effect on root's own read access, so this test is
+    // meaningless (and would fail) when run as root.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
+    let f = Fixture::new();
+    f.git_init();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+
+    let html = f.repo_path().join(".loadout/generated/plan.html");
+    let mut perms = fs::metadata(&html).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&html, perms).unwrap();
+
+    let assert = f.cmd().args(["plan", "clean"]).assert().failure();
+    let output = assert.get_output();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("plan.html"),
+        "expected the error to name the unreadable path, got: {combined}"
+    );
+
+    // Restore so the temp dir can be cleaned up.
+    let mut perms = fs::metadata(&html).unwrap().permissions();
+    perms.set_mode(0o644);
+    fs::set_permissions(&html, perms).unwrap();
+}
+
 #[test]
 fn load_clean_sweeps_plan_html_without_agent_overlays() {
     let f = Fixture::new();
