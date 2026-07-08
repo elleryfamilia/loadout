@@ -404,10 +404,10 @@ pub fn render(plan: &Plan) -> String {
     let island = escape_json_island(
         &serde_json::to_string(&sanitized_for_island(plan)).expect("plan serializes"),
     );
-    // Computed once: the whole-plan graph doubles as "should each phase draw
-    // its own subgraph too" — a phase graph would be redundant once the
-    // whole plan already fits in one picture.
-    let overview = svg::whole_plan_svg(plan);
+    // The bottom-of-page overview is now phase-level (nodes = phases, not
+    // tasks) — see plan/svg.rs's module doc for why the old whole-plan task
+    // graph was dropped. Per-phase task graphs render unconditionally below.
+    let phase_graph = svg::phase_graph_svg(plan);
     let risk_line = summary_risk_line(plan);
     let blocking: Vec<&OpenQuestion> = plan.open_questions.iter().filter(|q| q.blocking).collect();
     let page = html! {
@@ -544,16 +544,14 @@ pub fn render(plan: &Plan) -> String {
                             }
                         }
                         (md(&phase.summary_md))
-                        @if overview.is_none() {
-                            @if let Some(g) = svg::phase_svg(plan, &phase.id) { (PreEscaped(g)) }
-                        }
+                        @if let Some(g) = svg::phase_svg(plan, &phase.id) { (PreEscaped(g)) }
                         @for task in &phase.tasks { (task_card(task)) }
                     }
                 }
-                @if let Some(overview_svg) = &overview {
+                @if let Some(g) = &phase_graph {
                     details.graph {
-                        summary { "Dependency graph" }
-                        (PreEscaped(overview_svg.as_str()))
+                        summary { "Phase dependencies" }
+                        (PreEscaped(g.as_str()))
                     }
                 }
                 script type="application/json" id="plan-data" { (PreEscaped(island)) }
@@ -718,7 +716,7 @@ mod tests {
         assert!(summary_pos < open_q_pos, "summary before open questions");
         assert!(open_q_pos < risks_pos, "open questions before risks");
         assert!(risks_pos < phase_pos, "risks before first phase");
-        assert!(phase_pos < graph_pos, "phases before the whole-plan graph");
+        assert!(phase_pos < graph_pos, "phases before the phase graph");
 
         // (h) phases (and the graph) are collapsed by default.
         assert!(!html.contains("<details class=\"phase\" open"), "{html}");
@@ -726,6 +724,19 @@ mod tests {
 
         // (i) the blocking link's target anchor exists.
         assert!(html.contains("id=\"question-q-ttl\""), "{html}");
+
+        // (j) the bottom graph is now phase-level, not the old whole-plan
+        // task graph: a "Phase dependencies" heading, phase nodes linking to
+        // both phases' anchors.
+        assert!(html.contains("Phase dependencies"), "{html}");
+        assert!(html.contains("class=\"node phase-node\""), "{html}");
+        assert!(html.contains("href=\"#phase-p-core\""), "{html}");
+        assert!(html.contains("href=\"#phase-p-backend\""), "{html}");
+
+        // (k) per-phase task graphs now render unconditionally (both of
+        // kitchen-sink's phases have dependency edges), alongside the
+        // phase-level overview: 2 per-phase task graphs + 1 phase graph.
+        assert_eq!(html.matches("class=\"plan-graph\"").count(), 3, "{html}");
     }
 
     #[test]

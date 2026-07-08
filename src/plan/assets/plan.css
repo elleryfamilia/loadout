@@ -232,7 +232,11 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
 .orphan { border: 1px dashed var(--warn); background: transparent; }
 
 /* dependency graph SVG — width/height attrs on the element (see svg.rs) give
-   it intrinsic size; this only ever shrinks it on narrow viewports. */
+   it intrinsic size; this only ever shrinks it on narrow viewports. Task
+   nodes keep their status fill (a task's state is the point); the
+   phase-level overview instead uses a neutral card fill with an accent
+   border, since a phase's "state" is really just "does it contain a
+   high-risk task" (`.has-high`), not one of the five task statuses. */
 .plan-graph { display: block; max-width: 100%; height: auto; }
 .plan-graph .node { stroke: var(--border); stroke-width: 1; }
 .plan-graph .node.status-planned { fill: var(--gray); }
@@ -241,9 +245,17 @@ details.graph > summary { cursor: pointer; font-weight: 600; }
 .plan-graph .node.status-blocked { fill: var(--danger); }
 .plan-graph .node.status-cut { fill: var(--gray); }
 .plan-graph .node.stub { stroke-dasharray: 4 3; fill-opacity: 0.55; }
+.plan-graph .node.phase-node { fill: var(--card-bg); stroke: var(--accent); stroke-width: 1.5; }
+.plan-graph .node.phase-node.has-high { stroke: var(--danger); }
 .plan-graph a:has(.node.status-cut) text { text-decoration: line-through; }
-.plan-graph .edge { stroke: var(--muted); stroke-width: 1.5; fill: none; }
-.plan-graph text { font-size: 12px; fill: var(--fg); pointer-events: none; }
+.plan-graph .edge { stroke: var(--muted); stroke-width: 1.25; fill: none; }
+.plan-graph text {
+  font-size: 12px;
+  fill: var(--fg);
+  pointer-events: none;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
 
 .comment-btn {
   position: absolute;
