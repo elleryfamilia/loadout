@@ -2568,3 +2568,52 @@ fn plan_schema_prints_the_reference() {
         .success()
         .stdout(predicate::str::contains("loadout.plan/1"));
 }
+
+#[test]
+fn plan_clean_removes_only_marked_html() {
+    let f = Fixture::new();
+    f.git_init();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+    f.cmd().args(["plan", "clean"]).assert().success();
+    assert!(!f.exists(".loadout/generated/plan.html"));
+    assert!(
+        f.exists(".loadout/workflow/artifacts/plan.json"),
+        "input untouched"
+    );
+
+    // A foreign (unmarked) plan.html is never deleted.
+    f.write(".loadout/generated/plan.html", "<html>mine</html>");
+    f.cmd()
+        .args(["plan", "clean"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not loadout-generated"));
+    assert!(f.exists(".loadout/generated/plan.html"));
+}
+
+#[test]
+fn load_clean_sweeps_plan_html_without_agent_overlays() {
+    let f = Fixture::new();
+    f.git_init();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+    f.cmd().args(["clean"]).assert().success();
+    assert!(!f.exists(".loadout/generated/plan.html"));
+}

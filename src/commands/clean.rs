@@ -21,11 +21,6 @@ pub fn run(rt: &Runtime, args: &CleanArgs) -> crate::Result<()> {
         None => agents_with_artifacts(&prep),
     };
 
-    if agents.is_empty() {
-        println!("nothing to clean (no loadout artifacts found).");
-        return Ok(());
-    }
-
     let writer = AtomicWriter::new(rt.dry_run);
     if rt.dry_run {
         println!("dry run — nothing will be removed\n");
@@ -65,6 +60,22 @@ pub fn run(rt: &Runtime, args: &CleanArgs) -> crate::Result<()> {
             println!("  note: {note}");
         }
         println!();
+    }
+
+    let plan_removed = super::plan::clean_artifacts(&prep.repo_base, rt.dry_run)?;
+    if !plan_removed.is_empty() {
+        println!("plan");
+        for p in &plan_removed {
+            println!(
+                "  {:<10} {}",
+                if rt.dry_run { "would rm" } else { "removed" },
+                p.display()
+            );
+        }
+    }
+
+    if agents.is_empty() && plan_removed.is_empty() {
+        println!("nothing to clean (no loadout artifacts found).");
     }
     Ok(())
 }

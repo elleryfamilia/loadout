@@ -79,8 +79,49 @@ pub fn run(rt: &Runtime, args: &PlanArgs) -> crate::Result<()> {
             println!("{}", reference.content);
             Ok(())
         }
-        Some(PlanAction::Clean) => bail!("not implemented yet"),
+        Some(PlanAction::Clean) => clean(&prep, rt),
     }
+}
+
+fn clean(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
+    let removed = clean_artifacts(&prep.repo_base, rt.dry_run)?;
+    if removed.is_empty() {
+        println!("  (no plan artifacts)");
+    } else {
+        for p in &removed {
+            println!(
+                "  {:<10} {}",
+                if rt.dry_run { "would rm" } else { "removed" },
+                p.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Remove the rendered plan.html (marker-gated) and plan-feedback.json.
+/// Never touches plan.json (the agent's input) or anything unmarked.
+pub(crate) fn clean_artifacts(repo_base: &Path, dry_run: bool) -> crate::Result<Vec<PathBuf>> {
+    let mut removed = Vec::new();
+    let html = plan_html_path(repo_base);
+    if let Ok(content) = std::fs::read_to_string(&html) {
+        if content.starts_with(crate::render::header::GENERATED_MARKER) {
+            if !dry_run {
+                std::fs::remove_file(&html)?;
+            }
+            removed.push(html);
+        } else {
+            println!("  skipping {} (not loadout-generated)", html.display());
+        }
+    }
+    let fb = feedback_path(repo_base);
+    if fb.exists() {
+        if !dry_run {
+            std::fs::remove_file(&fb)?;
+        }
+        removed.push(fb);
+    }
+    Ok(removed)
 }
 
 /// Load + parse + validate; returns the plan or prints diagnostics and errs.
