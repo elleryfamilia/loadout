@@ -16,6 +16,7 @@ use maud::{html, Markup, PreEscaped, DOCTYPE};
 use crate::context::Scope;
 use crate::fragment::{Fragment, Layer};
 use crate::profile::LoadoutConfig;
+use crate::skills::SkillState;
 use crate::studio::edit::FileDiff;
 use crate::studio::state::{
     AtomDot, AtomState, BoardFrag, BoardView, FragmentView, LibraryView, Onboarding, PackView,
@@ -588,11 +589,20 @@ pub enum SkillCardState {
     HandsOff,
 }
 
+/// One row in the skill card's per-skill list: an id plus its individual
+/// install state, which decides whether the row offers Install or Remove.
+pub struct SkillRow {
+    pub id: &'static str,
+    pub state: SkillState,
+}
+
 /// The agent-skill card (fills `#skill-card`). `ids` lists the shipped skills
-/// (display only). Unlike packs, the Install button writes `~/.agents/skills`
-/// immediately on confirm — there is nothing staged to review or discard, so
-/// it must not imply staged semantics.
-pub fn skill_card(ids: &[&str], state: &SkillCardState) -> String {
+/// (display only, for the summary text above). `rows` — one per shipped
+/// skill — renders below with its own state label and an Install-or-Remove
+/// toggle. Unlike packs, both the bulk button and the per-row toggles write
+/// `~/.agents/skills` immediately on confirm — there is nothing staged to
+/// review or discard, so neither must imply staged semantics.
+pub fn skill_card(ids: &[&str], rows: &[SkillRow], state: &SkillCardState) -> String {
     let id_list = ids.join(", ");
     html! {
         div class="cmd-block" {
@@ -632,8 +642,50 @@ pub fn skill_card(ids: &[&str], state: &SkillCardState) -> String {
                 }
             }
         }
+        @if !rows.is_empty() {
+            div class="cmd-block" {
+                @for row in rows { (skill_row(row)) }
+            }
+        }
     }
     .into_string()
+}
+
+/// One skill's row: name, a short state label, and the Install/Remove toggle
+/// for that skill alone (independent of the bundle action above).
+fn skill_row(row: &SkillRow) -> Markup {
+    let installed = matches!(row.state, SkillState::Managed { .. });
+    let label = match &row.state {
+        SkillState::NotInstalled => "not installed",
+        SkillState::Unmanaged => "present, not managed by loadout",
+        SkillState::Managed {
+            user_modified: true,
+            ..
+        } => "installed, edited by you (won't auto-upgrade)",
+        SkillState::Managed {
+            upgrade_available: true,
+            ..
+        } => "installed, upgrade available",
+        SkillState::Managed { .. } => "installed, current",
+    };
+    let id = row.id;
+    html! {
+        div class="slot-row" {
+            span { strong { (id) } " — " span class="muted small" { (label) } }
+            @if installed {
+                button class="btn btn-danger-ghost btn-sm"
+                    hx-post=(format!("/skills/{}/remove", enc(id))) hx-target="#skill-card"
+                    hx-confirm=(format!("Remove {id}? This deletes it from ~/.agents/skills immediately.")) {
+                    "Remove"
+                }
+            } @else {
+                button class="btn btn-ghost btn-sm"
+                    hx-post=(format!("/skills/{}/install", enc(id))) hx-target="#skill-card" {
+                    "Install"
+                }
+            }
+        }
+    }
 }
 
 /// The welcome as a standalone `#main` fragment — the "?" tour button, reachable
@@ -2670,6 +2722,80 @@ mod tests {
             script_lang: None,
             private: false,
         }
+    }
+
+    #[test]
+    fn skill_card_rows_toggle_between_install_and_remove() {
+        // Pure rendering, no filesystem: a `NotInstalled` row offers Install; a
+        // `Managed` row (current or not) offers Remove instead.
+        let rows = vec![
+            SkillRow {
+                id: "loadout-migrate",
+                state: SkillState::NotInstalled,
+            },
+            SkillRow {
+                id: "loadout-plan-preview",
+                state: SkillState::Managed {
+                    marker_hash: "sha256:abc".into(),
+                    user_modified: false,
+                    upgrade_available: false,
+                },
+            },
+        ];
+        let html = skill_card(
+            &["loadout-migrate", "loadout-plan-preview"],
+            &rows,
+            &SkillCardState::HandsOff,
+        );
+        assert!(html.contains("loadout-migrate"));
+        assert!(html.contains("loadout-plan-preview"));
+        assert!(html.contains(r#"hx-post="/skills/loadout-migrate/install""#));
+        assert!(html.contains(r#"hx-post="/skills/loadout-plan-preview/remove""#));
+        // Every row swaps the card itself, matching the bundle button's target.
+        assert!(html.contains("hx-target=\"#skill-card\""));
+    }
+
+    #[test]
+    fn skill_card_row_labels_call_out_user_edits_and_upgrades() {
+        let rows = vec![
+            SkillRow {
+                id: "loadout-remember",
+                state: SkillState::Managed {
+                    marker_hash: "sha256:abc".into(),
+                    user_modified: true,
+                    upgrade_available: false,
+                },
+            },
+            SkillRow {
+                id: "loadout-import-workflow",
+                state: SkillState::Managed {
+                    marker_hash: "sha256:def".into(),
+                    user_modified: false,
+                    upgrade_available: true,
+                },
+            },
+            SkillRow {
+                id: "loadout-plan-preview",
+                state: SkillState::Unmanaged,
+            },
+        ];
+        let html = skill_card(&[], &rows, &SkillCardState::HandsOff);
+        assert!(html.contains("edited by you"));
+        assert!(html.contains("upgrade available"));
+        assert!(html.contains("not managed by loadout"));
+        // A user-modified or unmanaged row is still offered Remove/Install per
+        // its own state, not folded into the aggregate hands-off message.
+        assert!(html.contains(r#"hx-post="/skills/loadout-remember/remove""#));
+        assert!(html.contains(r#"hx-post="/skills/loadout-plan-preview/install""#));
+    }
+
+    #[test]
+    fn skill_card_omits_row_list_when_no_rows() {
+        // The `HandsOff`/no-home fallback (e.g. `$HOME` unresolved) still
+        // renders the summary block; it just has nothing to list per-skill.
+        let html = skill_card(&["loadout-migrate"], &[], &SkillCardState::HandsOff);
+        assert!(html.contains("loadout-migrate"));
+        assert!(!html.contains("hx-post=\"/skills/"));
     }
 
     #[test]

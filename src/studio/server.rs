@@ -178,6 +178,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         (_, p) if p.starts_with("/workflows/") => handle_workflow_param(state, req),
         (_, p) if p.starts_with("/profiles/") => handle_profile_param(state, req),
         (_, p) if p.starts_with("/packs/") => handle_pack_param(state, req),
+        (_, p) if p.starts_with("/skills/") => handle_skill_action(req),
         _ => Resp::not_found(),
     }
 }
@@ -1152,14 +1153,11 @@ fn handle_quickstart(state: &Arc<Mutex<StudioState>>) -> Resp {
 /// aggregated over every shipped skill (the card offers them as one bundle).
 /// Deliberately not part of the studio snapshot: skill install is a direct,
 /// immediate action on `~/.agents/skills`, not a staged config edit.
-fn skill_card_state() -> views::SkillCardState {
+fn skill_card_state_for(home: &Path) -> views::SkillCardState {
     use crate::skills::SkillState;
-    let Some(home) = crate::config::home_dir() else {
-        return views::SkillCardState::HandsOff;
-    };
     let states: Vec<SkillState> = crate::skills::all()
         .iter()
-        .map(|s| crate::skills::status(&home, s).state)
+        .map(|s| crate::skills::status(home, s).state)
         .collect();
     if states.contains(&SkillState::NotInstalled) {
         return views::SkillCardState::Offer;
@@ -1194,9 +1192,25 @@ fn skill_ids() -> Vec<&'static str> {
     crate::skills::all().iter().map(|s| s.id).collect()
 }
 
+/// One row per shipped skill, carrying its individual install state — what
+/// the per-skill Install/Remove toggle on the card renders from.
+fn skill_rows(home: &Path) -> Vec<views::SkillRow> {
+    crate::skills::all()
+        .iter()
+        .map(|s| views::SkillRow {
+            id: s.id,
+            state: crate::skills::status(home, s).state,
+        })
+        .collect()
+}
+
 /// `GET /skills/card` — the lazily-loaded agent-skill card on the welcome screen.
 fn handle_skill_card() -> Resp {
-    Resp::html(views::skill_card(&skill_ids(), &skill_card_state()))
+    let (rows, state) = match crate::config::home_dir() {
+        Some(home) => (skill_rows(&home), skill_card_state_for(&home)),
+        None => (Vec::new(), views::SkillCardState::HandsOff),
+    };
+    Resp::html(views::skill_card(&skill_ids(), &rows, &state))
 }
 
 /// `POST /skills/install` — install (or upgrade) every embedded skill NOW and
@@ -1222,7 +1236,57 @@ fn handle_skill_install() -> Resp {
             )));
         }
     }
-    Resp::html(views::skill_card(&skill_ids(), &skill_card_state()))
+    Resp::html(views::skill_card(
+        &skill_ids(),
+        &skill_rows(&home),
+        &skill_card_state_for(&home),
+    ))
+}
+
+/// `POST /skills/<id>/install` and `POST /skills/<id>/remove` — the per-skill
+/// toggles on the skills card. Immediate side effects (like the bulk install);
+/// decisions recorded so `load run` honors the choice. Resolves the real
+/// `$HOME` + bindings-store path, then delegates to [`skill_action_at`], which
+/// takes both explicit so tests never touch the real machine's skills.
+fn handle_skill_action(req: &Req) -> Resp {
+    let Some(home) = crate::config::home_dir() else {
+        return Resp::html(views::error_fragment("cannot resolve $HOME"));
+    };
+    let Some(store) = crate::binding::store_path() else {
+        return Resp::html(views::error_fragment(
+            "cannot resolve the global config dir",
+        ));
+    };
+    skill_action_at(&home, &store, &req.path, req.method.as_str())
+}
+
+/// [`handle_skill_action`] against explicit `home`/bindings-store paths (the
+/// testable core — mirrors `skills::install`/`binding::write_skill_decision_at`,
+/// which take explicit paths for the same reason).
+fn skill_action_at(home: &Path, store: &Path, path: &str, method: &str) -> Resp {
+    let (id, action) = id_and_action(path, "/skills/");
+    let Some(skill) = crate::skills::by_id(&id) else {
+        return Resp::html(views::error_fragment(&format!("unknown skill '{id}'")));
+    };
+    let result = match (method, action) {
+        ("POST", "install") => {
+            crate::skills::install(home, skill).map(|_| crate::binding::SkillDecision::Accepted)
+        }
+        ("POST", "remove") => {
+            crate::skills::remove(home, skill).map(|_| crate::binding::SkillDecision::Declined)
+        }
+        _ => return Resp::not_found(),
+    };
+    match result.and_then(|d| crate::binding::write_skill_decision_at(store, skill.id, d)) {
+        Ok(()) => Resp::html(views::skill_card(
+            &skill_ids(),
+            &skill_rows(home),
+            &skill_card_state_for(home),
+        )),
+        Err(e) => Resp::html(views::error_fragment(&format!(
+            "skill {action} failed: {e:#}"
+        ))),
+    }
 }
 
 /// `GET /onboarding/welcome` — (re)show the first-launch welcome on demand (the
@@ -3767,6 +3831,78 @@ mod tests {
             &req("POST", "/skills/install", "", &[HOST, COOKIE], ""),
         );
         assert_eq!(r.status, 403);
+    }
+
+    #[test]
+    fn per_skill_action_requires_origin_like_all_mutations() {
+        // Same CSRF guard for the new per-skill route.
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/skills/loadout-migrate/install",
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 403);
+    }
+
+    #[test]
+    fn unknown_skill_id_is_a_clean_error() {
+        // The unknown-id check happens before any file is touched, so this is
+        // safe to run through the real route (and thus the real $HOME) — no
+        // install/remove call is ever reached.
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/skills/nope/install",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        assert!(body_of(r).contains("unknown skill"));
+    }
+
+    #[test]
+    fn per_skill_install_and_remove_roundtrip() {
+        // The route resolves the real $HOME/config dir; the actual install and
+        // remove logic runs here against an isolated tmpdir instead, via the
+        // same testable core the route delegates to (mirrors how
+        // `skills::install`/`binding::write_skill_decision_at` take explicit
+        // paths so tests never touch the developer's real `~/.agents/skills`).
+        let home = tempfile::tempdir().unwrap();
+        let store = home.path().join("bindings.toml");
+
+        let body = body_of(skill_action_at(
+            home.path(),
+            &store,
+            "/skills/loadout-plan-preview/install",
+            "POST",
+        ));
+        assert!(body.contains("loadout-plan-preview"));
+        assert!(
+            body.contains("Remove"),
+            "installed row offers Remove: {body}"
+        );
+
+        let body = body_of(skill_action_at(
+            home.path(),
+            &store,
+            "/skills/loadout-plan-preview/remove",
+            "POST",
+        ));
+        assert!(
+            body.contains("Install"),
+            "removed row offers Install: {body}"
+        );
     }
 
     // --- re-attach to an already-running instance ----------------------------
