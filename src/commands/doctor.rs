@@ -3,27 +3,10 @@
 use std::path::Path;
 use std::process::Command;
 
+use super::checks::{self, Status};
 use super::{prepare, Runtime};
 use crate::render::header;
-use crate::writer::BLOCK_BEGIN;
 use crate::{config, templates};
-
-#[derive(Clone, Copy)]
-enum Status {
-    Ok,
-    Warn,
-    Fail,
-}
-
-impl Status {
-    fn symbol(self) -> &'static str {
-        match self {
-            Status::Ok => "✓",
-            Status::Warn => "⚠",
-            Status::Fail => "✗",
-        }
-    }
-}
 
 struct Checks {
     warns: usize,
@@ -41,6 +24,13 @@ impl Checks {
             Status::Ok => {}
         }
         println!("  {} {}", status.symbol(), msg.as_ref());
+    }
+}
+
+/// Print a batch of extracted-check findings through the doctor tally.
+fn report(c: &mut Checks, findings: Vec<checks::Finding>) {
+    for f in findings {
+        c.line(f.status, f.message);
     }
 }
 
@@ -92,15 +82,19 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     // Fragments/profiles authored in a repo layer (global-only mistake).
     check_repo_global_only(&mut c, &prep.repo_base);
     // Profiles referencing fragments that don't exist (e.g. a hand-deleted cap).
-    check_dangling_fragment_refs(&mut c, &prep.config);
+    report(&mut c, checks::dangling_fragment_refs(&prep.config));
     // Profiles binding an unknown workflow, and malformed user workflows.
-    check_workflows(&mut c, &prep.config);
+    report(&mut c, checks::workflows(&prep.config));
     // The single-default invariant (one no-targets catch-all loadout).
-    check_default_loadout(&mut c, &prep.config);
+    report(&mut c, checks::default_loadout(&prep.config));
     // Allowlist/denylist consistency.
-    check_env_policy(&mut c, &prep.config);
+    report(&mut c, checks::env_policy(&prep.config));
     // Private-data leak lint over public config layers.
-    check_public_leaks(&mut c, &prep);
+    report(&mut c, checks::public_leaks(&prep.config));
+    // Secret-looking strings in any config source layer (incl. local.toml).
+    report(&mut c, checks::secret_leaks(&prep.config));
+    // Prompt-injection-shaped phrasing in imported workflow step text.
+    report(&mut c, checks::injection(&prep.config));
     // Script fragments whose output loadout would silently drop (non-zero exit).
     check_script_dropouts(&mut c, &prep);
 
@@ -143,14 +137,14 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
         ),
     }
     if prep.context.git.is_some() {
-        check_gitignore(&mut c, &prep.repo_base);
+        report(&mut c, checks::gitignore(&prep.repo_base));
     } else {
         c.line(
             Status::Ok,
             "not a git repo — non-repo mode (.gitignore not managed)",
         );
     }
-    check_claude_marker(&mut c, &prep.repo_base);
+    report(&mut c, checks::claude_marker(&prep.repo_base));
 
     // Generated overlays freshness.
     println!(
@@ -289,6 +283,13 @@ fn check_script_dropouts(c: &mut Checks, prep: &super::Prepared) {
     println!("\nScript fragments ({} probed)", scripts.len());
     let mut clean = 0usize;
     for f in scripts {
+        // Doctor is a script execution site too: warn on an out-of-band change
+        // before running the script, same as render/run/refresh and target
+        // detection do — otherwise `load doctor` would silently run a changed
+        // script while every other path warns.
+        if let Some(hashes) = crate::trust::fragment_hashes(f) {
+            crate::trust::check_and_warn(crate::trust::Kind::Fragment, &f.id, &hashes);
+        }
         let cmd = f.command.as_deref().unwrap_or_default();
         let out = crate::providers::run_once_in(cmd, f.script_lang.as_deref(), &prep.repo_base);
         let status = out.data.get("status").and_then(serde_json::Value::as_i64);
@@ -345,66 +346,6 @@ fn writable(dir: &Path) -> bool {
         .prefix(".loadout-doctor-")
         .tempfile_in(dir)
         .is_ok()
-}
-
-fn check_env_policy(c: &mut Checks, cfg: &config::Config) {
-    let deny: Vec<regex::Regex> = cfg
-        .env
-        .deny_name_patterns
-        .iter()
-        .filter_map(|p| regex::Regex::new(p).ok())
-        .collect();
-    let conflicting: Vec<&String> = cfg
-        .env
-        .allowlist
-        .iter()
-        .filter(|name| deny.iter().any(|re| re.is_match(name)))
-        .collect();
-    if conflicting.is_empty() {
-        c.line(
-            Status::Ok,
-            format!(
-                "env allowlist: {} name(s), denylist consistent",
-                cfg.env.allowlist.len()
-            ),
-        );
-    } else {
-        c.line(
-            Status::Warn,
-            format!("env names allowlisted but denied (will be dropped): {conflicting:?}"),
-        );
-    }
-}
-
-/// Warn when a **public** config layer (`config.toml`) contains literals that
-/// look machine-specific — IPv4 addresses, `*.domain.tld` globs, or
-/// multi-label hostnames — which belong in the gitignored `local.toml`. Only
-/// public layers are scanned; `local.toml` is the place for these.
-fn check_public_leaks(c: &mut Checks, prep: &super::Prepared) {
-    let mut scanned = 0usize;
-    let mut flagged = 0usize;
-    for src in &prep.config.sources {
-        if src.file_name().and_then(|s| s.to_str()) != Some("config.toml") {
-            continue; // local.toml is the private layer — never linted
-        }
-        let Ok(text) = std::fs::read_to_string(src) else {
-            continue;
-        };
-        scanned += 1;
-        for h in crate::lint::find_in_text(&text) {
-            flagged += 1;
-            c.line(
-                Status::Warn,
-                format!(
-                    "{}: {h:?} looks private — move to local.toml",
-                    src.display()
-                ),
-            );
-        }
-    }
-    if scanned > 0 && flagged == 0 {
-        c.line(Status::Ok, "public config has no private-looking literals");
-    }
 }
 
 /// For an agent with a user-level freshness hook (e.g. Cursor): is loadout's
@@ -470,90 +411,6 @@ fn check_hook_registry(c: &mut Checks, a: &crate::adapters::AgentDescriptor) {
     }
 }
 
-/// The single-default invariant: exactly one enabled loadout with no targets is
-/// the catch-all that applies when nothing else matches (in any project or none).
-/// Zero ⇒ unmatched contexts get no loadout; more than one ⇒ ambiguous.
-fn check_default_loadout(c: &mut Checks, cfg: &config::Config) {
-    let defaults: Vec<&str> = cfg
-        .profiles
-        .iter()
-        .filter(|p| !p.disabled && p.targets.is_empty())
-        .map(|p| p.name.as_str())
-        .collect();
-    match defaults.len() {
-        1 => c.line(
-            Status::Ok,
-            format!("default loadout: '{}' (applies everywhere nothing else matches)", defaults[0]),
-        ),
-        0 => c.line(
-            Status::Warn,
-            "no default loadout — nothing applies in a project that matches no loadout (or outside a project). In `load studio`, clear a loadout's targets to make it the default.",
-        ),
-        _ => c.line(
-            Status::Warn,
-            format!(
-                "{} default loadouts ({}) — only one loadout should have no targets; give the others a target so selection isn't ambiguous",
-                defaults.len(),
-                defaults.join(", ")
-            ),
-        ),
-    }
-}
-
-/// A profile that references a fragment id not in the library renders nothing
-/// for that entry (compose silently skips it). Surface the dangling reference —
-/// it usually means a fragment was hand-deleted without cleaning up the
-/// profile (studio's delete does this cleanup automatically).
-fn check_dangling_fragment_refs(c: &mut Checks, cfg: &config::Config) {
-    let known: std::collections::HashSet<&str> =
-        cfg.fragments.iter().map(|x| x.id.as_str()).collect();
-    for p in &cfg.profiles {
-        for r in &p.fragments {
-            if !known.contains(r.id()) {
-                c.line(
-                    Status::Warn,
-                    format!(
-                        "loadout '{}' references unknown fragment '{}' (it renders nothing — remove it or define the fragment)",
-                        p.name,
-                        r.id()
-                    ),
-                );
-            }
-        }
-    }
-}
-
-/// Profiles that bind a workflow id resolving to nothing (a typo or a deleted
-/// `[[workflows]]` entry), plus any malformed user-authored workflow. A dangling
-/// binding degrades silently at render time, so surface it here. Resolves
-/// against the same built-in + user catalog the renderer uses.
-fn check_workflows(c: &mut Checks, cfg: &config::Config) {
-    // A workflow is bound per-loadout (the Workflow slot) — there's no global
-    // default workflow anymore. Flag any loadout whose binding doesn't resolve.
-    for p in &cfg.profiles {
-        let Some(id) = &p.workflow else { continue };
-        if cfg.resolve_workflow(id).is_some() {
-            c.line(
-                Status::Ok,
-                format!("loadout '{}' → workflow '{id}'", p.name),
-            );
-        } else {
-            c.line(
-                Status::Warn,
-                format!(
-                    "loadout '{}' binds unknown workflow '{id}' (it won't apply — define it under [[workflows]] or fix the id)",
-                    p.name
-                ),
-            );
-        }
-    }
-    for w in &cfg.workflows {
-        for problem in w.validate() {
-            c.line(Status::Warn, format!("workflow '{}': {problem}", w.id));
-        }
-    }
-}
-
 /// Fragments and profiles are global-only. A repo `config.toml`/`local.toml`
 /// that declares them is silently ignored by the loader (so the mistake is
 /// invisible at render time) — surface it here. Scans the raw file because the
@@ -608,37 +465,6 @@ fn oxford_join(items: &[&str]) -> String {
         [a] => a.to_string(),
         [a, b] => format!("{a} and {b}"),
         [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
-    }
-}
-
-fn check_gitignore(c: &mut Checks, repo_base: &Path) {
-    let gi = std::fs::read_to_string(repo_base.join(".gitignore")).unwrap_or_default();
-    if gi
-        .lines()
-        .any(|l| l.trim().trim_end_matches('/') == ".loadout/generated")
-    {
-        c.line(Status::Ok, ".gitignore covers .loadout/generated/");
-    } else {
-        c.line(
-            Status::Warn,
-            ".gitignore missing .loadout/generated/ (render an agent to manage it)",
-        );
-    }
-}
-
-fn check_claude_marker(c: &mut Checks, repo_base: &Path) {
-    let path = repo_base.join("CLAUDE.local.md");
-    if !path.exists() {
-        return; // nothing rendered for Claude yet; not a problem
-    }
-    let content = std::fs::read_to_string(&path).unwrap_or_default();
-    if content.contains(BLOCK_BEGIN) {
-        c.line(Status::Ok, "CLAUDE.local.md has the managed import block");
-    } else {
-        c.line(
-            Status::Warn,
-            "CLAUDE.local.md exists but lacks the managed block (re-run render)",
-        );
     }
 }
 

@@ -96,6 +96,10 @@ pub enum Command {
     List(ListArgs),
     /// Open your global config to edit a loadout or fragment in `$EDITOR`.
     Edit(EditArgs),
+    /// Manage custom targets (`load targets trust <id>`).
+    Targets(TargetsArgs),
+    /// Show or rebuild the per-machine script trust store.
+    Trust(TrustArgs),
     /// Launch an agent by id — the implicit form of `run` (e.g. `load claude`).
     /// Any first token that isn't a known command is treated as an agent id;
     /// the rest pass through to the agent.
@@ -254,6 +258,37 @@ pub enum FragmentsAction {
         /// Fragment id.
         id: String,
     },
+    /// Re-approve a script fragment's current script after an out-of-band change.
+    Trust {
+        /// Fragment id.
+        id: String,
+    },
+}
+
+/// `targets` options.
+#[derive(Debug, Args)]
+pub struct TargetsArgs {
+    #[command(subcommand)]
+    pub action: TargetsAction,
+}
+
+/// `targets` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum TargetsAction {
+    /// Re-approve a custom target's current script(s) after an out-of-band change.
+    Trust {
+        /// Target id.
+        id: String,
+    },
+}
+
+/// `trust` options.
+#[derive(Debug, Args)]
+pub struct TrustArgs {
+    /// Re-record every script currently in config as explicitly approved
+    /// (also recovers a corrupt trust store).
+    #[arg(long)]
+    pub rebuild: bool,
 }
 
 /// `profiles` options.

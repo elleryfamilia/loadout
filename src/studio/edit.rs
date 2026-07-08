@@ -28,6 +28,7 @@ use crate::config::{self, Config};
 use crate::fragment::{palette, Fragment, Layer};
 use crate::profile::LoadoutConfig;
 use crate::target::TargetDef;
+use crate::trust;
 use crate::workflow::Workflow;
 use crate::writer::{atomic_write, AtomicWriter, Writer, WrittenFile};
 
@@ -127,6 +128,10 @@ pub struct Session {
     repo_base: PathBuf,
     layers: Vec<LayerFile>,
     ops: Vec<StagedOp>,
+    /// Script hashes to record as trusted once `apply()` writes succeed — one
+    /// entry per accepted script-bearing `EditFragment`/`EditTarget`. The
+    /// explicit studio edit *is* the trust approval.
+    pub(crate) pending_trust: Vec<(trust::Kind, String, std::collections::BTreeSet<String>)>,
 }
 
 /// A per-file diff of the staged document against the raw on-disk bytes.
@@ -172,6 +177,7 @@ impl Session {
             repo_base: repo_base.to_path_buf(),
             layers,
             ops: Vec::new(),
+            pending_trust: Vec::new(),
         })
     }
 
@@ -185,6 +191,27 @@ impl Session {
             .find(|l| l.layer == layer)
             .ok_or_else(|| anyhow!("layer {layer:?} is not open in this session"))?;
         apply_op(&mut lf.staged, &op)?;
+
+        // The op is accepted (applied to the staged doc without error) — a
+        // script-bearing edit queues its own trust approval, flushed on a
+        // successful `apply()`. A rejected/invalid stage never reaches here.
+        match &op {
+            StagedOp::EditFragment { cap, .. } => {
+                if let Some(hashes) = trust::fragment_hashes(cap) {
+                    self.pending_trust
+                        .push((trust::Kind::Fragment, cap.id.clone(), hashes));
+                }
+            }
+            StagedOp::EditTarget { target, .. } => {
+                let hashes = trust::target_hashes(target);
+                if !hashes.is_empty() {
+                    self.pending_trust
+                        .push((trust::Kind::Target, target.id.clone(), hashes));
+                }
+            }
+            _ => {}
+        }
+
         self.ops.push(op);
         Ok(())
     }
@@ -202,6 +229,9 @@ impl Session {
             lf.reread()?;
         }
         self.ops.clear();
+        // Abandoned ops must not leave a stray trust approval queued for a
+        // later, unrelated apply().
+        self.pending_trust.clear();
         Ok(())
     }
 
@@ -359,6 +389,17 @@ impl Session {
             lf.reread()?;
         }
         self.ops.clear();
+
+        // The explicit studio edit is the trust approval: record the new
+        // script hashes in the same apply. Best-effort — a trust hiccup must
+        // not fail a successful config write.
+        if !self.pending_trust.is_empty() {
+            let mut store = trust::TrustStore::load_default();
+            for (kind, id, hashes) in self.pending_trust.drain(..) {
+                let _ = store.record(kind, &id, &hashes);
+            }
+        }
+
         Ok(written)
     }
 
@@ -1032,5 +1073,35 @@ mod tests {
             .find(|c| c.id == palette_id)
             .expect("duplicated palette item should now be in the global library");
         assert_eq!(dup.origin, Layer::Global);
+    }
+
+    #[test]
+    fn staging_a_script_fragment_edit_queues_a_trust_approval() {
+        let (d, gdir) = repo_with_global("");
+        let mut s = session_global(d.path(), &gdir);
+        let mut command_cap = cap("probe", "runs a command");
+        command_cap.command = Some("echo hi".into());
+        s.stage(StagedOp::EditFragment {
+            layer: Layer::Global,
+            id: "probe".into(),
+            cap: Box::new(command_cap),
+        })
+        .unwrap();
+        assert_eq!(s.pending_trust.len(), 1);
+        assert!(matches!(s.pending_trust[0].0, crate::trust::Kind::Fragment));
+        assert_eq!(s.pending_trust[0].1, "probe");
+    }
+
+    #[test]
+    fn staging_a_non_script_fragment_edit_queues_nothing() {
+        let (d, gdir) = repo_with_global("");
+        let mut s = session_global(d.path(), &gdir);
+        s.stage(StagedOp::EditFragment {
+            layer: Layer::Global,
+            id: "probe".into(),
+            cap: Box::new(cap("probe", "no command")),
+        })
+        .unwrap();
+        assert!(s.pending_trust.is_empty());
     }
 }

@@ -105,6 +105,7 @@ pub fn fragments(rt: &Runtime, args: &FragmentsArgs) -> crate::Result<()> {
         .collect();
 
     match &args.action {
+        Some(FragmentsAction::Trust { id }) => return super::trust::trust_fragment(&prep, id),
         Some(FragmentsAction::Show { id }) => {
             let Some(cap) = prep.config.fragments.iter().find(|c| &c.id == id) else {
                 bail!("unknown fragment '{id}'");

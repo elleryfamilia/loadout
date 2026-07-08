@@ -62,6 +62,14 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
     for (agent, result) in &results {
         apply::print_result(agent, prep.profile_label(), result);
     }
+
+    // Fast config health pass — doctor's pure subset. Warnings only, zero
+    // output when healthy, never injected into rendered context files.
+    for f in super::checks::refresh_subset(&prep.config, &prep.repo_base) {
+        if f.status != super::checks::Status::Ok {
+            println!("  ⚠  {}", f.message);
+        }
+    }
     Ok(())
 }
 

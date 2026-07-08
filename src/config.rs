@@ -718,6 +718,29 @@ pub fn global_config_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("loadout"))
 }
 
+/// Per-machine state directory (script trust hashes). Distinct from the
+/// config dir on purpose: `load sync` puts the config dir under git, and
+/// trust state must never sync between machines.
+///
+/// Honors `LOADOUT_STATE_DIR`, then `$XDG_STATE_HOME/loadout`, then
+/// `~/.local/state/loadout`. Returns `None` only if no home can be determined.
+pub fn state_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("LOADOUT_STATE_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
+        if !xdg.is_empty() {
+            return Some(PathBuf::from(xdg).join("loadout"));
+        }
+    }
+    std::env::var_os("HOME").map(|h| {
+        PathBuf::from(h)
+            .join(".local")
+            .join("state")
+            .join("loadout")
+    })
+}
+
 /// The user's home directory (`$HOME`), if set. Used to resolve other tools'
 /// dotfiles (e.g. Gemini's `~/.gemini/settings.json`). Honors a `$HOME` override
 /// so tests stay isolated from the real home.

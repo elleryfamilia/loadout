@@ -426,7 +426,7 @@ pub fn resolve_workflow<'a>(
 /// frontmatter is loader metadata (name/description), just noise inside a
 /// rendered command, so it's dropped when the body becomes a step's
 /// `instructions`. No frontmatter → the input, trimmed.
-fn strip_frontmatter(s: &str) -> &str {
+pub(crate) fn strip_frontmatter(s: &str) -> &str {
     let Some(rest) = s.strip_prefix("---\n") else {
         return s.trim_start();
     };

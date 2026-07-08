@@ -345,7 +345,30 @@ fn render_fragment_list(
             }
         };
 
+        // Redact every channel that feeds the fragment's section — the title
+        // (description) and the body (static guidance, `params`, provider
+        // `data`/`output` interpolated via the template, and the raw-embed
+        // branch) — at this single point, so no fragment section can reach
+        // `RenderedFragment`/`profile_guidance` unredacted. One warning per
+        // fragment regardless of how many strings were replaced. The id is
+        // left alone: it's a structural reference key, not rendered prose.
+        // Provider/command output arrives pre-redacted (cache hygiene in
+        // `providers`), so its carried count keeps the warning firing even
+        // though the strings seen here are already clean.
+        let provider_redacted = dyn_res
+            .as_ref()
+            .and_then(|res| res.output.as_ref())
+            .is_some_and(|o| o.redacted > 0);
         let title = cap.title().to_string();
+        let (title, title_replaced) = crate::redact::redact_secrets_report(&title);
+        let (body, body_replaced) = crate::redact::redact_secrets_report(&body);
+        if title_replaced + body_replaced > 0 || provider_redacted {
+            crate::warn_user!(
+                "redacted a token-like string in fragment '{}' — check its source",
+                cap.id
+            );
+        }
+
         out.push(RenderedFragment {
             id: cap.id.clone(),
             title,

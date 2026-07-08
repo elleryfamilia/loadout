@@ -19,6 +19,18 @@ use crate::workflow::{self, Workflow, WorkflowStage, ARTIFACT_SUBDIR};
 /// The namespace subdir loadout owns under an agent's command directory.
 pub const COMMAND_NAMESPACE: &str = "loadout";
 
+/// Fixed intro for the native-review branch of the verify stage (tests key on it).
+pub(crate) const REVIEW_COMMANDS_INTRO: &str =
+    "As part of this stage, run the agent's native review commands and fold their findings into the verdict:";
+/// Fixed intro for the vendored-checklist branch (tests key on it). Frames the
+/// vendored prompt for agents without native review commands: it originated as
+/// a Claude Code slash-command, so its git-context blocks are a template to
+/// reproduce, not literal commands to run.
+pub(crate) const SECURITY_CHECKLIST_INTRO: &str =
+    "Also run a security review of the change. The checklist below is a vendored security-review prompt — gather the branch's git status/diff/log yourself where it references them, then work through it:";
+/// Vendored security-review prompt — see vendored/sources.toml (`security-review`).
+const SECURITY_CHECKLIST: &str = include_str!("../../vendored/security-review/security-review.md");
+
 /// On-disk format for an agent's command files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,13 +80,19 @@ pub struct StageCommand {
 /// `/loadout:<command>` names (`plan`, `verify`, …) — identical to what the
 /// studio shows — not each stage's free-string name. Custom stages that match no
 /// canonical phase keep their own (slugged) name, appended after the spine.
-pub fn stage_commands(wf: &Workflow, format: CommandFormat) -> Vec<StageCommand> {
+pub fn stage_commands(
+    wf: &Workflow,
+    format: CommandFormat,
+    review_commands: &[String],
+) -> Vec<StageCommand> {
     let steps = wf.canonical_layout().steps();
     let total = steps.len();
     steps
         .iter()
         .enumerate()
-        .map(|(i, &(command, stage))| render_stage_command(wf, command, i, total, stage, format))
+        .map(|(i, &(command, stage))| {
+            render_stage_command(wf, command, i, total, stage, format, review_commands)
+        })
         .collect()
 }
 
@@ -85,6 +103,7 @@ fn render_stage_command(
     total: usize,
     stage: &WorkflowStage,
     format: CommandFormat,
+    review_commands: &[String],
 ) -> StageCommand {
     let stem = slug(command);
     let filename = match format {
@@ -96,7 +115,15 @@ fn render_stage_command(
         .purpose
         .clone()
         .unwrap_or_else(|| format!("{} — {} stage", wf.title(), command));
-    let body = stage_body(wf, command, idx, total, stage, format.arg_placeholder());
+    let body = stage_body(
+        wf,
+        command,
+        idx,
+        total,
+        stage,
+        format.arg_placeholder(),
+        review_commands,
+    );
     let content = match format {
         CommandFormat::Markdown => {
             format!(
@@ -139,6 +166,7 @@ fn stage_body(
     total: usize,
     stage: &WorkflowStage,
     arg: &str,
+    review_commands: &[String],
 ) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
@@ -191,6 +219,25 @@ fn stage_body(
             let _ = writeln!(s, "- {item}");
         }
         s.push('\n');
+    }
+    // Security enrichment for the verify slot: prefer the agent's native
+    // review commands; otherwise embed the vendored checklist (channel 2
+    // only — the always-on context carries summaries, by standing rule).
+    if command == "verify" {
+        if !review_commands.is_empty() {
+            let _ = writeln!(s, "{REVIEW_COMMANDS_INTRO}");
+            for c in review_commands {
+                let _ = writeln!(s, "- `{c}`");
+            }
+            s.push('\n');
+        } else {
+            let _ = writeln!(s, "{SECURITY_CHECKLIST_INTRO}\n");
+            let _ = writeln!(
+                s,
+                "{}\n",
+                crate::workflow::strip_frontmatter(SECURITY_CHECKLIST).trim()
+            );
+        }
     }
     let _ = write!(s, "Focus for this run: {arg}");
     s.trim_end().to_string()
@@ -249,7 +296,7 @@ mod tests {
 
     #[test]
     fn markdown_command_uses_canonical_names_args_and_handoff() {
-        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Markdown);
+        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Markdown, &[]);
         // One file per generated step, named by the *canonical* command —
         // Superpowers' `review` stage lands on `verify`, matching the spine.
         let names: Vec<&str> = cmds.iter().map(|c| c.filename.as_str()).collect();
@@ -316,7 +363,7 @@ mod tests {
             disabled: false,
             origin: crate::fragment::Layer::Global,
         };
-        let cmds = stage_commands(&wf, CommandFormat::Markdown);
+        let cmds = stage_commands(&wf, CommandFormat::Markdown, &[]);
         let names: Vec<&str> = cmds.iter().map(|c| c.filename.as_str()).collect();
         // review→verify, commit→ship (separate!), qa folds into verify, retro=extra.
         assert_eq!(names, vec!["verify.md", "ship.md", "retro.md"]);
@@ -329,7 +376,7 @@ mod tests {
 
     #[test]
     fn toml_command_is_valid_and_uses_gemini_args() {
-        let cmds = stage_commands(&builtin("spec-driven"), CommandFormat::Toml);
+        let cmds = stage_commands(&builtin("spec-driven"), CommandFormat::Toml, &[]);
         let plan = cmds.iter().find(|c| c.filename == "plan.toml").unwrap();
         // Parses as TOML with description + prompt.
         let v: toml::Value = toml::from_str(&plan.content).expect("valid TOML");
@@ -375,7 +422,7 @@ mod tests {
             disabled: false,
             origin: crate::fragment::Layer::Global,
         };
-        let cmds = stage_commands(&wf, CommandFormat::Markdown);
+        let cmds = stage_commands(&wf, CommandFormat::Markdown, &[]);
         assert!(cmds[0]
             .content
             .contains(r#"description: "Write the \"spec\": be precise""#));
@@ -407,7 +454,7 @@ mod tests {
             disabled: false,
             origin: crate::fragment::Layer::Global,
         };
-        let cmds = stage_commands(&wf, CommandFormat::Markdown);
+        let cmds = stage_commands(&wf, CommandFormat::Markdown, &[]);
         let plan = &cmds[0];
         // Body carries the elaborate instructions.
         assert!(plan.content.contains("INSTRUCTIONS-MARKER"));
@@ -430,7 +477,7 @@ mod tests {
         // The built-in Superpowers workflow ships a full prescriptive body for
         // each of its four active steps (channel 2). The `review` stage generates
         // as the canonical `/loadout:verify` command.
-        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Markdown);
+        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Markdown, &[]);
         let plan = cmds.iter().find(|c| c.filename == "plan.md").unwrap();
         // The real upstream writing-plans body lands in the command…
         assert!(plan.content.contains("bite-sized tasks"));
@@ -468,8 +515,42 @@ mod tests {
             disabled: false,
             origin: crate::fragment::Layer::Global,
         };
-        let cmds = stage_commands(&wf, CommandFormat::Markdown);
+        let cmds = stage_commands(&wf, CommandFormat::Markdown, &[]);
         assert!(!cmds[0].content.contains("escape.md"));
         assert!(!cmds[0].content.contains("Write your output"));
+    }
+
+    #[test]
+    fn verify_body_lists_native_review_commands_when_the_agent_has_them() {
+        let rc = vec!["/code-review".to_string(), "/security-review".to_string()];
+        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Markdown, &rc);
+        let verify = cmds.iter().find(|c| c.filename == "verify.md").unwrap();
+        assert!(verify.content.contains(REVIEW_COMMANDS_INTRO));
+        assert!(verify.content.contains("- `/code-review`"));
+        assert!(verify.content.contains("- `/security-review`"));
+        assert!(!verify.content.contains(SECURITY_CHECKLIST_INTRO));
+        // Only the verify stage is enriched.
+        let plan = cmds.iter().find(|c| c.filename == "plan.md").unwrap();
+        assert!(!plan.content.contains(REVIEW_COMMANDS_INTRO));
+    }
+
+    #[test]
+    fn verify_body_falls_back_to_the_vendored_security_checklist() {
+        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Markdown, &[]);
+        let verify = cmds.iter().find(|c| c.filename == "verify.md").unwrap();
+        assert!(verify.content.contains(SECURITY_CHECKLIST_INTRO));
+        assert!(!verify.content.contains(REVIEW_COMMANDS_INTRO));
+        // The vendored body actually made it in (not just the intro line). The
+        // vendored file is ~190 lines; assert on a distinctive phrase from it.
+        assert!(verify.content.contains("senior security engineer"));
+    }
+
+    #[test]
+    fn review_commands_is_not_part_of_the_config_schema() {
+        let err = toml::from_str::<crate::adapters::AgentDescriptor>(
+            "id = \"x\"\ngenerated_filename = \"x.md\"\nreview_commands = [\"/code-review\"]\n",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
     }
 }
