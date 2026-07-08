@@ -170,9 +170,11 @@ always produce byte-identical HTML. (`plan.json` is deliberately not a
 declared *workflow* artifact — its filename stem would collide with a
 workflow's own `plan.md` handoff file.)
 
-**The loop.** `load plan check --json` validates before rendering (JSON-pointer
-paths on every error, so an agent can fix precisely); `load plan render` opens
-the page in your browser. You comment inline on any task, phase, risk, or open
+**The loop.** `load plan check --json` validates before rendering
+(machine-readable paths on every error, so an agent can fix precisely —
+JSON-pointer for structural/validation issues, dot-notation for type
+mismatches from the typed deserializer); `load plan render` opens the page in
+your browser. You comment inline on any task, phase, risk, or open
 question; a "Copy feedback" button assembles every comment into one
 `loadout.plan-feedback/1` document (fenced JSON, with a readable markdown
 mirror underneath) that you paste back to the agent, or that the agent reads
@@ -194,7 +196,10 @@ against and an overall `verdict` (`request_changes` if any comment is a
 `load plan` (no subcommand) prints status — whether a plan exists, whether the
 render is fresh, whether feedback is pending — and `load plan clean` (also
 swept by a plain `load clean`) removes the rendered `plan.html` and any
-`plan-feedback.json`, never the plan itself.
+`plan-feedback.json`, never the plan itself. `plan` is a named subcommand, so
+it takes precedence over the `load <agent>` shorthand — an agent binary
+literally named `plan` can't be launched as `load plan` and needs `load run
+plan` instead.
 
 ## Providers (native environment discovery) **(implemented)**
 

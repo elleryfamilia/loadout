@@ -9,10 +9,12 @@ accepts anything this document doesn't describe.
 - The document's `format` field must be the exact string `"loadout.plan/1"`.
 - **Strict by default:** any field not in the tables below is a hard error
   (`unknown_field`) naming the offending JSON pointer.
-- **`--lenient`** (on `load plan check`/`render`) downgrades unknown fields to
-  warnings instead of errors and drops them before validation. Use this only
-  when reading a plan.json that may have been written by a newer loadout —
-  never as a way to skip fixing your own output.
+- **`--lenient`** is available on `load plan check` only; `load plan render`
+  always validates strictly — fix errors before rendering. On `check`,
+  `--lenient` downgrades unknown fields to warnings instead of errors and
+  drops them before validation. Use this only when reading a plan.json that
+  may have been written by a newer loadout — never as a way to skip fixing
+  your own output.
 - If `format` looks like `"loadout.plan/N"` for an `N` this loadout doesn't
   know, parsing fails with `format_too_new` and the fix is `load update`
   (upgrade the loadout binary), not editing the plan.

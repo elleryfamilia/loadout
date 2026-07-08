@@ -218,7 +218,7 @@ load skill install
 
 Then, in an agent session, run `/loadout-migrate` or just ask *"Import my CLAUDE.md into Loadout."*
 
-Three more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session — instead of leaving it stranded in one agent's memory —, [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows), and [`loadout-plan-preview`](skills/loadout-plan-preview/SKILL.md) drives the [plan preview](#plan-previews) loop above. The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, Gemini, opencode, and Cursor.
+Three more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session (instead of leaving it stranded in one agent's memory), [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows), and [`loadout-plan-preview`](skills/loadout-plan-preview/SKILL.md) drives the [plan preview](#plan-previews) loop above. The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, Gemini, opencode, and Cursor.
 
 ---
 
