@@ -50,11 +50,48 @@ pub fn sanitize_url(url: &str) -> String {
 /// assignments and PEM private-key blocks. Conservative by design: it would
 /// rather over-redact than leak.
 pub fn redact_secrets(text: &str) -> String {
+    redact_secrets_report(text).0
+}
+
+/// Like [`redact_secrets`], but also reports how many replacements were made
+/// so call sites can warn the user (`0` means the text was already clean).
+pub fn redact_secrets_report(text: &str) -> (String, usize) {
     let mut out = text.to_string();
+    let mut count = 0usize;
     for re in patterns() {
-        out = re.replace_all(&out, REDACTED).into_owned();
+        // Skip matches that only re-match an earlier pattern's placeholder
+        // (e.g. `token=***REDACTED***` re-matching the generic assignment
+        // pattern) — they'd double-count one secret and eat the key name.
+        let replaced = re.replace_all(&out, |caps: &regex::Captures| {
+            let m = caps.get(0).map(|m| m.as_str()).unwrap_or("");
+            if m.contains(REDACTED) {
+                m.to_string()
+            } else {
+                count += 1;
+                REDACTED.to_string()
+            }
+        });
+        out = replaced.into_owned();
     }
-    out
+    (out, count)
+}
+
+/// Recursively redact every string leaf of a JSON value in place, returning
+/// the number of replacements. Applied to provider `data` before it is cached
+/// or exposed to templates.
+pub fn redact_json(value: &mut serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::String(s) => {
+            let (clean, n) = redact_secrets_report(s);
+            if n > 0 {
+                *s = clean;
+            }
+            n
+        }
+        serde_json::Value::Array(items) => items.iter_mut().map(redact_json).sum(),
+        serde_json::Value::Object(map) => map.values_mut().map(redact_json).sum(),
+        _ => 0,
+    }
 }
 
 /// True if `text` appears to contain a secret (used by `doctor`/tests).
@@ -160,5 +197,36 @@ mod tests {
         let s = "This is normal guidance about running cargo test.";
         assert_eq!(redact_secrets(s), s);
         assert!(!looks_secret(s));
+    }
+
+    #[test]
+    fn report_counts_replacements() {
+        let (out, n) = redact_secrets_report(
+            "a=ghp_abcdefghijklmnopqrstuvwxyz012345 b=ghp_zyxwvutsrqponmlkjihgfedcba54321",
+        );
+        assert_eq!(n, 2);
+        assert!(!out.contains("ghp_"), "got: {out}");
+        assert!(out.contains(REDACTED));
+    }
+
+    #[test]
+    fn report_is_zero_on_clean_text() {
+        let (out, n) = redact_secrets_report("run cargo test before shipping");
+        assert_eq!(n, 0);
+        assert_eq!(out, "run cargo test before shipping");
+    }
+
+    #[test]
+    fn redact_json_walks_nested_values() {
+        let mut v = serde_json::json!({
+            "stdout": "token=ghp_abcdefghijklmnopqrstuvwxyz012345",
+            "nested": { "list": ["sk-abcdefghijklmnop", 42, true] },
+        });
+        let n = redact_json(&mut v);
+        assert_eq!(n, 2);
+        let s = v.to_string();
+        assert!(!s.contains("ghp_"), "{s}");
+        assert!(!s.contains("sk-abcdef"), "{s}");
+        assert!(s.contains(REDACTED));
     }
 }

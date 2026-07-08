@@ -38,6 +38,7 @@ impl EnvProvider for ToolchainProvider {
         Ok(Some(ProviderOutput {
             text: format!("installed: {text}"),
             data,
+            redacted: 0,
         }))
     }
 }

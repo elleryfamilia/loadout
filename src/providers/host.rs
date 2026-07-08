@@ -37,6 +37,10 @@ impl EnvProvider for HostProvider {
             "user": s.user,
             "host_class": s.host_class,
         });
-        Ok(Some(ProviderOutput { text, data }))
+        Ok(Some(ProviderOutput {
+            text,
+            data,
+            redacted: 0,
+        }))
     }
 }

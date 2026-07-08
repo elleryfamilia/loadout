@@ -456,7 +456,8 @@ pub fn apply(
         opts.workflow_override.as_deref(),
         app.composition.primary_profile(),
     );
-    let rendered = render_overlay(d, app, workflow.as_ref())?;
+    let mut rendered = render_overlay(d, app, workflow.as_ref())?;
+    rendered.content = redact_artifact(std::mem::take(&mut rendered.content), "overlay");
     let mut files = Vec::new();
     let mut warnings = Vec::new();
     let mut notes = Vec::new();
@@ -869,6 +870,21 @@ fn render_overlay(
     })
 }
 
+/// Belt-and-braces: final redaction over loadout-generated artifact bytes just
+/// before they are written. Fragment-sourced secrets were already caught (and
+/// warned about, naming the fragment) at render time; anything caught here
+/// came from a non-fragment channel (header, workflow text), so the warning
+/// names the artifact instead. Repo-authored base content merged around a
+/// marker block is deliberately NOT covered — the repo's own text is the
+/// repo's business.
+fn redact_artifact(content: String, what: &str) -> String {
+    let (clean, n) = crate::redact::redact_secrets_report(&content);
+    if n > 0 {
+        crate::warn_user!("redacted a token-like string in generated {what} — check its sources");
+    }
+    clean
+}
+
 /// The directory loadout owns under an agent's command dir, for `wf`'s stages.
 fn command_namespace_dir(repo_base: &Path, commands_dir: &str) -> PathBuf {
     repo_base
@@ -926,10 +942,8 @@ fn write_stage_commands(
     }
 
     for cmd in &generated {
-        files.push(
-            app.writer
-                .write(&ns_dir.join(&cmd.filename), &cmd.content)?,
-        );
+        let content = redact_artifact(cmd.content.clone(), &cmd.filename);
+        files.push(app.writer.write(&ns_dir.join(&cmd.filename), &content)?);
     }
     Ok(())
 }

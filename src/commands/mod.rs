@@ -6,6 +6,7 @@
 
 pub mod apply;
 pub mod bind;
+pub mod checks;
 pub mod clean;
 pub mod detect;
 pub mod doctor;

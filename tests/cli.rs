@@ -216,6 +216,37 @@ fn refresh_renders_a_bound_workflow_in_both_channels_and_clean_removes_commands(
 }
 
 #[test]
+fn generated_command_files_are_redacted_at_the_write_boundary() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init(); // command-file wiring requires being inside a git repo
+    fx.author(
+        "[[workflows]]\n\
+         id = \"leaky-wf\"\n\
+         name = \"Leaky\"\n\
+         [[workflows.stages]]\n\
+         name = \"verify\"\n\
+         instructions = \"use header token=ghp_plantedworkflow0000000000000000000\"\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"dev\"\n\
+         workflow = \"leaky-wf\"\n",
+    );
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("generated"));
+    let verify =
+        std::fs::read_to_string(fx.repo.path().join(".claude/commands/loadout/verify.md")).unwrap();
+    assert!(
+        !verify.contains("ghp_planted"),
+        "command file leaked:\n{verify}"
+    );
+    assert!(verify.contains("***REDACTED***"));
+}
+
+#[test]
 fn run_workflow_override_sets_handoff_env_in_dry_run() {
     let fx = Fixture::new();
     fx.rust_project();
@@ -2464,4 +2495,114 @@ fn hook_remove_honors_dry_run() {
         .success()
         .stdout(predicate::str::contains("dry run — would remove"));
     assert_eq!(before, fx.read_home(".cursor/hooks.json"));
+}
+
+#[test]
+fn refresh_redacts_planted_tokens_and_warns_per_fragment() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\n\
+         id = \"static-leak\"\n\
+         description = \"Auth notes token=ghp_planteddesc00000000000000000000\"\n\
+         guidance = \"Auth with token=ghp_plantedstatic00000000000000000000 and {{ params.apikey }}\"\n\
+         \n\
+         [[fragments]]\n\
+         id = \"script-leak\"\n\
+         command = \"echo token=ghp_plantedscript00000000000000000000\"\n\
+         guidance = \"probe said: {{ provider.data.stdout }}\"\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"leaky\"\n\
+         fragments = [\"static-leak\", \"script-leak\"]\n",
+    );
+    // Private params layer (the `{{ params.* }}` channel). If the
+    // `[fragment_params]` TOML shape differs, mirror src/config.rs:361.
+    fx.write_global(
+        "local.toml",
+        "[fragment_params.static-leak]\napikey = \"sk-plantedparam0000000000000000\"\n",
+    );
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("fragment 'static-leak'"))
+        .stderr(predicate::str::contains("fragment 'script-leak'"));
+    let overlay =
+        std::fs::read_to_string(fx.repo.path().join(".loadout/generated/claude.md")).unwrap();
+    assert!(overlay.contains("***REDACTED***"));
+    assert!(
+        !overlay.contains("ghp_planted"),
+        "overlay leaked a token:\n{overlay}"
+    );
+    assert!(
+        !overlay.contains("sk-plantedparam"),
+        "overlay leaked a param:\n{overlay}"
+    );
+    assert!(
+        !overlay.contains("ghp_planteddesc"),
+        "overlay leaked a description token:\n{overlay}"
+    );
+}
+
+#[test]
+fn provider_cache_on_disk_never_holds_raw_secrets() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\n\
+         id = \"script-leak\"\n\
+         command = \"echo token=ghp_plantedscript00000000000000000000\"\n\
+         guidance = \"probe said: {{ provider.data.stdout }}\"\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"leaky\"\n\
+         fragments = [\"script-leak\"]\n",
+    );
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success();
+    let cache = std::fs::read_to_string(fx.repo.path().join(".loadout/cache/cmd-script-leak.json"))
+        .unwrap();
+    assert!(
+        !cache.contains("ghp_planted"),
+        "cache leaked a raw token:\n{cache}"
+    );
+    assert!(cache.contains("***REDACTED***"));
+}
+
+#[test]
+fn doctor_flags_secrets_in_config_sources_with_path_and_line() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    // Secrets are scanned in EVERY source layer, including the private
+    // local.toml (unlike the public-leak lint, which skips it): a secret
+    // doesn't belong in config at all.
+    fx.write(
+        ".loadout/local.toml",
+        "[fragment_params.deploy]\ntoken = \"ghp_plantedlocal000000000000000000000\"\n",
+    );
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("looks like a secret"))
+        .stdout(predicate::str::contains("local.toml"));
+}
+
+#[test]
+fn doctor_flags_a_multiline_private_key_in_config() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.write(
+        ".loadout/local.toml",
+        "[fragment_params.deploy]\nkey = \"\"\"\n-----BEGIN RSA PRIVATE KEY-----\nMIIfakefakefakefakefake\n-----END RSA PRIVATE KEY-----\n\"\"\"\n",
+    );
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("multi-line secret"))
+        .stdout(predicate::str::contains("local.toml"));
 }

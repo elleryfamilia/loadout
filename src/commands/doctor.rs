@@ -3,27 +3,11 @@
 use std::path::Path;
 use std::process::Command;
 
+use super::checks::{self, Status};
 use super::{prepare, Runtime};
 use crate::render::header;
 use crate::writer::BLOCK_BEGIN;
 use crate::{config, templates};
-
-#[derive(Clone, Copy)]
-enum Status {
-    Ok,
-    Warn,
-    Fail,
-}
-
-impl Status {
-    fn symbol(self) -> &'static str {
-        match self {
-            Status::Ok => "✓",
-            Status::Warn => "⚠",
-            Status::Fail => "✗",
-        }
-    }
-}
 
 struct Checks {
     warns: usize,
@@ -41,6 +25,13 @@ impl Checks {
             Status::Ok => {}
         }
         println!("  {} {}", status.symbol(), msg.as_ref());
+    }
+}
+
+/// Print a batch of extracted-check findings through the doctor tally.
+fn report(c: &mut Checks, findings: Vec<checks::Finding>) {
+    for f in findings {
+        c.line(f.status, f.message);
     }
 }
 
@@ -101,6 +92,8 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     check_env_policy(&mut c, &prep.config);
     // Private-data leak lint over public config layers.
     check_public_leaks(&mut c, &prep);
+    // Secret-looking strings in any config source layer (incl. local.toml).
+    report(&mut c, checks::secret_leaks(&prep.config));
     // Script fragments whose output loadout would silently drop (non-zero exit).
     check_script_dropouts(&mut c, &prep);
 

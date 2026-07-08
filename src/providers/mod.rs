@@ -38,6 +38,12 @@ pub struct ProviderOutput {
     pub text: String,
     /// Structured form for templates / `--json`.
     pub data: serde_json::Value,
+    /// How many token-like strings were redacted from this outcome (both
+    /// channels). Not persisted — cache entries are already stored redacted;
+    /// a fresh count is produced on every load/exec so the render layer can
+    /// warn while the fragment's source keeps emitting secrets.
+    #[serde(skip)]
+    pub redacted: usize,
 }
 
 /// A unit of live environment discovery.
@@ -151,23 +157,25 @@ pub fn run_command(
     if !live {
         // Read-only: surface any cached value (even stale), never execute.
         return match cached {
-            Some(e) => CommandOutcome::Output(ProviderOutput {
+            Some(e) => CommandOutcome::Output(redact_output(ProviderOutput {
                 text: e.text,
                 data: e.data,
-            }),
+                redacted: 0,
+            })),
             None => CommandOutcome::NotCached,
         };
     }
     if let Some(e) = &cached {
         if is_fresh(&e.generated_at, ttl, now) {
-            return CommandOutcome::Output(ProviderOutput {
+            return CommandOutcome::Output(redact_output(ProviderOutput {
                 text: e.text.clone(),
                 data: e.data.clone(),
-            });
+                redacted: 0,
+            }));
         }
     }
 
-    let mut out = exec_command(command, lang, None);
+    let out = exec_command(command, lang, None);
     // Spawn failure: `exec_command` returns a Null `data` (the program couldn't
     // run at all).
     if out.data.is_null() {
@@ -182,7 +190,7 @@ pub fn run_command(
     if out.text.trim().is_empty() {
         return CommandOutcome::Empty; // ran clean, nothing to add — don't cache
     }
-    out.text = redact::redact_secrets(&out.text);
+    let out = redact_output(out);
 
     let entry = CacheEntry {
         generated_at: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -300,6 +308,7 @@ fn exec_predicate(command: &str, lang: Option<&str>, repo_base: &Path) -> Provid
     ProviderOutput {
         text: String::new(),
         data: serde_json::json!({ "matched": matched }),
+        redacted: 0,
     }
 }
 
@@ -319,6 +328,18 @@ struct CacheEntry {
     generated_at: String,
     text: String,
     data: serde_json::Value,
+}
+
+/// Redact both channels of a provider outcome, counting replacements so the
+/// render layer can warn while the fragment's source keeps emitting secrets.
+/// Cache entries read back from disk are re-redacted too, purging `data`
+/// cached raw by older versions.
+fn redact_output(mut out: ProviderOutput) -> ProviderOutput {
+    let (text, n_text) = redact::redact_secrets_report(&out.text);
+    out.text = text;
+    let n_data = redact::redact_json(&mut out.data);
+    out.redacted = n_text + n_data;
+    out
 }
 
 fn probe_provider(
@@ -354,24 +375,28 @@ where
 
     if !live {
         // Read-only: surface any cached value (even stale), never execute.
-        return Ok(cached.map(|e| ProviderOutput {
-            text: e.text,
-            data: e.data,
+        return Ok(cached.map(|e| {
+            redact_output(ProviderOutput {
+                text: e.text,
+                data: e.data,
+                redacted: 0,
+            })
         }));
     }
     if let Some(e) = &cached {
         if is_fresh(&e.generated_at, ttl, now) {
-            return Ok(Some(ProviderOutput {
+            return Ok(Some(redact_output(ProviderOutput {
                 text: e.text.clone(),
                 data: e.data.clone(),
-            }));
+                redacted: 0,
+            })));
         }
     }
 
-    let Some(mut out) = produce()? else {
+    let Some(out) = produce()? else {
         return Ok(None);
     };
-    out.text = redact::redact_secrets(&out.text);
+    let out = redact_output(out);
 
     let entry = CacheEntry {
         generated_at: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -418,6 +443,7 @@ fn exec_command(command: &str, lang: Option<&str>, cwd: Option<&Path>) -> Provid
                 EXEC_TIMEOUT.as_secs()
             ),
             data: serde_json::Value::Null,
+            redacted: 0,
         },
         Ok(Some(o)) => {
             let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -434,11 +460,13 @@ fn exec_command(command: &str, lang: Option<&str>, cwd: Option<&Path>) -> Provid
                     "stderr": stderr,
                     "status": o.status.code(),
                 }),
+                redacted: 0,
             }
         }
         Err(e) => ProviderOutput {
             text: format!("(command failed to run: {e})"),
             data: serde_json::Value::Null,
+            redacted: 0,
         },
     }
 }

@@ -40,6 +40,7 @@ impl EnvProvider for AiToolsProvider {
         Ok(Some(ProviderOutput {
             text: format!("agent CLIs: {text}"),
             data,
+            redacted: 0,
         }))
     }
 }
