@@ -812,6 +812,48 @@ fn doctor_flags_repo_declared_caps_and_profiles() {
 }
 
 #[test]
+fn off_repo_launch_prompt_redacts_workflow_map_secrets() {
+    // Off-repo (cwd == $HOME), Claude's context is delivered at launch via
+    // `--append-system-prompt` built from `profile_guidance`, which embeds the
+    // always-on workflow map. A token planted in a workflow step's purpose must
+    // not survive into that launch prompt — the overlay file is redacted, and
+    // this asserts the prompt channel is too.
+    let fx = Fixture::new();
+    fx.author(
+        "[[fragments]]\n\
+         id = \"conv\"\n\
+         guidance = \"Be concise.\"\n\
+         \n\
+         [[workflows]]\n\
+         id = \"leaky-wf\"\n\
+         name = \"Leaky\"\n\
+         [[workflows.stages]]\n\
+         name = \"implement\"\n\
+         purpose = \"build it token=ghp_plantedworkflowmap000000000000000\"\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"base\"\n\
+         fragments = [\"conv\"]\n\
+         workflow = \"leaky-wf\"\n",
+    );
+    // Run with cwd == the isolated $HOME so `is_home` trips the off-repo
+    // wiring-suppressed branch that injects profile_guidance into the prompt.
+    let home = fx.global.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut c = Command::cargo_bin("load").unwrap();
+    c.env("LOADOUT_CONFIG_DIR", fx.global.path().join("empty"));
+    c.env("HOME", &home);
+    c.env("LOADOUT_STATE_DIR", fx.global.path().join("state"));
+    c.arg("--cwd").arg(&home);
+    c.args(["--dry-run", "run", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--append-system-prompt"))
+        .stdout(predicate::str::contains("ghp_plantedworkflowmap").not())
+        .stdout(predicate::str::contains("***REDACTED***"));
+}
+
+#[test]
 fn run_dry_run_reports_would_exec_without_launching() {
     let fx = Fixture::new();
     fx.rust_project();

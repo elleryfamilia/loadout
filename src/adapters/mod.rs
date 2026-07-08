@@ -467,6 +467,13 @@ pub fn apply(
     );
     let mut rendered = render_overlay(d, app, workflow.as_ref())?;
     rendered.content = redact_artifact(std::mem::take(&mut rendered.content), "overlay");
+    // `profile_guidance` is injected into the launch prompt off-repo
+    // (`--append-system-prompt`), not just written to the overlay. Its fragment
+    // sections were already redacted at render, but the appended workflow-map
+    // section was not — scrub it here so a secret in a workflow step can't reach
+    // the agent's prompt. Silent (no warning): the same secret already surfaced
+    // via the overlay pass above; this is idempotent over already-redacted text.
+    rendered.profile_guidance = crate::redact::redact_secrets(&rendered.profile_guidance);
     let mut files = Vec::new();
     let mut warnings = Vec::new();
     let mut notes = Vec::new();
