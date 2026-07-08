@@ -2525,3 +2525,36 @@ fn plan_check_passes_valid_input_and_warns_on_stale_feedback() {
         .success()
         .stderr(predicate::str::contains("feedback"));
 }
+
+#[test]
+fn plan_render_writes_marked_html_and_respects_no_open() {
+    let f = Fixture::new();
+    f.git_init();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".loadout/generated/plan.html"));
+    let html = f.read(".loadout/generated/plan.html");
+    assert!(html.starts_with("<!-- loadout:generated context=sha256:"));
+    assert!(html.contains("data-plan-ref=\"task:t-a\""));
+    assert!(f.read(".gitignore").contains(".loadout/generated/"));
+}
+
+#[test]
+fn plan_render_fails_cleanly_on_invalid_input() {
+    let f = Fixture::new();
+    f.write(".loadout/workflow/artifacts/plan.json", "{ not json");
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("invalid_json"));
+    assert!(!f.exists(".loadout/generated/plan.html"));
+}

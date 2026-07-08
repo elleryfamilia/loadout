@@ -65,7 +65,9 @@ pub fn run(rt: &Runtime, args: &PlanArgs) -> crate::Result<()> {
             json,
             lenient,
         }) => check(&prep, file.as_deref(), *json, *lenient),
-        Some(PlanAction::Render { .. }) => bail!("not implemented yet"),
+        Some(PlanAction::Render { file, out, no_open }) => {
+            render(&prep, rt, file.as_deref(), out.as_deref(), *no_open)
+        }
         Some(PlanAction::Schema) => bail!("not implemented yet"),
         Some(PlanAction::Clean) => bail!("not implemented yet"),
     }
@@ -184,6 +186,31 @@ fn status(prep: &Prepared) -> crate::Result<()> {
             warn_stale_feedback(prep, &plan);
         }
         Err(e) => println!("plan.json present but invalid: {e:#} — run `load plan check`"),
+    }
+    Ok(())
+}
+
+fn render(
+    prep: &Prepared,
+    rt: &Runtime,
+    file: Option<&Path>,
+    out: Option<&Path>,
+    no_open: bool,
+) -> crate::Result<()> {
+    let (plan, warnings) = load_checked(prep, file, false, false)?;
+    for w in &warnings {
+        println!("warning[{}] {}: {}", w.code, w.path, w.message);
+    }
+    warn_stale_feedback(prep, &plan);
+    let html = crate::plan::render::render(&plan);
+    let path = out
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| plan_html_path(&prep.repo_base));
+    AtomicWriter::new(rt.dry_run).write(&path, &html)?;
+    println!("rendered {} → {}", plan.meta.id, path.display());
+    if !no_open && !rt.dry_run {
+        crate::studio::server::open_browser(&format!("file://{}", path.display()));
+        println!("opened in your browser (pass --no-open to skip)");
     }
     Ok(())
 }
