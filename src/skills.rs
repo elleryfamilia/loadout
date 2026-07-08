@@ -97,9 +97,25 @@ pub const IMPORT_WORKFLOW: Skill = Skill {
     ],
 };
 
+/// The `loadout-plan-preview` skill: teaches an agent to emit a structured
+/// plan.json and drive `load plan check`/`render`, closing the review loop.
+pub const PLAN_PREVIEW: Skill = Skill {
+    id: "loadout-plan-preview",
+    files: &[
+        SkillFile {
+            relpath: "SKILL.md",
+            content: include_str!("../skills/loadout-plan-preview/SKILL.md"),
+        },
+        SkillFile {
+            relpath: "reference.md",
+            content: include_str!("../skills/loadout-plan-preview/reference.md"),
+        },
+    ],
+};
+
 /// Every skill shipped in this binary.
 pub fn all() -> &'static [Skill] {
-    &[MIGRATE, REMEMBER, IMPORT_WORKFLOW]
+    &[MIGRATE, REMEMBER, IMPORT_WORKFLOW, PLAN_PREVIEW]
 }
 
 /// Look up an embedded skill by id.

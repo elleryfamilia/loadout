@@ -69,7 +69,16 @@ pub fn run(rt: &Runtime, args: &PlanArgs) -> crate::Result<()> {
         Some(PlanAction::Render { file, out, no_open }) => {
             render(&prep, rt, file.as_deref(), out.as_deref(), *no_open)
         }
-        Some(PlanAction::Schema) => bail!("not implemented yet"),
+        Some(PlanAction::Schema) => {
+            let skill = crate::skills::by_id("loadout-plan-preview").expect("shipped skill");
+            let reference = skill
+                .files
+                .iter()
+                .find(|f| f.relpath == "reference.md")
+                .expect("skill ships reference.md");
+            println!("{}", reference.content);
+            Ok(())
+        }
         Some(PlanAction::Clean) => bail!("not implemented yet"),
     }
 }

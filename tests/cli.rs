@@ -2558,3 +2558,13 @@ fn plan_render_fails_cleanly_on_invalid_input() {
         .stdout(predicate::str::contains("invalid_json"));
     assert!(!f.exists(".loadout/generated/plan.html"));
 }
+
+#[test]
+fn plan_schema_prints_the_reference() {
+    let f = Fixture::new();
+    f.cmd()
+        .args(["plan", "schema"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("loadout.plan/1"));
+}

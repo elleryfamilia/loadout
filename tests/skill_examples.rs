@@ -127,3 +127,29 @@ fn shipped_example_config_is_a_valid_global_config() {
     assert!(cfg.fragments.iter().any(|c| c.id == "rust-conventions"));
     assert!(cfg.fragments.iter().any(|c| c.id == "work-strict"));
 }
+
+/// Every fenced ```json block in the plan-preview reference must parse and
+/// validate under the real deserializer — the doc IS the schema.
+#[test]
+fn plan_preview_reference_json_examples_are_valid() {
+    let path = format!(
+        "{}/skills/loadout-plan-preview/reference.md",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let md = std::fs::read_to_string(&path).expect("read reference.md");
+    let mut checked = 0;
+    let mut rest = md.as_str();
+    while let Some(start) = rest.find("```json") {
+        let after = &rest[start + 7..];
+        let Some(end) = after.find("```") else { break };
+        let block = after[..end].trim();
+        if block.contains("\"loadout.plan/1\"") {
+            let parsed = loadout::plan::model::parse(block, false)
+                .unwrap_or_else(|e| panic!("reference example must parse: {e:?}"));
+            assert!(loadout::plan::model::validate(&parsed.plan).is_empty());
+            checked += 1;
+        }
+        rest = &after[end + 3..];
+    }
+    assert!(checked >= 1, "expected at least one loadout.plan/1 example");
+}
