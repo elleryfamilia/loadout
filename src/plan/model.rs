@@ -328,6 +328,13 @@ fn id_ok(id: &str) -> bool {
 
 fn check_strings(plan: &Plan, errs: &mut Vec<Issue>) {
     // Meta fields
+    if plan.meta.id.len() > MAX_STRING {
+        errs.push(Issue::new(
+            "/meta/id",
+            "string_too_long",
+            format!("id is {} chars (limit {MAX_STRING})", plan.meta.id.len()),
+        ));
+    }
     if plan.meta.title.len() > MAX_STRING {
         errs.push(Issue::new(
             "/meta/title",
@@ -368,6 +375,13 @@ fn check_strings(plan: &Plan, errs: &mut Vec<Issue>) {
 
     // Phase and task fields
     for (pi, phase) in plan.phases.iter().enumerate() {
+        if phase.id.len() > MAX_STRING {
+            errs.push(Issue::new(
+                format!("/phases/{pi}/id"),
+                "string_too_long",
+                format!("id is {} chars (limit {MAX_STRING})", phase.id.len()),
+            ));
+        }
         if phase.title.len() > MAX_STRING {
             errs.push(Issue::new(
                 format!("/phases/{pi}/title"),
@@ -389,6 +403,13 @@ fn check_strings(plan: &Plan, errs: &mut Vec<Issue>) {
         }
 
         for (ti, task) in phase.tasks.iter().enumerate() {
+            if task.id.len() > MAX_STRING {
+                errs.push(Issue::new(
+                    format!("/phases/{pi}/tasks/{ti}/id"),
+                    "string_too_long",
+                    format!("id is {} chars (limit {MAX_STRING})", task.id.len()),
+                ));
+            }
             if task.title.len() > MAX_STRING {
                 errs.push(Issue::new(
                     format!("/phases/{pi}/tasks/{ti}/title"),
@@ -467,6 +488,13 @@ fn check_strings(plan: &Plan, errs: &mut Vec<Issue>) {
 
     // Risk fields
     for (ri, risk) in plan.risks.iter().enumerate() {
+        if risk.id.len() > MAX_STRING {
+            errs.push(Issue::new(
+                format!("/risks/{ri}/id"),
+                "string_too_long",
+                format!("id is {} chars (limit {MAX_STRING})", risk.id.len()),
+            ));
+        }
         if risk.title.len() > MAX_STRING {
             errs.push(Issue::new(
                 format!("/risks/{ri}/title"),
@@ -490,6 +518,13 @@ fn check_strings(plan: &Plan, errs: &mut Vec<Issue>) {
 
     // Open question fields
     for (qi, question) in plan.open_questions.iter().enumerate() {
+        if question.id.len() > MAX_STRING {
+            errs.push(Issue::new(
+                format!("/open_questions/{qi}/id"),
+                "string_too_long",
+                format!("id is {} chars (limit {MAX_STRING})", question.id.len()),
+            ));
+        }
         if question.question_md.len() > MAX_STRING {
             errs.push(Issue::new(
                 format!("/open_questions/{qi}/question_md"),
@@ -513,12 +548,14 @@ pub fn validate(plan: &Plan) -> Vec<Issue> {
             e.hint = Some(ID_HINT.into());
             errs.push(e);
         }
-        if let Some(first) = seen.insert(id.to_string(), path.clone()) {
+        if let Some(first) = seen.get(id).cloned() {
             errs.push(Issue::new(
                 path,
                 "duplicate_id",
                 format!("id `{id}` already used at {first}"),
             ));
+        } else {
+            seen.insert(id.to_string(), path);
         }
     };
 
@@ -538,7 +575,8 @@ pub fn validate(plan: &Plan) -> Vec<Issue> {
         check_id(&q.id, format!("/open_questions/{qi}/id"), &mut errs);
     }
 
-    // depends_on refs + cycle detection over the task graph.
+    // depends_on refs over the task graph (also collects edges for the
+    // cycle check below).
     let mut edges: Vec<(&str, &str)> = Vec::new();
     for (pi, phase) in plan.phases.iter().enumerate() {
         for (ti, t) in phase.tasks.iter().enumerate() {
@@ -560,15 +598,10 @@ pub fn validate(plan: &Plan) -> Vec<Issue> {
             }
         }
     }
-    if let Some(cycle_node) = find_cycle(&task_ids, &edges) {
-        errs.push(Issue::new(
-            "/phases",
-            "dependency_cycle",
-            format!("dependency cycle involving `{cycle_node}`"),
-        ));
-    }
 
-    // Limits.
+    // Limits — checked before cycle detection. The recursive DFS below has
+    // stack depth bounded by the task count, so it must not run on an
+    // oversized plan; report `too_many` and skip the cycle check instead.
     let n_tasks: usize = plan.phases.iter().map(|p| p.tasks.len()).sum();
     for (what, n, max, path) in [
         ("tasks", n_tasks, MAX_TASKS, "/phases"),
@@ -590,6 +623,19 @@ pub fn validate(plan: &Plan) -> Vec<Issue> {
             ));
         }
     }
+
+    // Cycle detection recurses one stack frame per node on the DFS path, so
+    // it's only safe once the task count is within MAX_TASKS (500 frames).
+    if n_tasks <= MAX_TASKS {
+        if let Some(cycle_node) = find_cycle(&task_ids, &edges) {
+            errs.push(Issue::new(
+                "/phases",
+                "dependency_cycle",
+                format!("dependency cycle involving `{cycle_node}`"),
+            ));
+        }
+    }
+
     check_strings(plan, &mut errs);
     errs
 }
@@ -752,6 +798,39 @@ mod tests {
             });
         }
         assert!(validate(&p).iter().any(|e| e.code == "too_many"));
+    }
+
+    #[test]
+    fn long_dependency_chain_reports_too_many_without_overflowing_stack() {
+        // ~10,000 tasks in a single dependency chain fits under the 2 MiB
+        // input cap, but would overflow the stack if cycle detection's
+        // recursive DFS ran before the MAX_TASKS collection-limit check.
+        let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
+        p.phases[0].tasks.clear();
+        let n = 10_000;
+        for i in 0..n {
+            p.phases[0].tasks.push(PlanTask {
+                id: format!("t-x{i}"),
+                title: "x".into(),
+                summary_md: None,
+                status: Status::Planned,
+                risk: None,
+                depends_on: if i == 0 {
+                    vec![]
+                } else {
+                    vec![format!("t-x{}", i - 1)]
+                },
+                files: vec![],
+                acceptance: vec![],
+                validation: vec![],
+                estimate: None,
+            });
+        }
+        let errs = validate(&p);
+        assert!(
+            errs.iter().any(|e| e.code == "too_many"),
+            "expected a too_many issue, got {errs:?}"
+        );
     }
 
     #[test]
