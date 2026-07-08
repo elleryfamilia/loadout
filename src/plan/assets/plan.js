@@ -22,8 +22,16 @@
       const lines = ["## Plan feedback — " + plan.meta.id, ""];
       for (const c of doc.comments) {
         lines.push("### " + c.ref + " — " + c.type);
-        lines.push(c.text);
-        if (c.quote) lines.push('_(re: "' + c.quote + '")_');
+        /* Blockquote every line of free-form comment text so a "```" line
+           in it reads as "> ```" -- that can't open a top-level fence, and
+           any fence it does open stays contained inside the blockquote. */
+        for (const textLine of c.text.split("\n")) lines.push("> " + textLine);
+        if (c.quote) {
+          /* Collapse whitespace (incl. newlines) to single spaces so the
+             quote is safe to embed inline -- a mid-line ``` can't open a
+             fence. */
+          lines.push('_(re: "' + c.quote.replace(/\s+/g, " ") + '")_');
+        }
         lines.push("");
       }
       const json = JSON.stringify(doc, null, 2);
@@ -123,9 +131,10 @@
       document.body.appendChild(ta);
       ta.focus();
       ta.select();
-      try { document.execCommand("copy"); } catch (e) { /* ignore */ }
+      let copied = false;
+      try { copied = document.execCommand("copy"); } catch (e) { /* ignore */ }
       document.body.removeChild(ta);
-      done();
+      if (copied) done();
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(done, fallback);
@@ -193,6 +202,10 @@
     const refEls = document.querySelectorAll("[data-plan-ref]");
     refEls.forEach(function (el) {
       const ref = el.getAttribute("data-plan-ref");
+      /* Snapshot the quote before any UI (comment button/box) is appended
+         into el -- elementQuote's no-heading fallback reads el.textContent,
+         which would otherwise pick up the injected chrome text. */
+      const quote = elementQuote(el);
 
       const btn = document.createElement("button");
       btn.type = "button";
@@ -246,7 +259,7 @@
       addBtn.addEventListener("click", function () {
         const text = textarea.value.trim();
         if (!text) return;
-        comments.push(core.makeComment(ref, select.value, elementQuote(el), text));
+        comments.push(core.makeComment(ref, select.value, quote, text));
         textarea.value = "";
         box.hidden = true;
         renderCount();
@@ -265,7 +278,12 @@
     });
   }
 
-  document.addEventListener("DOMContentLoaded", function () {
+  function run() {
     if (location.hash === "#selftest") selftest(); else init();
-  });
+  }
+  if (document.readyState !== "loading") {
+    run();
+  } else {
+    document.addEventListener("DOMContentLoaded", run);
+  }
 })();
