@@ -4,6 +4,7 @@
 //! plan.json before any render runs, and this must never be committable by
 //! accident), then does its work. See design-plan-visualizer.md.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::bail;
@@ -206,11 +207,72 @@ fn render(
     let path = out
         .map(Path::to_path_buf)
         .unwrap_or_else(|| plan_html_path(&prep.repo_base));
-    AtomicWriter::new(rt.dry_run).write(&path, &html)?;
-    println!("rendered {} → {}", plan.meta.id, path.display());
+    let written = AtomicWriter::new(rt.dry_run).write(&path, &html)?;
+    println!(
+        "rendered {} ({}) → {}",
+        plan.meta.id,
+        written.action.label(),
+        path.display()
+    );
     if !no_open && !rt.dry_run {
-        crate::studio::server::open_browser(&format!("file://{}", path.display()));
+        crate::studio::server::open_browser(&file_url(&path));
         println!("opened in your browser (pass --no-open to skip)");
     }
     Ok(())
+}
+
+/// Build a `file://` URL for `path`: absolutize it first (so a relative
+/// `--out` still yields a URL a browser can open — a bare `file://custom/out`
+/// treats `custom` as a host, not a path) and percent-encode every byte of
+/// its UTF-8 (lossy) form except the unreserved characters and `/`, so paths
+/// with spaces or other reserved characters don't produce a broken URL.
+/// Dependency-free: no `url`/`percent-encoding` crate.
+pub(crate) fn file_url(path: &Path) -> String {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut out = String::from("file://");
+    for byte in absolute.to_string_lossy().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(*byte as char);
+            }
+            _ => {
+                write!(out, "%{byte:02X}").expect("writing to a String never fails");
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_url_percent_encodes_spaces() {
+        let url = file_url(Path::new("/tmp/my plan/plan.html"));
+        assert!(
+            url.contains("/my%20plan/"),
+            "expected %20-encoded space, got {url}"
+        );
+        assert!(
+            !url.contains(' '),
+            "url must not contain a raw space: {url}"
+        );
+    }
+
+    #[test]
+    fn file_url_absolutizes_relative_paths() {
+        let url = file_url(Path::new("custom-out/plan.html"));
+        assert!(
+            url.starts_with("file:///"),
+            "relative path must be absolutized before the file:// URL is built, got {url}"
+        );
+        assert!(url.ends_with("custom-out/plan.html"));
+    }
+
+    #[test]
+    fn file_url_passes_through_plain_absolute_path() {
+        let url = file_url(Path::new("/tmp/plan.html"));
+        assert_eq!(url, "file:///tmp/plan.html");
+    }
 }
