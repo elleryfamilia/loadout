@@ -2831,3 +2831,23 @@ fn corrupt_trust_store_is_loud_and_rebuild_recovers() {
         .stderr(predicate::str::contains("trust store").not())
         .stderr(predicate::str::contains("changed outside loadout").not());
 }
+
+#[test]
+fn claude_verify_command_carries_native_review_commands() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[loadouts]]\n\
+         name = \"dev\"\n\
+         workflow = \"superpowers\"\n",
+    );
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success();
+    let verify =
+        std::fs::read_to_string(fx.repo.path().join(".claude/commands/loadout/verify.md")).unwrap();
+    assert!(verify.contains("/code-review"));
+    assert!(verify.contains("/security-review"));
+}

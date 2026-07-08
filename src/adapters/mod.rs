@@ -122,6 +122,13 @@ pub struct AgentDescriptor {
     /// Ignored unless `commands_dir` is set; defaults to markdown.
     #[serde(default)]
     pub command_format: Option<commands::CommandFormat>,
+    /// Native review commands to run during the verify stage (e.g. Claude
+    /// Code's `/code-review`, `/security-review`). Built-in descriptor data
+    /// only — deliberately NOT part of the `[[agents]]` config schema
+    /// (`deny_unknown_fields` still rejects it there), so a newer-written,
+    /// synced config can never brick an older binary.
+    #[serde(skip)]
+    pub review_commands: Vec<String>,
 }
 
 fn default_template() -> String {
@@ -213,6 +220,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             launch_context_dir: None,
             commands_dir: None,
             command_format: None,
+            review_commands: Vec::new(),
         }
     }
     vec![
@@ -224,6 +232,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             // Claude reads project commands from `.claude/commands/`; a `loadout/`
             // subdir namespaces them as `/loadout:<stage>`.
             commands_dir: Some(".claude/commands".into()),
+            review_commands: vec!["/code-review".into(), "/security-review".into()],
             ..d("claude", "claude.md")
         },
         AgentDescriptor {
@@ -917,7 +926,7 @@ fn write_stage_commands(
         .command_format
         .unwrap_or(commands::CommandFormat::Markdown);
     let ns_dir = command_namespace_dir(app.repo_base(), commands_dir);
-    let generated = commands::stage_commands(wf, format);
+    let generated = commands::stage_commands(wf, format, &d.review_commands);
     // A command's top-level entry in the namespace dir: the file itself, or —
     // for folder-shaped formats (Cursor skills' `loadout-plan/SKILL.md`) — the
     // folder. Pruning compares at that level.
