@@ -211,6 +211,7 @@ parses and validates cleanly.
   "open_questions": [ { "id": "q-ttl", "question_md": "Session TTL?", "blocking": true },
                       { "id": "q-name", "question_md": "Trait name?" } ]
 }
+
 ```
 
 ## Feedback contract

@@ -935,4 +935,34 @@ mod tests {
             "{errs:?}"
         );
     }
+
+    #[test]
+    fn too_many_out_of_scope_is_rejected() {
+        let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
+        p.meta.out_of_scope = (0..26).map(|i| format!("out of scope {i}")).collect();
+        let errs = validate(&p);
+        assert!(
+            errs.iter()
+                .any(|e| e.code == "too_many" && e.path == "/meta/out_of_scope"),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn new_meta_string_caps_enforced() {
+        let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
+        p.meta.summary_md = Some("x".repeat(10_001));
+        p.meta.key_points = vec!["y".repeat(10_001)];
+        let errs = validate(&p);
+        assert!(
+            errs.iter()
+                .any(|e| e.code == "string_too_long" && e.path == "/meta/summary_md"),
+            "expected string_too_long at /meta/summary_md, got {errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.code == "string_too_long" && e.path == "/meta/key_points/0"),
+            "expected string_too_long at /meta/key_points/0, got {errs:?}"
+        );
+    }
 }
