@@ -2606,3 +2606,55 @@ fn doctor_flags_a_multiline_private_key_in_config() {
         .stdout(predicate::str::contains("multi-line secret"))
         .stdout(predicate::str::contains("local.toml"));
 }
+
+#[test]
+fn refresh_surfaces_config_problems_as_warnings() {
+    // Same dangling-fragment condition as
+    // doctor_flags_a_profile_referencing_an_unknown_fragment — refresh's
+    // warning text must be the same string checks::dangling_fragment_refs
+    // emits for doctor.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\nid = \"present\"\nguidance = \"hi\"\n\
+         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"present\", \"gone\"]\n",
+    );
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("⚠"))
+        .stdout(predicate::str::contains("unknown fragment 'gone'"));
+}
+
+#[test]
+fn refresh_healthy_config_adds_no_warning_lines() {
+    // A fully healthy config: git-managed (so the .gitignore check is
+    // satisfied once refresh writes the entry), one fragment, one profile
+    // that both targets rust AND has no targets is impossible to declare
+    // twice — so a second no-targets profile is the catch-all default the
+    // single-default-invariant check expects.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\n\
+         id = \"rust-conventions\"\n\
+         description = \"Rust conventions\"\n\
+         guidance = \"Rust project. Build with cargo, lint with clippy.\"\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"rust\"\n\
+         targets = [\"rust\"]\n\
+         fragments = [\"rust-conventions\"]\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"default\"\n\
+         fragments = [\"rust-conventions\"]\n",
+    );
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("⚠").not());
+}
