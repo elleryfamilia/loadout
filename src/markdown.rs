@@ -41,7 +41,11 @@ pub fn render_markdown(md: &str) -> String {
                 }
             }
             Event::End(TagEnd::Link) => {
-                if link_stack.pop().unwrap_or(true) {
+                // Fail closed: an unbalanced End(Link) (unreachable today —
+                // pulldown-cmark always pairs Start/End) degrades to emphasis
+                // rather than assuming it's safe to keep as an `<a>`, matching
+                // image_stack's fail-closed direction below.
+                if link_stack.pop().unwrap_or(false) {
                     vec![Event::End(TagEnd::Link)]
                 } else {
                     vec![Event::End(TagEnd::Emphasis)]
