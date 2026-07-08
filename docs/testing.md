@@ -230,10 +230,48 @@ Because the global library was isolated under `LOADOUT_CONFIG_DIR`, nothing
 touched your real `~/.config/loadout`, and the only repo affected was the
 throwaway one.
 
+## Level 3 — Browser smoke test for the plan viewer
+
+`load plan render`'s output page (`plan.html`) carries its own client-side JS
+(`src/plan/assets/plan.js`) for the dependency graph, comment anchoring, and
+the "Copy feedback" button. `tests/browser_smoke.rs` checks that JS actually
+runs correctly in a real browser, not just that the HTML is well-formed.
+
+The page's JS has a `#selftest` mode: opening `plan.html#selftest` (instead of
+the plain path) runs a small self-check of the pure-core logic (comment
+anchoring, feedback-document assembly) inside the page itself, then appends a
+result marker to the DOM: `<pre id="selftest-result">LOADOUT_SELFTEST_PASS…</pre>`
+on success. The test drives headless Chrome with `--dump-dom` against a
+rendered fixture plan and asserts that exact marker element is present — it
+anchors on the DOM element, not the bare string `LOADOUT_SELFTEST_PASS` (that
+literal also appears in `plan.js`'s own source, which `--dump-dom` serializes
+into the page regardless of whether the selftest ran).
+
+The test is `#[ignore]`d by default (it needs a real Chrome/Chromium binary,
+which isn't guaranteed to be present). **CI** runs it explicitly on
+`ubuntu-latest` in a dedicated `browser-smoke` job:
+
+```bash
+cargo test --test browser_smoke --locked -- --ignored
+```
+
+with `CHROME_BIN=google-chrome` in the environment (Ubuntu CI images ship
+Chrome under that name).
+
+**Locally**, run the same command. The test auto-detects a browser in this
+order: the `CHROME_BIN` env var, then `google-chrome` / `chromium` /
+`chromium-browser` on `PATH`, then the common macOS app bundle paths
+(`/Applications/Google Chrome.app/…`, `/Applications/Chromium.app/…`). If none
+of those resolve, the test panics with "no Chrome found; set CHROME_BIN" —
+set `CHROME_BIN` to your browser's binary path and re-run.
+
 ## What "passing" looks like
 
-- **Level 1:** green tests / clippy / fmt (263 tests).
+- **Level 1:** green tests / clippy / fmt.
 - **Level 2:** `rust` auto-selected as the **one** loadout; `infra-caution`
   gated in only under `infra/`; the dynamic `host-info` output rendered into the
   overlay; a repo-declared fragment flagged as **ignored** (global-only); and
   `clean` removing only the generated artifacts.
+- **Level 3:** the plan viewer's `#selftest` marker
+  (`LOADOUT_SELFTEST_PASS…`) present in the DOM after headless Chrome loads a
+  rendered `plan.html#selftest`.

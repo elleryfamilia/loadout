@@ -8,6 +8,38 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Added
+
+- **`load plan`** — validate, render, and review an agent-written development
+  plan. An agent (with the embedded `loadout-plan-preview` skill) writes a
+  structured `plan.json`; `load plan check [--json] [--lenient]` validates it
+  with JSON-pointer diagnostics; `load plan render [FILE] [--out] [--no-open]`
+  renders a self-contained `plan.html` — inline dependency graph, task cards,
+  element-anchored commenting, a "Copy feedback" button — and opens it in your
+  browser; `load plan schema` prints the schema reference; `load plan clean`
+  removes the rendered page and any feedback file (a plain `load clean` sweeps
+  them too). Rendering is deterministic (same `plan.json` + same loadout
+  version → byte-identical HTML) and fully self-contained — no CDN, no
+  external fetches. See [docs/concepts.md](docs/concepts.md#plan-previews-implemented).
+- **Per-skill install/remove toggles** — `load studio`'s skills card now lets
+  you install or remove each embedded skill individually, instead of only
+  all-or-nothing via `load skill install`/`remove`.
+
+### Security
+
+- **Studio's markdown rendering now de-links unsafe URL schemes.** Fragment
+  and loadout guidance previews in `load studio` previously escaped raw HTML
+  but did not check link destinations — a `[text](javascript:…)` link in
+  guidance markdown rendered as a real, clickable `<a href="javascript:…">`.
+  Studio now shares the same sanitizing markdown renderer introduced for
+  `load plan` (`src/markdown.rs`): link destinations are limited to
+  `http(s):`, `mailto:`, in-page `#fragment`s, and scheme-less relative
+  paths; anything else is de-linked to plain text, checked case-insensitively
+  after stripping control/whitespace characters. Images never fetch — a safe
+  destination renders as a link, not `<img>`.
+
 ## 0.12.0 — 2026-07-03
 
 ### Added

@@ -201,7 +201,7 @@ Example document:
 {
   "format": "loadout.plan-feedback/1",
   "plan_id": "auth-refactor",
-  "plan_hash": "sha256:2b1a9e4f7c6d0a3e8b5f1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f60",
+  "plan_hash": "sha256:2b1a9e4f7c6d0a3e8b5f1c2d3e4f50617283994a5b6c7d8e9f0a1b2c3d4e5f60",
   "verdict": "request_changes",
   "comments": [
     {
