@@ -5,3 +5,4 @@
 //! `.loadout/workflow/artifacts/design-plan-visualizer.md` for the design.
 
 pub mod model;
+pub mod svg;
