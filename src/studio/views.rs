@@ -12,7 +12,6 @@
 use std::path::Path;
 
 use maud::{html, Markup, PreEscaped, DOCTYPE};
-use pulldown_cmark::{html as md_html, Event, Options, Parser};
 
 use crate::context::Scope;
 use crate::fragment::{Fragment, Layer};
@@ -337,29 +336,10 @@ fn fragment_icon_name(c: &FragmentView) -> &'static str {
 
 // --- markdown ----------------------------------------------------------------
 
-/// Render overlay markdown to HTML. Raw HTML is escaped (studio can open an
-/// untrusted cloned repo's guidance) and generated header comments are stripped.
+/// Render overlay markdown to HTML via the shared sanitizer (raw HTML escaped,
+/// unsafe URL schemes de-linked, images never fetch).
 fn render_markdown(md: &str) -> Markup {
-    let body = strip_leading_comments(md);
-    let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-    let parser = Parser::new_ext(body, opts).map(|ev| match ev {
-        Event::Html(s) | Event::InlineHtml(s) => Event::Text(s),
-        other => other,
-    });
-    let mut out = String::new();
-    md_html::push_html(&mut out, parser);
-    PreEscaped(out)
-}
-
-fn strip_leading_comments(md: &str) -> &str {
-    let mut t = md.trim_start();
-    while let Some(rest) = t.strip_prefix("<!--") {
-        match rest.find("-->") {
-            Some(end) => t = rest[end + 3..].trim_start(),
-            None => break,
-        }
-    }
-    t
+    PreEscaped(crate::markdown::render_markdown(md))
 }
 
 // --- page shell --------------------------------------------------------------
