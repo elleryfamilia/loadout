@@ -235,6 +235,9 @@ A read-only **palette** of starter fragments also ships inside the binary; dupli
 | `load clean [--agent <id>\|all]`             | Remove generated overlays and managed blocks                        |
 | `load detect [--probes]`                     | Print detected context and optional provider data                   |
 | `load doctor`                                | Diagnose config, agents, overlays, and safety issues                |
+| `load trust [--rebuild]`                     | Show the per-machine script-trust store (`--rebuild` re-approves all) |
+| `load fragments trust <id>`                  | Re-approve a fragment's script after an out-of-band change          |
+| `load targets trust <id>`                    | Re-approve a target's script after an out-of-band change            |
 | `load sync [init [url]\|clone <url>]`        | Sync global config across machines                                  |
 | `load skill [install\|remove\|status]`       | Manage embedded agent skills                                        |
 | `load update [--check]`                      | Self-update installer-based installs                                |
@@ -262,6 +265,13 @@ Installer-based installs update in place with `load update`. From source:
 ```bash
 cargo install --git https://github.com/elleryfamilia/loadout
 ```
+
+**Verified install channels.** These are the only official sources — treat a binary from anywhere else as untrusted:
+
+- **GitHub releases** — <https://github.com/elleryfamilia/loadout/releases>: the prebuilt binaries and the installer script above, built by cargo-dist from tagged commits of this repo.
+- **This repo, from source** — the `cargo install --git …` line above, or a clone and `cargo build`.
+
+An npm installer is planned and will be announced here when it ships. There is no official Homebrew tap or third-party package today.
 
 ---
 
