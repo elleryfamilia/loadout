@@ -53,9 +53,24 @@ fn viewer_selftest_passes_in_headless_chrome() {
         .output()
         .expect("chrome runs");
     let dom = String::from_utf8_lossy(&out.stdout);
+    // Anchor on the marker *element* the selftest injects into the DOM
+    // (`<pre id="selftest-result">LOADOUT_SELFTEST_PASS…</pre>`), not the
+    // bare string `LOADOUT_SELFTEST_PASS` -- that literal also sits in
+    // plan.js's own source, which `--dump-dom` serializes into the page
+    // regardless of whether the selftest ran or passed.
     assert!(
-        dom.contains("LOADOUT_SELFTEST_PASS"),
+        dom.contains("id=\"selftest-result\">LOADOUT_SELFTEST_PASS"),
         "selftest failed; DOM tail:\n{}",
-        &dom[dom.len().saturating_sub(2000)..]
+        char_boundary_tail(&dom, 2000)
     );
+}
+
+/// The last `max_len` bytes of `s`, trimmed back to the nearest char
+/// boundary so the slice never panics on a multibyte codepoint.
+fn char_boundary_tail(s: &str, max_len: usize) -> &str {
+    let start = s.len().saturating_sub(max_len);
+    let start = (start..=s.len())
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(s.len());
+    &s[start..]
 }
