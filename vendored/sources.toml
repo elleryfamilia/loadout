@@ -151,3 +151,22 @@ pre-edited, so a drift diff against upstream stays a straight file compare. \
 Upstream has no `icons/layout.svg` (renamed); `layout-dashboard` is used in \
 its place.
 """
+
+[[source]]
+id = "inter"
+repo = "rsms/inter"
+homepage = "https://rsms.me/inter/"
+license = "OFL-1.1 (see vendored/inter/LICENSE, upstream LICENSE.txt verbatim)"
+ref_strategy = "commit"
+commit = "google-fonts-api-v20"
+note = """
+Inter 400 (Inter-Regular.woff2) and 600 (Inter-SemiBold.woff2), latin \
+subset only, as served by the Google Fonts static woff2 endpoint \
+(fonts.gstatic.com/s/inter/v20/…, resolved via \
+fonts.googleapis.com/css2?family=Inter:wght@400;600 with a Chrome UA on \
+2026-07-08). Google Fonts versions its static files by the v20 path \
+segment rather than a git commit, so that's what's pinned above. The two \
+files are base64-embedded into src/plan/assets/plan.css's @font-face \
+rules (the page's CSP has font-src data: and nothing else); the vendored \
+copies here are the canonical originals those data: URIs must match.
+"""
