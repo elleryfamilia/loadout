@@ -2729,7 +2729,8 @@ fn plan_check_passes_valid_input_and_warns_on_stale_feedback() {
         .args(["plan", "check"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("plan.json is valid"));
+        .stdout(predicate::str::contains("plan.json is valid"))
+        .stdout(predicate::str::contains("1 phases: P 1"));
     f.write(
         ".loadout/workflow/artifacts/plan-feedback.json",
         r#"{ "format": "loadout.plan-feedback/1", "plan_id": "other",
@@ -2740,6 +2741,42 @@ fn plan_check_passes_valid_input_and_warns_on_stale_feedback() {
         .assert()
         .success()
         .stderr(predicate::str::contains("feedback"));
+}
+
+#[test]
+fn plan_check_advises_on_overlong_summary() {
+    let f = Fixture::new();
+    let long = "x".repeat(1600);
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        &format!(
+            r#"{{ "format": "loadout.plan/1",
+                 "meta": {{ "id": "demo", "title": "D", "summary_md": "{long}" }} }}"#
+        ),
+    );
+    f.cmd()
+        .args(["plan", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("warning[long_summary]"))
+        .stdout(predicate::str::contains("warning[wall_of_text]"))
+        .stdout(predicate::str::contains("plan.json is valid"));
+
+    // Paragraph breaks clear the wall-of-text advisory even when the text
+    // stays long enough to trip the single-paragraph check on its own.
+    let paragraphs = format!("{}\\n\\n{}", "x".repeat(400), "y".repeat(400));
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        &format!(
+            r#"{{ "format": "loadout.plan/1",
+                 "meta": {{ "id": "demo", "title": "D", "summary_md": "{paragraphs}" }} }}"#
+        ),
+    );
+    f.cmd()
+        .args(["plan", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("warning[wall_of_text]").not());
 }
 
 #[test]

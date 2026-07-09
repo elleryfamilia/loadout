@@ -176,7 +176,8 @@ fn report_issues(json: bool, errors: &[model::Issue], warnings: &[model::Issue])
 }
 
 fn check(prep: &Prepared, file: Option<&Path>, json: bool, lenient: bool) -> crate::Result<()> {
-    let (plan, warnings) = load_checked(prep, file, json, lenient)?;
+    let (plan, mut warnings) = load_checked(prep, file, json, lenient)?;
+    warnings.extend(model::advisories(&plan));
     warn_stale_feedback(prep, &plan);
     if json {
         report_issues(true, &[], &warnings);
@@ -189,6 +190,17 @@ fn check(prep: &Prepared, file: Option<&Path>, json: bool, lenient: bool) -> cra
             plan.phases.iter().map(|p| p.tasks.len()).sum::<usize>(),
             crate::hash::short(&model::plan_hash(&plan))
         );
+        // Structure at a glance, so the author can sanity-check the shape
+        // without opening the render.
+        if !plan.phases.is_empty() {
+            let breakdown = plan
+                .phases
+                .iter()
+                .map(|p| format!("{} {}", p.title, p.tasks.len()))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            println!("  {} phases: {breakdown}", plan.phases.len());
+        }
     }
     Ok(())
 }

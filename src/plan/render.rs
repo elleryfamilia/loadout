@@ -46,6 +46,45 @@ fn md(text: &Option<String>) -> Markup {
     }
 }
 
+/// Split a phase's `summary_md` into a teaser that is safe inside the
+/// phrasing-content `<summary>` element and whatever block content remains.
+///
+/// The teaser is the FIRST paragraph's inner HTML — a paragraph's content is
+/// phrasing content by construction (the sanitizer already rewrites images,
+/// the only exception, into links/emphasis), so no `<ul>`/`<pre>`/`<table>`
+/// can leak into `<summary>` (Savio's PR #22 finding: stripping only `<p>`
+/// tags let every other block element through). Everything after the first
+/// paragraph — or the whole rendering when the summary doesn't START with a
+/// paragraph — is returned as the remainder for the caller to render inside
+/// the expanded `<details>` body, so block-heavy summaries lose nothing.
+///
+/// `</p>` cannot occur inside the first paragraph's inner HTML (the
+/// sanitizer escapes literal `</p>` text and HTML forbids nested `<p>`), so
+/// the split point is unambiguous.
+fn phase_summary_parts(text: &Option<String>) -> (Option<Markup>, Option<Markup>) {
+    let Some(t) = text.as_ref() else {
+        return (None, None);
+    };
+    let html = crate::markdown::render_markdown(t);
+    let html = html.trim();
+    if let Some(after_open) = html.strip_prefix("<p>") {
+        if let Some(close) = after_open.find("</p>") {
+            let teaser = after_open[..close].trim().to_string();
+            let rest = after_open[close + "</p>".len()..].trim().to_string();
+            return (
+                (!teaser.is_empty()).then_some(PreEscaped(teaser)),
+                (!rest.is_empty()).then_some(PreEscaped(rest)),
+            );
+        }
+    }
+    // First block isn't a paragraph: there is no phrasing-safe teaser;
+    // render the whole summary in the body instead.
+    (
+        None,
+        (!html.is_empty()).then_some(PreEscaped(html.to_string())),
+    )
+}
+
 /// A copy of `plan` with every markdown field (`goal_md`, `meta.summary_md`,
 /// `meta.key_points`, phase/task `summary_md`, `mitigation_md`,
 /// `question_md`) replaced by its sanitized HTML rendering, for the JSON
@@ -363,11 +402,19 @@ fn phase_estimate_dist(phase: &Phase) -> String {
     }
     sizes
         .iter()
-        .zip(["small", "medium", "large"])
+        .zip(["s", "m", "l"])
         .filter(|(n, _)| **n > 0)
-        .map(|(n, label)| format!("{n} {label}"))
+        .map(|(n, label)| format!("{n}{label}"))
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(" · ")
+}
+
+/// The rail's phase cell: the head of a `title — subtitle` name, capped for
+/// the narrow column (the full title is one click away on the phase row
+/// itself). Titles without the separator just truncate.
+fn short_phase_title(title: &str) -> String {
+    let head = title.split(" — ").next().unwrap_or(title);
+    truncate_chars(head, 28)
 }
 
 /// A phase's risk heat for the rollup table: the count of tasks at the
@@ -489,12 +536,15 @@ pub fn render(plan: &Plan) -> String {
             }
             body data-plan-fingerprint=(hash) {
                 header {
-                    h1 { (plan.meta.title) }
-                    p.meta data-plan-ref=(format!("meta:{}", plan.meta.id)) {
+                    // Eyebrow above the title: the metadata a reader wants
+                    // placed before the name, not after it.
+                    p.meta {
                         "plan " code { (plan.meta.id) }
                         @if let Some(rev) = plan.meta.revision { " · revision " (rev) }
                         @if let Some(agent) = &plan.meta.agent { " · by " (agent) }
+                        @if let Some(created) = &plan.meta.created { " · " (created) }
                     }
+                    h1 { (plan.meta.title) }
                     (md(&plan.meta.goal_md))
                 }
                 // A labeled section heading, same convention as Open
@@ -503,21 +553,82 @@ pub fn render(plan: &Plan) -> String {
                 // outside each individual question/risk card; this one sits
                 // outside the single .plan-summary card).
                 h2 { (icon_prefix(Some("file-text"))) "Summary" }
-                section.plan-summary {
-                    // (a) The executive summary itself — the top of the page,
-                    // so a reader who stops here still gets a correct
-                    // high-level picture. Never fabricated: absent summary_md
-                    // gets a plain note, not invented content.
-                    div.summary-exec {
-                        @if let Some(summary) = &plan.meta.summary_md {
-                            (PreEscaped(crate::markdown::render_markdown(summary)))
-                        } @else {
-                            p.summary-missing {
-                                "No executive summary — the plan author can set meta.summary_md."
+                // The `meta:` comment anchor lives on the summary card itself
+                // (not the tiny byline above): "comment on the plan as a
+                // whole" reads as commenting on the executive summary, and
+                // the byline gave the button no visible target worth quoting.
+                section.plan-summary data-plan-ref=(format!("meta:{}", plan.meta.id)) {
+                    // Two zones side by side on wide viewports (first-dogfood
+                    // feedback: the exec prose alone left half the card
+                    // empty): the prose on the left, an "at a glance" rail —
+                    // counts, per-phase rollup, risk register, the ask — on
+                    // the right, where a scanner looks first.
+                    div.summary-grid {
+                        // (a) The executive summary itself — the top of the
+                        // page, so a reader who stops here still gets a
+                        // correct high-level picture. Never fabricated:
+                        // absent summary_md gets a plain note, not invented
+                        // content.
+                        div.summary-exec {
+                            @if let Some(summary) = &plan.meta.summary_md {
+                                (PreEscaped(crate::markdown::render_markdown(summary)))
+                            } @else {
+                                p.summary-missing {
+                                    "No executive summary — the plan author can set meta.summary_md."
+                                }
+                            }
+                        }
+                        aside.summary-glance {
+                            p.glance-title { "At a glance" }
+                            // (e) Whole-plan counts, the per-phase rollup,
+                            // the risk register counts (distinct from the
+                            // per-task risk heat shown per phase below).
+                            p.summary-counts { (summary_counts_line(plan)) }
+                            @if !plan.phases.is_empty() {
+                                table.summary-phases {
+                                    thead {
+                                        tr { th { "Phase" } th { "Tasks" } th { "Est." } th { "Risk" } }
+                                    }
+                                    tbody {
+                                        @for phase in &plan.phases {
+                                            tr {
+                                                td { a href=(format!("#phase-{}", phase.id)) { (short_phase_title(&phase.title)) } }
+                                                td { (phase.tasks.len().to_string()) }
+                                                td { (phase_estimate_dist(phase)) }
+                                                td { (phase_risk_heat(phase)) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            @if let Some((line, has_high)) = &risk_line {
+                                p class=(if *has_high { "summary-risks has-high" } else { "summary-risks" }) {
+                                    (line)
+                                }
+                            }
+                            // (d) The ask: whether this plan can move
+                            // forward as-is — the rail's bottom line.
+                            p class=(if !blocking.is_empty() { "summary-ask has-blocking" } else { "summary-ask" }) {
+                                @if !blocking.is_empty() {
+                                    (format!(
+                                        "⚠ {} blocking question(s) must be resolved before implementation: ",
+                                        blocking.len()
+                                    ))
+                                    @for (i, q) in blocking.iter().enumerate() {
+                                        @if i > 0 { ", " }
+                                        a href=(format!("#question-{}", q.id)) {
+                                            (truncate_chars(&q.question_md, 100))
+                                        }
+                                    }
+                                } @else {
+                                    "No blocking questions — plan is ready to review and approve."
+                                }
                             }
                         }
                     }
-                    // (b) Supporting bullets, one per major workstream/decision.
+                    // (b) Supporting bullets, one per major workstream or
+                    // decision, spanning the card's full width below both
+                    // zones.
                     @if !plan.meta.key_points.is_empty() {
                         ul.summary-keypoints {
                             @for kp in &plan.meta.key_points {
@@ -533,49 +644,6 @@ pub fn render(plan: &Plan) -> String {
                                 @if i > 0 { ", " }
                                 (item)
                             }
-                        }
-                    }
-                    // (d) The ask: whether this plan can move forward as-is.
-                    p class=(if !blocking.is_empty() { "summary-ask has-blocking" } else { "summary-ask" }) {
-                        @if !blocking.is_empty() {
-                            (format!(
-                                "⚠ {} blocking question(s) must be resolved before implementation: ",
-                                blocking.len()
-                            ))
-                            @for (i, q) in blocking.iter().enumerate() {
-                                @if i > 0 { ", " }
-                                a href=(format!("#question-{}", q.id)) {
-                                    (truncate_chars(&q.question_md, 100))
-                                }
-                            }
-                        } @else {
-                            "No blocking questions — plan is ready to review and approve."
-                        }
-                    }
-                    // (e) Whole-plan counts, then a per-phase rollup table,
-                    // then the risk register counts (distinct from the
-                    // per-task risk heat shown per phase below).
-                    p.summary-counts { (summary_counts_line(plan)) }
-                    @if !plan.phases.is_empty() {
-                        table.summary-phases {
-                            thead {
-                                tr { th { "Phase" } th { "Tasks" } th { "Estimate" } th { "Risk" } }
-                            }
-                            tbody {
-                                @for phase in &plan.phases {
-                                    tr {
-                                        td { a href=(format!("#phase-{}", phase.id)) { (phase.title) } }
-                                        td { (phase.tasks.len().to_string()) }
-                                        td { (phase_estimate_dist(phase)) }
-                                        td { (phase_risk_heat(phase)) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    @if let Some((line, has_high)) = &risk_line {
-                        p class=(if *has_high { "summary-risks has-high" } else { "summary-risks" }) {
-                            (line)
                         }
                     }
                 }
@@ -623,6 +691,7 @@ pub fn render(plan: &Plan) -> String {
                 }
                 @for (i, phase) in plan.phases.iter().enumerate() {
                     details.phase id=(format!("phase-{}", phase.id)) data-plan-ref=(format!("phase:{}", phase.id)) {
+                        @let (teaser, summary_rest) = phase_summary_parts(&phase.summary_md);
                         summary {
                             (chevron_markup())
                             h2 {
@@ -631,9 +700,21 @@ pub fn render(plan: &Plan) -> String {
                                 (phase.title)
                                 " "
                                 span.phase-meta { (phase_meta_text(phase)) }
+                                // The phase's plain-english description is
+                                // part of the collapsed row — a reader
+                                // scanning closed phases still learns what
+                                // each one is. First paragraph only: it sits
+                                // inside <summary>, which is phrasing
+                                // content (see phase_summary_parts).
+                                @if let Some(teaser) = teaser {
+                                    span.phase-teaser { (teaser) }
+                                }
                             }
                         }
-                        (md(&phase.summary_md))
+                        // Block content the teaser couldn't carry (lists,
+                        // tables, paragraphs past the first) shows once the
+                        // phase is expanded.
+                        @if let Some(rest) = summary_rest { div.phase-summary-rest { (rest) } }
                         @if let Some(g) = svg::phase_svg(plan, &phase.id) { (PreEscaped(g)) }
                         @for task in &phase.tasks { (task_card(task)) }
                     }
@@ -740,6 +821,132 @@ mod tests {
         // And the font did actually land: two @font-face blocks (400 + 600).
         assert_eq!(CSS.matches("@font-face").count(), 2);
         assert_eq!(CSS.matches("url(\"data:font/woff2;base64,").count(), 2);
+    }
+
+    #[test]
+    fn top_of_page_structure() {
+        let html = render(&plan_from("kitchen-sink.json"));
+        // Eyebrow (byline + created) renders above the h1.
+        let meta_pos = html.find("<p class=\"meta\">").expect("byline eyebrow");
+        let h1_pos = html.find("<h1>").expect("title");
+        assert!(meta_pos < h1_pos, "eyebrow above the title");
+        assert!(html.contains(" · 2026-07-07"), "created date in eyebrow");
+        // Exec prose and the at-a-glance rail share the summary grid; the
+        // ask lives at the rail's bottom; key points span below the grid.
+        // (Tag-anchored substrings — bare class names also appear in the
+        // embedded stylesheet.)
+        let grid_pos = html.find("<div class=\"summary-grid\">").expect("grid");
+        let glance_pos = html
+            .find("<aside class=\"summary-glance\">")
+            .expect("glance rail");
+        let ask_pos = html.find("<p class=\"summary-ask").expect("ask");
+        let keypoints_pos = html
+            .find("<ul class=\"summary-keypoints\">")
+            .expect("keypoints");
+        assert!(grid_pos < glance_pos, "rail inside the grid");
+        assert!(glance_pos < ask_pos, "ask inside the rail");
+        assert!(ask_pos < keypoints_pos, "key points after the grid");
+        assert!(html.contains("At a glance"));
+    }
+
+    #[test]
+    fn summary_card_carries_the_meta_comment_anchor() {
+        let html = render(&plan_from("kitchen-sink.json"));
+        assert!(
+            html.contains("<section class=\"plan-summary\" data-plan-ref=\"meta:auth-refactor\">"),
+            "meta anchor should live on the summary card"
+        );
+        // …and only there: the byline is no longer a comment target.
+        assert_eq!(html.matches("data-plan-ref=\"meta:").count(), 1);
+    }
+
+    #[test]
+    fn phase_summary_is_visible_in_the_collapsed_row() {
+        let html = render(&plan_from("kitchen-sink.json"));
+        // p-core's summary_md renders as a teaser inside <summary> (visible
+        // while collapsed) …
+        let teaser_pos = html
+            .find("<span class=\"phase-teaser\">The trait seam.</span>")
+            .expect("teaser inside the phase heading");
+        assert!(
+            html[teaser_pos..].find("</summary>").is_some(),
+            "teaser must sit inside the <summary> element"
+        );
+        // … not as a block after </summary>, which is hidden while collapsed.
+        assert!(!html.contains("</summary><p>The trait seam.</p>"));
+        // p-backend has no summary_md: exactly one teaser on the page.
+        assert_eq!(html.matches("class=\"phase-teaser\"").count(), 1);
+    }
+
+    #[test]
+    fn phase_summary_teaser_is_phrasing_safe() {
+        // Single paragraph: all teaser, no remainder, inline markup kept.
+        let (teaser, rest) = phase_summary_parts(&Some("Extract *session* handling.".into()));
+        let teaser = teaser.expect("teaser").into_string();
+        assert!(teaser.contains("<em>session</em>"), "{teaser}");
+        assert!(!teaser.contains("<p>"), "{teaser}");
+        assert!(rest.is_none());
+
+        // Paragraph followed by a list: the list must NOT reach the teaser
+        // (Savio's PR #22 finding) — it lands in the remainder instead.
+        let (teaser, rest) = phase_summary_parts(&Some("Lead sentence.\n\n- alpha\n- beta".into()));
+        let teaser = teaser.expect("teaser").into_string();
+        assert_eq!(teaser, "Lead sentence.");
+        let rest = rest.expect("remainder").into_string();
+        assert!(rest.contains("<ul>"), "{rest}");
+
+        // Summary that STARTS with a block element: no teaser at all, the
+        // whole rendering goes to the body.
+        let (teaser, rest) = phase_summary_parts(&Some("- only\n- a list".into()));
+        assert!(teaser.is_none());
+        assert!(rest.expect("remainder").into_string().contains("<ul>"));
+
+        assert!(phase_summary_parts(&None).0.is_none());
+        let (t, r) = phase_summary_parts(&Some(String::new()));
+        assert!(t.is_none() && r.is_none());
+    }
+
+    /// Regression fixture: the first real plan written against the schema
+    /// (the v0.15.0 learning release, 23 tasks / 7 phases, near-limit
+    /// summaries, dependency edges, risks, open questions).
+    #[test]
+    fn real_learning_plan_fixture_parses_validates_renders() {
+        let raw = std::fs::read_to_string(format!(
+            "{}/tests/fixtures/plan/learning-v0-15.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let parsed = crate::plan::model::parse(&raw, false).unwrap();
+        assert!(parsed.warnings.is_empty());
+        assert!(crate::plan::model::validate(&parsed.plan).is_empty());
+        let html = render(&parsed.plan);
+        assert_eq!(html.matches("id=\"task-").count(), 23, "23 task cards");
+        // Its revision-1 meta is exactly the shape the advisories exist for:
+        // an overlong single-paragraph summary and a goal that reads as a
+        // second summary. The kitchen sink trips none of them.
+        let codes: Vec<String> = crate::plan::model::advisories(&parsed.plan)
+            .into_iter()
+            .map(|i| i.code)
+            .collect();
+        for expected in ["long_summary", "wall_of_text", "long_goal"] {
+            assert!(
+                codes.iter().any(|c| c == expected),
+                "missing {expected} in {codes:?}"
+            );
+        }
+        assert!(crate::plan::model::advisories(&plan_from("kitchen-sink.json")).is_empty());
+        // A spec-compressed key point (the shape a later revision actually
+        // shipped before review caught it) trips the fourth advisory.
+        let mut bloated = parsed.plan.clone();
+        bloated.meta.key_points.push("k".repeat(501));
+        let codes: Vec<String> = crate::plan::model::advisories(&bloated)
+            .into_iter()
+            .map(|i| i.code)
+            .collect();
+        assert!(
+            codes.iter().any(|c| c == "long_key_point"),
+            "missing long_key_point in {codes:?}"
+        );
     }
 
     #[test]

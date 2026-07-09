@@ -46,10 +46,31 @@ re-render.
 | dependency edges (`depends_on` entries) | 2000 |
 | `meta.key_points` items | 25 |
 | `meta.out_of_scope` items | 25 |
-| any single string field | 10,000 chars |
+| any single string field | 65,536 chars |
 
 Exceeding a collection limit reports `too_many` at the relevant path.
 Exceeding a string limit reports `string_too_long`.
+
+### Big plans
+
+The limits bound a pathological document, not your writing — **never
+compress, abbreviate, or omit plan content to stay clear of them**. Big
+plans are a supported case. If a plan is going to be genuinely large
+(hundreds of KB of JSON — think 50+ richly detailed tasks), tell the user
+up front roughly what generating it will cost in output tokens and ask
+whether they want the visual plan.json or a plain markdown plan instead;
+generate whichever they pick at full detail.
+
+### Markdown in `*_md` fields
+
+Every `*_md` field (and each `key_points` item) renders GitHub-style
+markdown: tables, fenced code blocks, task lists (`- [ ]`), strikethrough,
+links. Raw HTML is neutralized to text — markdown is the only formatting
+channel. Use it for scannability instead of prose walls: a table for a
+set of parallel decisions, a fenced block for exact commands or code an
+implementer must reproduce, a task list for sub-steps. The renderer styles
+all of these to the card's scale, and wide tables scroll inside their own
+box.
 
 ## Enums
 
@@ -85,10 +106,10 @@ phases and optionally on notable tasks; omit rather than repeat.
 |-------|------|----------|-------|
 | `id` | string | yes | id rule; the plan's own id — used in feedback's `plan_id` |
 | `title` | string | yes | |
-| `goal_md` | string | no | markdown |
-| `summary_md` | string | no | markdown, ≤10,000 chars; the executive summary — see the recipe below |
-| `key_points` | array\<string\> | no (default `[]`) | markdown bullet items, ≤25 items, each ≤10,000 chars |
-| `out_of_scope` | array\<string\> | no (default `[]`) | plain-text bullet items (no markdown), ≤25 items, each ≤10,000 chars |
+| `goal_md` | string | no | markdown; **one or two sentences** — the subtitle under the title saying what this builds. NOT a second executive summary: approach, status, and the ask live in `summary_md`; `check` warns (`long_goal`) past 300 chars |
+| `summary_md` | string | no | markdown; the executive summary — see the recipe below (4-6 sentences; `check` warns past 1,500 chars) |
+| `key_points` | array\<string\> | no (default `[]`) | markdown bullet items, ≤25 items |
+| `out_of_scope` | array\<string\> | no (default `[]`) | plain-text bullet items (no markdown), ≤25 items |
 | `agent` | string | no | free text, e.g. `"claude"` |
 | `created` | string | no | free text (a date is conventional, e.g. `"2026-07-07"`) |
 | `revision` | integer | no | bump when you re-emit a revised plan |
@@ -105,13 +126,18 @@ their time. Write for both readers at once:
 - **`summary_md`** — BLUF (bottom line up front), 4-6 sentences covering: the
   problem, the observable outcome once this ships, the approach, and the ask
   (what you need from the reviewer right now — e.g. "resolve the 2 blocking
-  questions below").
+  questions below"). Split it into 2-4 **short paragraphs** (blank lines), one
+  idea each — a single block of prose renders as a wall of text, and `check`
+  warns on it (`wall_of_text`).
 - **`key_points`** — 4-8 bullets, one per major workstream or decision. Lead
-  each bullet with a bold clause naming the workstream, then one sentence of
-  detail, e.g. `"**Redis backend** lands behind a trait boundary shipping
-  first."` The summary plus these bullets must stand alone as a complete
-  overview — a reader should not need to open a single phase to know what
-  the plan does.
+  each bullet with a bold clause naming the workstream, then one or two
+  **complete, plain-language sentences** of detail, e.g. `"**Redis backend**
+  lands behind a trait boundary shipping first."` Write for a reader, not a
+  spec: expand jargon, no semicolon-chained fragment runs — implementation
+  minutiae belong in the task cards, which the reviewer opens next. `check`
+  warns (`long_key_point`) past 500 chars. The summary plus these bullets
+  must stand alone as a complete overview — a reader should not need to
+  open a single phase to know what the plan does.
 - **`out_of_scope`** — explicit non-goals: things a reader might reasonably
   assume are covered but aren't. Keep each item short; this is a boundary
   list, not a design doc.

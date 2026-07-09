@@ -40,8 +40,14 @@
       }
       const json = JSON.stringify(doc, null, 2);
       const markdown = lines.join("\n");
-      return { json: json, markdown: markdown,
-               combined: "```json\n" + json + "\n```\n\n" + markdown };
+      /* Human-readable mirror first, canonical JSON after: the person
+         pasting reads the top; the agent needs the fenced block (stable
+         refs, plan_hash, blocking flags) and is told not to lose it. */
+      const combined = markdown
+        + "\n---\n\n"
+        + "Machine-readable block — paste everything, leave this intact:\n\n"
+        + "```json\n" + json + "\n```\n";
+      return { json: json, markdown: markdown, combined: combined };
     },
   };
   window.loadoutPlan = core;
@@ -65,7 +71,8 @@
       if (parsed.verdict !== "request_changes") throw new Error("verdict");
       if (parsed.comments[0].blocking !== true) throw new Error("blocking");
       if (parsed.plan_hash !== fp) throw new Error("hash");
-      if (fb.combined.indexOf("```json") !== 0) throw new Error("combined shape");
+      if (fb.combined.indexOf("## Plan feedback") !== 0) throw new Error("combined starts with mirror");
+      if (fb.combined.indexOf("```json") === -1) throw new Error("combined carries the JSON block");
     });
     check("refs exist in dom", function () {
       if (!document.querySelector('[data-plan-ref="task:t-session-store"]'))
@@ -277,6 +284,9 @@
 
     function renderCount() {
       count.textContent = comments.length + (comments.length === 1 ? " comment" : " comments");
+      /* Nothing to copy until something has been added. */
+      copyBtn.disabled = comments.length === 0;
+      copyBtn.title = comments.length === 0 ? "Add a comment or answer first" : "";
     }
     renderCount();
 
@@ -298,19 +308,33 @@
          which would otherwise pick up the injected chrome text. */
       const quote = elementQuote(el);
 
+      /* The CTA names the action the element actually invites: an open
+         question wants an answer, everything else wants a comment. Both
+         produce the same feedback-contract comment — only the label (and
+         placeholder) differ. */
+      const kind = ref.split(":")[0];
+      const isQuestion = kind === "question";
+      const label = isQuestion ? "Answer" : "Comment";
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "comment-btn";
       btn.appendChild(commentIcon());
-      btn.appendChild(document.createTextNode("Comment"));
-      btn.setAttribute("aria-label", "Add comment");
+      /* The label rides in a span so CSS can collapse the button to
+         icon-only where a full button doesn't fit (the per-criterion
+         line anchors); title + aria-label keep the name either way. */
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "comment-btn-label";
+      labelSpan.textContent = label;
+      btn.appendChild(labelSpan);
+      btn.title = label;
+      btn.setAttribute("aria-label", isQuestion ? "Answer this question" : "Add comment");
 
       const box = document.createElement("div");
       box.className = "comment-box";
       box.hidden = true;
 
       const textarea = document.createElement("textarea");
-      textarea.placeholder = "Add a comment…";
+      textarea.placeholder = isQuestion ? "Answer…" : "Add a comment…";
       textarea.rows = 3;
 
       const blockingRow = document.createElement("label");
@@ -439,38 +463,58 @@
     }
 
     function addReviewedBox(container, ref) {
+      /* A bare checkbox read as decoration at first glance (first-dogfood
+         feedback) -- the visible label says what checking it does, and
+         flips to a past-tense confirmation once checked. */
+      const label = document.createElement("label");
+      label.className = "reviewed-toggle";
       const box = document.createElement("input");
       box.type = "checkbox";
       box.className = "reviewed-box";
-      box.setAttribute("aria-label", "mark reviewed");
+      const text = document.createElement("span");
+      text.className = "reviewed-toggle-text";
+      function sync() {
+        text.textContent = box.checked ? "Reviewed" : "Mark reviewed";
+        container.classList.toggle("is-reviewed", box.checked);
+      }
       box.checked = reviewed.has(ref);
-      if (box.checked) container.classList.add("is-reviewed");
-      box.addEventListener("click", function (e) {
-        /* A checkbox nested inside a <summary> still bubbles its click up
+      sync();
+      label.appendChild(box);
+      label.appendChild(text);
+      label.addEventListener("click", function (e) {
+        /* A control nested inside a <summary> still bubbles its click up
            to the <summary>'s default action (toggling the parent
-           <details> open/closed) unless stopped here -- checking the box
-           should not also collapse or expand the phase. */
+           <details> open/closed) unless stopped here -- marking reviewed
+           should not also collapse or expand the phase. On the label, so
+           it covers clicks on the text as well as the box. */
         e.stopPropagation();
       });
       box.addEventListener("change", function () {
         if (box.checked) {
           reviewed.add(ref);
-          container.classList.add("is-reviewed");
         } else {
           reviewed.delete(ref);
-          container.classList.remove("is-reviewed");
         }
+        sync();
         persistReviewed();
         renderReviewedCount();
       });
-      return box;
+      return label;
     }
 
     document.querySelectorAll("details.phase").forEach(function (details) {
       const ref = details.getAttribute("data-plan-ref");
       const heading = details.querySelector("summary h2");
       if (!ref || !heading) return;
-      heading.appendChild(addReviewedBox(details, ref));
+      /* Before the teaser (a block-level span), so the toggle stays on the
+         title line instead of wrapping under the description. */
+      const teaser = heading.querySelector(".phase-teaser");
+      const toggle = addReviewedBox(details, ref);
+      if (teaser) {
+        heading.insertBefore(toggle, teaser);
+      } else {
+        heading.appendChild(toggle);
+      }
     });
 
     taskEls.forEach(function (el) {

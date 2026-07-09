@@ -56,7 +56,10 @@
 * { box-sizing: border-box; }
 
 body {
-  margin: 0;
+  margin: 0 auto;
+  /* Centered with a ceiling: on a wide monitor the content column stays a
+     coherent page instead of hugging the left edge with a dead right half. */
+  max-width: 1480px;
   padding: 1.5rem 1.5rem 4.5rem;
   font-family: var(--font);
   background: var(--bg);
@@ -86,7 +89,15 @@ h3 { font-size: 1rem; margin: 0 0 0.5rem; }
 details.phase > summary h2 { margin: 0; }
 
 /* The header's plan-id/revision/agent line: metadata, not content. */
-header .meta { color: var(--muted); font-size: 0.9em; margin: 0 0 0.75rem; }
+/* Eyebrow above the h1: quiet metadata a reader takes in before the title.
+   No text-transform — the plan id's casing is meaningful. */
+header .meta {
+  color: var(--muted);
+  font-size: 0.8em;
+  letter-spacing: 0.02em;
+  margin: 0 0 0.3rem;
+}
+header h1 { margin: 0 0 0.6rem; }
 
 header { margin: 0 0 1.5rem; }
 
@@ -128,6 +139,43 @@ header p:not(.meta),
 .summary-outofscope,
 .task > p {
   max-width: 72ch;
+}
+
+/* c-1 of the first dogfood feedback: on wide viewports the summary card read
+   as a half-width column of text in a full-width box. Let the key-point
+   bullets flow into two columns — the card uses its width while each column
+   keeps a readable measure. The exec prose above stays at 72ch on purpose:
+   a wall of full-width prose is harder to read, not easier. */
+@media (min-width: 1100px) {
+  .summary-keypoints {
+    max-width: none;
+    columns: 2;
+    column-gap: 3rem;
+  }
+}
+
+/* Key points are the plan's workstream list — give each item a deliberate
+   accent marker (in place of the browser's dot) and room to breathe, so
+   the list scans as a set of parallel headlines rather than dense prose. */
+.summary-keypoints {
+  list-style: none;
+  padding-left: 0;
+}
+
+.summary-keypoints li {
+  position: relative;
+  padding-left: 1.5rem;
+  margin: 0 0 0.7rem;
+  break-inside: avoid;
+}
+
+.summary-keypoints li::before {
+  content: "◆";
+  position: absolute;
+  left: 0.1rem;
+  top: 0.1em;
+  color: var(--accent);
+  font-size: 0.85em;
 }
 
 /* Section/phase-heading icons (the Summary/Risks/Phases section headings,
@@ -232,6 +280,21 @@ details.phase > :not(summary):not(.task) {
 
 .phase-meta { color: var(--muted); font-weight: 400; font-size: 0.85em; letter-spacing: normal; }
 
+/* The phase's one-line description, visible in the COLLAPSED row (c-3 of the
+   first dogfood feedback): a reader scanning closed phases learns what each
+   one is without expanding. Block display breaks it onto its own line under
+   the title inside the flexed <summary>; a step quieter than the title. */
+.phase-teaser {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+  letter-spacing: normal;
+  line-height: 1.4;
+  max-width: 72ch;
+}
+
 /* Summary strip — the first thing a reviewer reads, so it gets its own
    card: a plain counts line, an optional risk line (tinted when any risk is
    high), and, loudest of all, the blocking-questions callout. */
@@ -246,12 +309,52 @@ details.phase > :not(summary):not(.task) {
 
 /* Executive summary — the first thing in the summary card, slightly larger
    than body text since it carries the most weight per word on the page. */
+/* Two-zone summary card (first-dogfood feedback): exec prose left, an
+   "at a glance" rail right on wide viewports, stacked on narrow ones. The
+   rail is an inset panel — one step down from the card, so it reads as
+   supporting data, not a second card. */
+.summary-grid { display: grid; gap: 1.5rem; margin: 0 0 1rem; }
+
+@media (min-width: 1200px) {
+  .summary-grid {
+    /* The prose column is capped at its reading measure, so a plain 1fr
+       would strand dead space between the text and the rail — pin the
+       prose left and the rail right instead, and let space-between absorb
+       whatever the viewport adds. The breakpoint tracks the rail width:
+       below it, prose would squeeze under ~55ch, so the zones stack. */
+    grid-template-columns: minmax(0, 72ch) 470px;
+    justify-content: space-between;
+    align-items: start;
+    gap: 2.5rem;
+  }
+}
+
+.summary-glance {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+}
+
+.glance-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* A gentle lede: the exec summary's opening paragraph sits a step larger,
+   giving the prose a visual way in. */
+.summary-exec > p:first-child { font-size: 1.05em; }
+
 .summary-exec {
   font-size: 1.05em;
   margin: 0 0 1rem;
 }
 
-.summary-exec p { margin: 0 0 0.5rem; }
+.summary-exec p { margin: 0 0 0.75rem; }
 .summary-exec p:last-child { margin-bottom: 0; }
 
 .summary-missing {
@@ -289,7 +392,7 @@ details.phase > :not(summary):not(.task) {
 /* The ask banner — computed, not authored: loud red when something is
    blocking, calm green once nothing is. */
 .summary-ask {
-  margin: 0 0 0.75rem;
+  margin: 0.75rem 0 0;
   padding: 0.55rem 0.8rem;
   border-radius: 6px;
   font-weight: 600;
@@ -313,7 +416,7 @@ details.phase > :not(summary):not(.task) {
   width: 100%;
   border-collapse: collapse;
   margin: 0 0 0.25rem;
-  font-size: 0.9em;
+  font-size: 0.85em;
 }
 
 .summary-phases th,
@@ -321,6 +424,14 @@ details.phase > :not(summary):not(.task) {
   text-align: left;
   padding: 0.3rem 0.6rem 0.3rem 0;
   border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+/* Only the phase-name cell may wrap; the count/estimate/risk cells stay
+   one line each so rows read as rows. */
+.summary-phases th:not(:first-child),
+.summary-phases td:not(:first-child) {
+  white-space: nowrap;
 }
 
 .summary-phases th { color: var(--muted); font-weight: 600; }
@@ -354,17 +465,65 @@ section.risks {
 
 .expand-ctl button:hover { color: var(--fg); border-color: var(--accent); }
 
-/* Reviewed-state tracking: a small checkbox on a phase's summary line or a
-   task card's heading; checking it dims the whole card slightly. */
+/* Reviewed-state tracking: a labeled toggle on a phase's summary line or a
+   task card's heading; checking it dims the whole card slightly. The label
+   text ("Mark reviewed" → "Reviewed") is set by plan.js. */
+.reviewed-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reviewed-toggle:hover { color: var(--fg); }
+
 .reviewed-box {
-  width: 1rem;
-  height: 1rem;
-  margin-left: 0.5rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0;
   vertical-align: middle;
   cursor: pointer;
 }
 
 .is-reviewed { opacity: 0.6; }
+
+/* Markdown content inside cards: authors can use tables, code blocks, and
+   task lists in any *_md field — style them to the card's scale, and keep
+   wide tables scrolling inside their own box rather than the page. */
+.task table:not(.summary-phases),
+.summary-exec table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.task table:not(.summary-phases) th,
+.task table:not(.summary-phases) td,
+.summary-exec th,
+.summary-exec td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.6rem;
+  text-align: left;
+}
+
+pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  font-size: 0.9em;
+}
 
 [data-plan-ref] { position: relative; }
 
@@ -478,6 +637,34 @@ section.risks {
   flex: none;
 }
 
+/* Per-criterion comment anchors: each acceptance <li> carries its task's
+   ref so a comment can quote the exact criterion, but a persistent
+   labeled button per ~one-line <li> overflowed its line and stacked into
+   the neighbours'. Line anchors get the line-comment treatment instead:
+   icon-only, vertically centered on their own line, and revealed only on
+   hover or keyboard focus. The card-level buttons stay persistent. */
+.acceptance li { padding-right: 2rem; }
+
+.acceptance .comment-btn {
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  padding: 0.3em;
+  opacity: 0;
+  transition: opacity 80ms ease-in;
+}
+
+.acceptance .comment-btn .comment-btn-label { display: none; }
+
+.acceptance li:hover .comment-btn,
+.acceptance li:focus-within .comment-btn {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acceptance .comment-btn { transition: none; }
+}
+
 .comment-box {
   margin: 0.5rem 0;
   padding: 0.6rem;
@@ -558,4 +745,9 @@ section.risks {
   padding: 0.4em 1em;
   cursor: pointer;
   font-weight: 600;
+}
+
+.feedback-bar-copy:disabled {
+  opacity: 0.45;
+  cursor: default;
 }

@@ -57,7 +57,10 @@
 * { box-sizing: border-box; }
 
 body {
-  margin: 0;
+  margin: 0 auto;
+  /* Centered with a ceiling: on a wide monitor the content column stays a
+     coherent page instead of hugging the left edge with a dead right half. */
+  max-width: 1480px;
   padding: 1.5rem 1.5rem 4.5rem;
   font-family: var(--font);
   background: var(--bg);
@@ -87,7 +90,15 @@ h3 { font-size: 1rem; margin: 0 0 0.5rem; }
 details.phase > summary h2 { margin: 0; }
 
 /* The header's plan-id/revision/agent line: metadata, not content. */
-header .meta { color: var(--muted); font-size: 0.9em; margin: 0 0 0.75rem; }
+/* Eyebrow above the h1: quiet metadata a reader takes in before the title.
+   No text-transform — the plan id's casing is meaningful. */
+header .meta {
+  color: var(--muted);
+  font-size: 0.8em;
+  letter-spacing: 0.02em;
+  margin: 0 0 0.3rem;
+}
+header h1 { margin: 0 0 0.6rem; }
 
 header { margin: 0 0 1.5rem; }
 
@@ -129,6 +140,43 @@ header p:not(.meta),
 .summary-outofscope,
 .task > p {
   max-width: 72ch;
+}
+
+/* c-1 of the first dogfood feedback: on wide viewports the summary card read
+   as a half-width column of text in a full-width box. Let the key-point
+   bullets flow into two columns — the card uses its width while each column
+   keeps a readable measure. The exec prose above stays at 72ch on purpose:
+   a wall of full-width prose is harder to read, not easier. */
+@media (min-width: 1100px) {
+  .summary-keypoints {
+    max-width: none;
+    columns: 2;
+    column-gap: 3rem;
+  }
+}
+
+/* Key points are the plan's workstream list — give each item a deliberate
+   accent marker (in place of the browser's dot) and room to breathe, so
+   the list scans as a set of parallel headlines rather than dense prose. */
+.summary-keypoints {
+  list-style: none;
+  padding-left: 0;
+}
+
+.summary-keypoints li {
+  position: relative;
+  padding-left: 1.5rem;
+  margin: 0 0 0.7rem;
+  break-inside: avoid;
+}
+
+.summary-keypoints li::before {
+  content: "◆";
+  position: absolute;
+  left: 0.1rem;
+  top: 0.1em;
+  color: var(--accent);
+  font-size: 0.85em;
 }
 
 /* Section/phase-heading icons (the Summary/Risks/Phases section headings,
@@ -233,6 +281,21 @@ details.phase > :not(summary):not(.task) {
 
 .phase-meta { color: var(--muted); font-weight: 400; font-size: 0.85em; letter-spacing: normal; }
 
+/* The phase's one-line description, visible in the COLLAPSED row (c-3 of the
+   first dogfood feedback): a reader scanning closed phases learns what each
+   one is without expanding. Block display breaks it onto its own line under
+   the title inside the flexed <summary>; a step quieter than the title. */
+.phase-teaser {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+  letter-spacing: normal;
+  line-height: 1.4;
+  max-width: 72ch;
+}
+
 /* Summary strip — the first thing a reviewer reads, so it gets its own
    card: a plain counts line, an optional risk line (tinted when any risk is
    high), and, loudest of all, the blocking-questions callout. */
@@ -247,12 +310,52 @@ details.phase > :not(summary):not(.task) {
 
 /* Executive summary — the first thing in the summary card, slightly larger
    than body text since it carries the most weight per word on the page. */
+/* Two-zone summary card (first-dogfood feedback): exec prose left, an
+   "at a glance" rail right on wide viewports, stacked on narrow ones. The
+   rail is an inset panel — one step down from the card, so it reads as
+   supporting data, not a second card. */
+.summary-grid { display: grid; gap: 1.5rem; margin: 0 0 1rem; }
+
+@media (min-width: 1200px) {
+  .summary-grid {
+    /* The prose column is capped at its reading measure, so a plain 1fr
+       would strand dead space between the text and the rail — pin the
+       prose left and the rail right instead, and let space-between absorb
+       whatever the viewport adds. The breakpoint tracks the rail width:
+       below it, prose would squeeze under ~55ch, so the zones stack. */
+    grid-template-columns: minmax(0, 72ch) 470px;
+    justify-content: space-between;
+    align-items: start;
+    gap: 2.5rem;
+  }
+}
+
+.summary-glance {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+}
+
+.glance-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* A gentle lede: the exec summary's opening paragraph sits a step larger,
+   giving the prose a visual way in. */
+.summary-exec > p:first-child { font-size: 1.05em; }
+
 .summary-exec {
   font-size: 1.05em;
   margin: 0 0 1rem;
 }
 
-.summary-exec p { margin: 0 0 0.5rem; }
+.summary-exec p { margin: 0 0 0.75rem; }
 .summary-exec p:last-child { margin-bottom: 0; }
 
 .summary-missing {
@@ -290,7 +393,7 @@ details.phase > :not(summary):not(.task) {
 /* The ask banner — computed, not authored: loud red when something is
    blocking, calm green once nothing is. */
 .summary-ask {
-  margin: 0 0 0.75rem;
+  margin: 0.75rem 0 0;
   padding: 0.55rem 0.8rem;
   border-radius: 6px;
   font-weight: 600;
@@ -314,7 +417,7 @@ details.phase > :not(summary):not(.task) {
   width: 100%;
   border-collapse: collapse;
   margin: 0 0 0.25rem;
-  font-size: 0.9em;
+  font-size: 0.85em;
 }
 
 .summary-phases th,
@@ -322,6 +425,14 @@ details.phase > :not(summary):not(.task) {
   text-align: left;
   padding: 0.3rem 0.6rem 0.3rem 0;
   border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+/* Only the phase-name cell may wrap; the count/estimate/risk cells stay
+   one line each so rows read as rows. */
+.summary-phases th:not(:first-child),
+.summary-phases td:not(:first-child) {
+  white-space: nowrap;
 }
 
 .summary-phases th { color: var(--muted); font-weight: 600; }
@@ -355,17 +466,65 @@ section.risks {
 
 .expand-ctl button:hover { color: var(--fg); border-color: var(--accent); }
 
-/* Reviewed-state tracking: a small checkbox on a phase's summary line or a
-   task card's heading; checking it dims the whole card slightly. */
+/* Reviewed-state tracking: a labeled toggle on a phase's summary line or a
+   task card's heading; checking it dims the whole card slightly. The label
+   text ("Mark reviewed" → "Reviewed") is set by plan.js. */
+.reviewed-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reviewed-toggle:hover { color: var(--fg); }
+
 .reviewed-box {
-  width: 1rem;
-  height: 1rem;
-  margin-left: 0.5rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0;
   vertical-align: middle;
   cursor: pointer;
 }
 
 .is-reviewed { opacity: 0.6; }
+
+/* Markdown content inside cards: authors can use tables, code blocks, and
+   task lists in any *_md field — style them to the card's scale, and keep
+   wide tables scrolling inside their own box rather than the page. */
+.task table:not(.summary-phases),
+.summary-exec table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.task table:not(.summary-phases) th,
+.task table:not(.summary-phases) td,
+.summary-exec th,
+.summary-exec td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.6rem;
+  text-align: left;
+}
+
+pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  font-size: 0.9em;
+}
 
 [data-plan-ref] { position: relative; }
 
@@ -479,6 +638,34 @@ section.risks {
   flex: none;
 }
 
+/* Per-criterion comment anchors: each acceptance <li> carries its task's
+   ref so a comment can quote the exact criterion, but a persistent
+   labeled button per ~one-line <li> overflowed its line and stacked into
+   the neighbours'. Line anchors get the line-comment treatment instead:
+   icon-only, vertically centered on their own line, and revealed only on
+   hover or keyboard focus. The card-level buttons stay persistent. */
+.acceptance li { padding-right: 2rem; }
+
+.acceptance .comment-btn {
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  padding: 0.3em;
+  opacity: 0;
+  transition: opacity 80ms ease-in;
+}
+
+.acceptance .comment-btn .comment-btn-label { display: none; }
+
+.acceptance li:hover .comment-btn,
+.acceptance li:focus-within .comment-btn {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acceptance .comment-btn { transition: none; }
+}
+
 .comment-box {
   margin: 0.5rem 0;
   padding: 0.6rem;
@@ -560,18 +747,23 @@ section.risks {
   cursor: pointer;
   font-weight: 600;
 }
-</style></head><body data-plan-fingerprint="sha256:699871414238a39a2db87e400affe5dfdc397fbf6bbcde124e0b394ab04812cf"><header><h1>Auth refactor</h1><p class="meta" data-plan-ref="meta:auth-refactor">plan <code>auth-refactor</code> · revision 2 · by claude</p><p>Extract <em>session</em> handling.</p>
+
+.feedback-bar-copy:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+</style></head><body data-plan-fingerprint="sha256:699871414238a39a2db87e400affe5dfdc397fbf6bbcde124e0b394ab04812cf"><header><p class="meta">plan <code>auth-refactor</code> · revision 2 · by claude · 2026-07-07</p><h1>Auth refactor</h1><p>Extract <em>session</em> handling.</p>
 </header><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" />
   <path d="M14 2v5a1 1 0 0 0 1 1h5" />
   <path d="M10 9H8" />
   <path d="M16 13H8" />
   <path d="M16 17H8" />
-</svg> Summary</h2><section class="plan-summary"><div class="summary-exec"><p>This refactor extracts <code>SessionStore</code> behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the <em>lock contention</em> risk by sharding the store. The ask: review the trait boundary in <code>t-session-store</code> before Redis work starts.</p>
-</div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
+</svg> Summary</h2><section class="plan-summary" data-plan-ref="meta:auth-refactor"><div class="summary-grid"><div class="summary-exec"><p>This refactor extracts <code>SessionStore</code> behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the <em>lock contention</em> risk by sharding the store. The ask: review the trait boundary in <code>t-session-store</code> before Redis work starts.</p>
+</div><aside class="summary-glance"><p class="glance-title">At a glance</p><p class="summary-counts">5 tasks · 2 phases · 1 small · 1 medium · 1 large · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><table class="summary-phases"><thead><tr><th>Phase</th><th>Tasks</th><th>Est.</th><th>Risk</th></tr></thead><tbody><tr><td><a href="#phase-p-core">Core</a></td><td>2</td><td>1s · 1m</td><td>1 medium</td></tr><tr><td><a href="#phase-p-backend">Backend</a></td><td>3</td><td>1l</td><td>1 high</td></tr></tbody></table><p class="summary-risks has-high">1 risk (1 high)</p><p class="summary-ask has-blocking">⚠ 1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></p></aside></div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
 </li><li><p><strong>Redis backend</strong> (<code>t-redis</code>) is blocked on the trait boundary landing first.</p>
 </li><li><p><strong>Lock contention</strong> (<code>r-locking</code>) is mitigated by sharding the store, not by removing the lock.</p>
-</li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p><p class="summary-ask has-blocking">⚠ 1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></p><p class="summary-counts">5 tasks · 2 phases · 1 small · 1 medium · 1 large · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><table class="summary-phases"><thead><tr><th>Phase</th><th>Tasks</th><th>Estimate</th><th>Risk</th></tr></thead><tbody><tr><td><a href="#phase-p-core">Core</a></td><td>2</td><td>1 small, 1 medium</td><td>1 medium</td></tr><tr><td><a href="#phase-p-backend">Backend</a></td><td>3</td><td>1 large</td><td>1 high</td></tr></tbody></table><p class="summary-risks has-high">1 risk (1 high)</p></section><section class="questions"><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+</li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p></section><section class="questions"><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="m21 21-4.34-4.34" />
   <circle cx="11" cy="11" r="8" />
 </svg> Open questions</h2><div class="task" id="question-q-ttl" data-plan-ref="question:q-ttl"><span class="badge blocking">blocking</span><p>Session TTL?</p>
@@ -588,8 +780,7 @@ section.risks {
   <path d="m9 18 6-6-6-6" />
 </svg><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" />
-</svg> Phase 1 · Core <span class="phase-meta">(2 tasks)</span></h2></summary><p>The trait seam.</p>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 40" width="432" height="40" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="edge" d="M 200 20 H 216 V 20 H 232" marker-end="url(#arrow)"/><a href="#task-t-config-flag"><rect class="node status-done" x="0" y="0" width="200" height="40" rx="6"/><text x="100" y="20">Config flag</text></a><a href="#task-t-session-store"><rect class="node status-planned risk-medium" x="232" y="0" width="200" height="40" rx="6"/><text x="332" y="20">Introduce SessionStore trait</text></a></svg><div class="task" id="task-t-config-flag" data-plan-ref="task:t-config-flag"><h3>Config flag <span class="badge status-done">done</span> <span class="badge estimate-s">small</span></h3><ul class="acceptance"><li data-plan-ref="task:t-config-flag">flag parses</li></ul><ul class="validation"><li><code>cargo test config::</code></li></ul></div><div class="task" id="task-t-session-store" data-plan-ref="task:t-session-store"><h3><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+</svg> Phase 1 · Core <span class="phase-meta">(2 tasks)</span><span class="phase-teaser">The trait seam.</span></h2></summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 48" width="432" height="48" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="edge" d="M 200 24 H 216 V 24 H 232" marker-end="url(#arrow)"/><a href="#task-t-config-flag"><title>Config flag</title><rect class="node status-done" x="0" y="0" width="200" height="48" rx="6"/><text x="100" y="24">Config flag</text></a><a href="#task-t-session-store"><title>Introduce SessionStore trait</title><rect class="node status-planned risk-medium" x="232" y="0" width="200" height="48" rx="6"/><text x="332" y="24"><tspan x="332" dy="-7">Introduce SessionStore</tspan><tspan x="332" dy="14">trait</tspan></text></a></svg><div class="task" id="task-t-config-flag" data-plan-ref="task:t-config-flag"><h3>Config flag <span class="badge status-done">done</span> <span class="badge estimate-s">small</span></h3><ul class="acceptance"><li data-plan-ref="task:t-config-flag">flag parses</li></ul><ul class="validation"><li><code>cargo test config::</code></li></ul></div><div class="task" id="task-t-session-store" data-plan-ref="task:t-session-store"><h3><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
 </svg> Introduce SessionStore trait <span class="badge status-planned">planned</span> <span class="badge risk-medium">medium</span> <span class="badge estimate-m">medium</span></h3><p>Extract persistence behind a trait so <code>t-redis</code> can slot in.</p>
 <ul class="files"><li><code>src/auth/session.rs</code> <span class="badge action-modify">modify</span> — extract trait</li><li><code>src/auth/store.rs</code> <span class="badge action-create">create</span></li><li><code>tests/auth.rs</code> <span class="badge action-test">test</span></li></ul><ul class="acceptance"><li data-plan-ref="task:t-session-store">existing session tests pass unchanged</li><li data-plan-ref="task:t-session-store">no direct sled calls outside the trait impl</li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div></details><details class="phase" id="phase-p-backend" data-plan-ref="phase:p-backend"><summary><svg class="pv-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
@@ -598,13 +789,13 @@ section.risks {
   <ellipse cx="12" cy="5" rx="9" ry="3" />
   <path d="M3 5V19A9 3 0 0 0 21 19V5" />
   <path d="M3 12A9 3 0 0 0 21 12" />
-</svg> Phase 2 · Backend <span class="phase-meta">(3 tasks · high risk)</span></h2></summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 184" width="432" height="184" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="edge" d="M 200 164 H 216 V 20 H 232" marker-end="url(#arrow)"/><a href="#task-t-bench"><rect class="node status-cut risk-low" x="0" y="0" width="200" height="40" rx="6"/><text x="100" y="20">Benchmarks</text></a><a href="#task-t-cleanup"><rect class="node status-in_progress" x="0" y="72" width="200" height="40" rx="6"/><text x="100" y="92">Remove dead code</text></a><a href="#task-t-session-store"><rect class="node stub status-planned risk-medium" x="0" y="144" width="200" height="40" rx="6"/><text x="100" y="164">Introduce SessionStore trait</text></a><a href="#task-t-redis"><rect class="node status-blocked risk-high" x="232" y="0" width="200" height="40" rx="6"/><text x="332" y="20">Redis backend</text></a></svg><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">large</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><details class="graph"><summary><svg class="pv-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+</svg> Phase 2 · Backend <span class="phase-meta">(3 tasks · high risk)</span></h2></summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 208" width="432" height="208" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="edge" d="M 200 184 H 216 V 24 H 232" marker-end="url(#arrow)"/><a href="#task-t-bench"><title>Benchmarks</title><rect class="node status-cut risk-low" x="0" y="0" width="200" height="48" rx="6"/><text x="100" y="24">Benchmarks</text></a><a href="#task-t-cleanup"><title>Remove dead code</title><rect class="node status-in_progress" x="0" y="80" width="200" height="48" rx="6"/><text x="100" y="104">Remove dead code</text></a><a href="#task-t-session-store"><title>Introduce SessionStore trait</title><rect class="node stub status-planned risk-medium" x="0" y="160" width="200" height="48" rx="6"/><text x="100" y="184"><tspan x="100" dy="-7">Introduce SessionStore</tspan><tspan x="100" dy="14">trait</tspan></text></a><a href="#task-t-redis"><title>Redis backend</title><rect class="node status-blocked risk-high" x="232" y="0" width="200" height="48" rx="6"/><text x="332" y="24">Redis backend</text></a></svg><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><h3>Redis backend <span class="badge status-blocked">blocked</span> <span class="badge risk-high">high</span> <span class="badge estimate-l">large</span></h3><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><h3>Remove dead code <span class="badge status-in_progress">in_progress</span></h3></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><h3>Benchmarks <span class="badge status-cut">cut</span> <span class="badge risk-low">low</span></h3></div></details><details class="graph"><summary><svg class="pv-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="m9 18 6-6-6-6" />
 </svg><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M15 6a9 9 0 0 0-9 9V3" />
   <circle cx="18" cy="6" r="3" />
   <circle cx="6" cy="18" r="3" />
-</svg> Phase dependencies</summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 44" width="512" height="44" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="edge" d="M 240 22 H 256 V 22 H 272" marker-end="url(#arrow)"/><a href="#phase-p-core"><rect class="node phase-node" x="0" y="0" width="240" height="44" rx="8"/><text x="120" y="22">Core</text></a><a href="#phase-p-backend"><rect class="node phase-node has-high" x="272" y="0" width="240" height="44" rx="8"/><text x="392" y="22">Backend</text></a></svg></details><script type="application/json" id="plan-data">{"format":"loadout.plan/1","meta":{"id":"auth-refactor","title":"Auth refactor","goal_md":"\u003cp\u003eExtract \u003cem\u003esession\u003c/em\u003e handling.\u003c/p\u003e\n","summary_md":"\u003cp\u003eThis refactor extracts \u003ccode\u003eSessionStore\u003c/code\u003e behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the \u003cem\u003elock contention\u003c/em\u003e risk by sharding the store. The ask: review the trait boundary in \u003ccode\u003et-session-store\u003c/code\u003e before Redis work starts.\u003c/p\u003e\n","key_points":["\u003cp\u003e\u003cstrong\u003eTrait extraction\u003c/strong\u003e decouples session persistence from its backing store, gated behind a config flag.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eRedis backend\u003c/strong\u003e (\u003ccode\u003et-redis\u003c/code\u003e) is blocked on the trait boundary landing first.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eLock contention\u003c/strong\u003e (\u003ccode\u003er-locking\u003c/code\u003e) is mitigated by sharding the store, not by removing the lock.\u003c/p\u003e\n"],"out_of_scope":["Migrating existing sessions between backends","Multi-region session replication"],"agent":"claude","created":"2026-07-07","revision":2},"phases":[{"id":"p-core","title":"Core","icon":"wrench","summary_md":"\u003cp\u003eThe trait seam.\u003c/p\u003e\n","tasks":[{"id":"t-config-flag","title":"Config flag","status":"done","acceptance":["flag parses"],"validation":["cargo test config::"],"estimate":"s"},{"id":"t-session-store","title":"Introduce SessionStore trait","icon":"shield","summary_md":"\u003cp\u003eExtract persistence behind a trait so \u003ccode\u003et-redis\u003c/code\u003e can slot in.\u003c/p\u003e\n","status":"planned","risk":"medium","depends_on":["t-config-flag"],"files":[{"path":"src/auth/session.rs","action":"modify","note":"extract trait"},{"path":"src/auth/store.rs","action":"create"},{"path":"tests/auth.rs","action":"test"}],"acceptance":["existing session tests pass unchanged","no direct sled calls outside the trait impl"],"validation":["cargo test auth::"],"estimate":"m"}]},{"id":"p-backend","title":"Backend","icon":"database","tasks":[{"id":"t-redis","title":"Redis backend","status":"blocked","risk":"high","depends_on":["t-session-store"],"estimate":"l"},{"id":"t-cleanup","title":"Remove dead code","status":"in_progress"},{"id":"t-bench","title":"Benchmarks","status":"cut","risk":"low"}]}],"risks":[{"id":"r-locking","title":"Lock contention","severity":"high","mitigation_md":"\u003cp\u003eShard the store.\u003c/p\u003e\n"}],"open_questions":[{"id":"q-ttl","question_md":"\u003cp\u003eSession TTL?\u003c/p\u003e\n","blocking":true},{"id":"q-name","question_md":"\u003cp\u003eTrait name?\u003c/p\u003e\n","blocking":false}]}</script><script>/* loadout plan viewer — progressive enhancement over server-rendered HTML.
+</svg> Phase dependencies</summary><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 52" width="512" height="52" class="plan-graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="edge" d="M 240 26 H 256 V 26 H 272" marker-end="url(#arrow)"/><a href="#phase-p-core"><title>Core</title><rect class="node phase-node" x="0" y="0" width="240" height="52" rx="8"/><text x="120" y="26">Core</text></a><a href="#phase-p-backend"><title>Backend</title><rect class="node phase-node has-high" x="272" y="0" width="240" height="52" rx="8"/><text x="392" y="26">Backend</text></a></svg></details><script type="application/json" id="plan-data">{"format":"loadout.plan/1","meta":{"id":"auth-refactor","title":"Auth refactor","goal_md":"\u003cp\u003eExtract \u003cem\u003esession\u003c/em\u003e handling.\u003c/p\u003e\n","summary_md":"\u003cp\u003eThis refactor extracts \u003ccode\u003eSessionStore\u003c/code\u003e behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the \u003cem\u003elock contention\u003c/em\u003e risk by sharding the store. The ask: review the trait boundary in \u003ccode\u003et-session-store\u003c/code\u003e before Redis work starts.\u003c/p\u003e\n","key_points":["\u003cp\u003e\u003cstrong\u003eTrait extraction\u003c/strong\u003e decouples session persistence from its backing store, gated behind a config flag.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eRedis backend\u003c/strong\u003e (\u003ccode\u003et-redis\u003c/code\u003e) is blocked on the trait boundary landing first.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eLock contention\u003c/strong\u003e (\u003ccode\u003er-locking\u003c/code\u003e) is mitigated by sharding the store, not by removing the lock.\u003c/p\u003e\n"],"out_of_scope":["Migrating existing sessions between backends","Multi-region session replication"],"agent":"claude","created":"2026-07-07","revision":2},"phases":[{"id":"p-core","title":"Core","icon":"wrench","summary_md":"\u003cp\u003eThe trait seam.\u003c/p\u003e\n","tasks":[{"id":"t-config-flag","title":"Config flag","status":"done","acceptance":["flag parses"],"validation":["cargo test config::"],"estimate":"s"},{"id":"t-session-store","title":"Introduce SessionStore trait","icon":"shield","summary_md":"\u003cp\u003eExtract persistence behind a trait so \u003ccode\u003et-redis\u003c/code\u003e can slot in.\u003c/p\u003e\n","status":"planned","risk":"medium","depends_on":["t-config-flag"],"files":[{"path":"src/auth/session.rs","action":"modify","note":"extract trait"},{"path":"src/auth/store.rs","action":"create"},{"path":"tests/auth.rs","action":"test"}],"acceptance":["existing session tests pass unchanged","no direct sled calls outside the trait impl"],"validation":["cargo test auth::"],"estimate":"m"}]},{"id":"p-backend","title":"Backend","icon":"database","tasks":[{"id":"t-redis","title":"Redis backend","status":"blocked","risk":"high","depends_on":["t-session-store"],"estimate":"l"},{"id":"t-cleanup","title":"Remove dead code","status":"in_progress"},{"id":"t-bench","title":"Benchmarks","status":"cut","risk":"low"}]}],"risks":[{"id":"r-locking","title":"Lock contention","severity":"high","mitigation_md":"\u003cp\u003eShard the store.\u003c/p\u003e\n"}],"open_questions":[{"id":"q-ttl","question_md":"\u003cp\u003eSession TTL?\u003c/p\u003e\n","blocking":true},{"id":"q-name","question_md":"\u003cp\u003eTrait name?\u003c/p\u003e\n","blocking":false}]}</script><script>/* loadout plan viewer — progressive enhancement over server-rendered HTML.
    Pure core first (no DOM), DOM layer second, #selftest harness last. */
 (function () {
   "use strict";
@@ -646,8 +837,14 @@ section.risks {
       }
       const json = JSON.stringify(doc, null, 2);
       const markdown = lines.join("\n");
-      return { json: json, markdown: markdown,
-               combined: "```json\n" + json + "\n```\n\n" + markdown };
+      /* Human-readable mirror first, canonical JSON after: the person
+         pasting reads the top; the agent needs the fenced block (stable
+         refs, plan_hash, blocking flags) and is told not to lose it. */
+      const combined = markdown
+        + "\n---\n\n"
+        + "Machine-readable block — paste everything, leave this intact:\n\n"
+        + "```json\n" + json + "\n```\n";
+      return { json: json, markdown: markdown, combined: combined };
     },
   };
   window.loadoutPlan = core;
@@ -671,7 +868,8 @@ section.risks {
       if (parsed.verdict !== "request_changes") throw new Error("verdict");
       if (parsed.comments[0].blocking !== true) throw new Error("blocking");
       if (parsed.plan_hash !== fp) throw new Error("hash");
-      if (fb.combined.indexOf("```json") !== 0) throw new Error("combined shape");
+      if (fb.combined.indexOf("## Plan feedback") !== 0) throw new Error("combined starts with mirror");
+      if (fb.combined.indexOf("```json") === -1) throw new Error("combined carries the JSON block");
     });
     check("refs exist in dom", function () {
       if (!document.querySelector('[data-plan-ref="task:t-session-store"]'))
@@ -883,6 +1081,9 @@ section.risks {
 
     function renderCount() {
       count.textContent = comments.length + (comments.length === 1 ? " comment" : " comments");
+      /* Nothing to copy until something has been added. */
+      copyBtn.disabled = comments.length === 0;
+      copyBtn.title = comments.length === 0 ? "Add a comment or answer first" : "";
     }
     renderCount();
 
@@ -904,19 +1105,33 @@ section.risks {
          which would otherwise pick up the injected chrome text. */
       const quote = elementQuote(el);
 
+      /* The CTA names the action the element actually invites: an open
+         question wants an answer, everything else wants a comment. Both
+         produce the same feedback-contract comment — only the label (and
+         placeholder) differ. */
+      const kind = ref.split(":")[0];
+      const isQuestion = kind === "question";
+      const label = isQuestion ? "Answer" : "Comment";
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "comment-btn";
       btn.appendChild(commentIcon());
-      btn.appendChild(document.createTextNode("Comment"));
-      btn.setAttribute("aria-label", "Add comment");
+      /* The label rides in a span so CSS can collapse the button to
+         icon-only where a full button doesn't fit (the per-criterion
+         line anchors); title + aria-label keep the name either way. */
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "comment-btn-label";
+      labelSpan.textContent = label;
+      btn.appendChild(labelSpan);
+      btn.title = label;
+      btn.setAttribute("aria-label", isQuestion ? "Answer this question" : "Add comment");
 
       const box = document.createElement("div");
       box.className = "comment-box";
       box.hidden = true;
 
       const textarea = document.createElement("textarea");
-      textarea.placeholder = "Add a comment…";
+      textarea.placeholder = isQuestion ? "Answer…" : "Add a comment…";
       textarea.rows = 3;
 
       const blockingRow = document.createElement("label");
@@ -1045,38 +1260,58 @@ section.risks {
     }
 
     function addReviewedBox(container, ref) {
+      /* A bare checkbox read as decoration at first glance (first-dogfood
+         feedback) -- the visible label says what checking it does, and
+         flips to a past-tense confirmation once checked. */
+      const label = document.createElement("label");
+      label.className = "reviewed-toggle";
       const box = document.createElement("input");
       box.type = "checkbox";
       box.className = "reviewed-box";
-      box.setAttribute("aria-label", "mark reviewed");
+      const text = document.createElement("span");
+      text.className = "reviewed-toggle-text";
+      function sync() {
+        text.textContent = box.checked ? "Reviewed" : "Mark reviewed";
+        container.classList.toggle("is-reviewed", box.checked);
+      }
       box.checked = reviewed.has(ref);
-      if (box.checked) container.classList.add("is-reviewed");
-      box.addEventListener("click", function (e) {
-        /* A checkbox nested inside a <summary> still bubbles its click up
+      sync();
+      label.appendChild(box);
+      label.appendChild(text);
+      label.addEventListener("click", function (e) {
+        /* A control nested inside a <summary> still bubbles its click up
            to the <summary>'s default action (toggling the parent
-           <details> open/closed) unless stopped here -- checking the box
-           should not also collapse or expand the phase. */
+           <details> open/closed) unless stopped here -- marking reviewed
+           should not also collapse or expand the phase. On the label, so
+           it covers clicks on the text as well as the box. */
         e.stopPropagation();
       });
       box.addEventListener("change", function () {
         if (box.checked) {
           reviewed.add(ref);
-          container.classList.add("is-reviewed");
         } else {
           reviewed.delete(ref);
-          container.classList.remove("is-reviewed");
         }
+        sync();
         persistReviewed();
         renderReviewedCount();
       });
-      return box;
+      return label;
     }
 
     document.querySelectorAll("details.phase").forEach(function (details) {
       const ref = details.getAttribute("data-plan-ref");
       const heading = details.querySelector("summary h2");
       if (!ref || !heading) return;
-      heading.appendChild(addReviewedBox(details, ref));
+      /* Before the teaser (a block-level span), so the toggle stays on the
+         title line instead of wrapping under the description. */
+      const teaser = heading.querySelector(".phase-teaser");
+      const toggle = addReviewedBox(details, ref);
+      if (teaser) {
+        heading.insertBefore(toggle, teaser);
+      } else {
+        heading.appendChild(toggle);
+      }
     });
 
     taskEls.forEach(function (el) {

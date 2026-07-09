@@ -349,7 +349,11 @@ pub const MAX_PHASES: usize = 50;
 pub const MAX_RISKS: usize = 100;
 pub const MAX_QUESTIONS: usize = 100;
 pub const MAX_EDGES: usize = 2000;
-pub const MAX_STRING: usize = 10_000;
+// Generous on purpose: the limit exists to bound a pathological single
+// string, not to shape how much a plan author writes — big plans are a
+// supported case (the 2 MiB document cap is the real ceiling). Raised from
+// 10k after the first real plan's task summaries pressed against it.
+pub const MAX_STRING: usize = 65_536;
 pub const MAX_KEY_POINTS: usize = 25;
 pub const MAX_OUT_OF_SCOPE: usize = 25;
 const ID_HINT: &str = "ids match ^[a-z][a-z0-9_-]{0,63}$ and are unique document-wide";
@@ -607,6 +611,74 @@ fn check_strings(plan: &Plan, errs: &mut Vec<Issue>) {
             ));
         }
     }
+}
+
+/// Author-guidance advisories: never errors, never gate a render. `load plan
+/// check` surfaces them as warnings so the plan author sees them in the
+/// write→check loop, where they're actionable.
+pub fn advisories(plan: &Plan) -> Vec<Issue> {
+    let mut out = Vec::new();
+    if let Some(s) = &plan.meta.summary_md {
+        let n = s.chars().count();
+        if n > 1500 {
+            let mut issue = Issue::new(
+                "/meta/summary_md",
+                "long_summary",
+                format!("executive summary is {n} chars — it reads best at 4-6 sentences"),
+            );
+            issue.hint = Some(
+                "move workstream detail into key_points and global constraints \
+                 into phase or task summaries"
+                    .into(),
+            );
+            out.push(issue);
+        }
+        if n > 600 && !s.contains("\n\n") {
+            let mut issue = Issue::new(
+                "/meta/summary_md",
+                "wall_of_text",
+                format!("executive summary is {n} chars in a single paragraph"),
+            );
+            issue.hint = Some(
+                "break it into 2-4 short paragraphs (blank lines between them) — \
+                 one block of prose renders as a wall of text"
+                    .into(),
+            );
+            out.push(issue);
+        }
+    }
+    if let Some(g) = &plan.meta.goal_md {
+        let n = g.chars().count();
+        if n > 300 {
+            let mut issue = Issue::new(
+                "/meta/goal_md",
+                "long_goal",
+                format!(
+                    "goal_md is {n} chars — it's the one-sentence subtitle, not a second summary"
+                ),
+            );
+            issue.hint =
+                Some("say what this builds in one or two sentences; approach, status, and the ask belong in summary_md".into());
+            out.push(issue);
+        }
+    }
+    for (i, kp) in plan.meta.key_points.iter().enumerate() {
+        let n = kp.chars().count();
+        if n > 500 {
+            let mut issue = Issue::new(
+                format!("/meta/key_points/{i}"),
+                "long_key_point",
+                format!("key point is {n} chars — it reads as compressed spec, not a headline"),
+            );
+            issue.hint = Some(
+                "a bold lead plus one or two plain sentences; implementation \
+                 detail belongs in the task cards"
+                    .into(),
+            );
+            out.push(issue);
+        }
+    }
+    out
 }
 
 pub fn validate(plan: &Plan) -> Vec<Issue> {
@@ -912,7 +984,7 @@ mod tests {
     #[test]
     fn collection_and_string_limits_enforced() {
         let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
-        p.phases[0].tasks[0].summary_md = Some("y".repeat(10_001));
+        p.phases[0].tasks[0].summary_md = Some("y".repeat(MAX_STRING + 1));
         assert!(validate(&p).iter().any(|e| e.code == "string_too_long"));
         for i in 0..501 {
             p.phases[0].tasks.push(PlanTask {
@@ -1013,8 +1085,8 @@ mod tests {
     #[test]
     fn new_meta_string_caps_enforced() {
         let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
-        p.meta.summary_md = Some("x".repeat(10_001));
-        p.meta.key_points = vec!["y".repeat(10_001)];
+        p.meta.summary_md = Some("x".repeat(MAX_STRING + 1));
+        p.meta.key_points = vec!["y".repeat(MAX_STRING + 1)];
         let errs = validate(&p);
         assert!(
             errs.iter()
