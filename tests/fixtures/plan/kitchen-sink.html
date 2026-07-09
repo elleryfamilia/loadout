@@ -57,7 +57,10 @@
 * { box-sizing: border-box; }
 
 body {
-  margin: 0;
+  margin: 0 auto;
+  /* Centered with a ceiling: on a wide monitor the content column stays a
+     coherent page instead of hugging the left edge with a dead right half. */
+  max-width: 1480px;
   padding: 1.5rem 1.5rem 4.5rem;
   font-family: var(--font);
   background: var(--bg);
@@ -294,7 +297,12 @@ details.phase > :not(summary):not(.task) {
 
 @media (min-width: 1100px) {
   .summary-grid {
-    grid-template-columns: minmax(0, 1fr) 340px;
+    /* The prose column is capped at its reading measure, so a plain 1fr
+       would strand dead space between the text and the rail — pin the
+       prose left and the rail right instead, and let space-between absorb
+       whatever the viewport adds. */
+    grid-template-columns: minmax(0, 72ch) 360px;
+    justify-content: space-between;
     align-items: start;
     gap: 2.5rem;
   }
@@ -387,7 +395,7 @@ details.phase > :not(summary):not(.task) {
   width: 100%;
   border-collapse: collapse;
   margin: 0 0 0.25rem;
-  font-size: 0.9em;
+  font-size: 0.85em;
 }
 
 .summary-phases th,
@@ -395,6 +403,14 @@ details.phase > :not(summary):not(.task) {
   text-align: left;
   padding: 0.3rem 0.6rem 0.3rem 0;
   border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+/* Only the phase-name cell may wrap; the count/estimate/risk cells stay
+   one line each so rows read as rows. */
+.summary-phases th:not(:first-child),
+.summary-phases td:not(:first-child) {
+  white-space: nowrap;
 }
 
 .summary-phases th { color: var(--muted); font-weight: 600; }
@@ -689,7 +705,7 @@ pre {
   <path d="M16 13H8" />
   <path d="M16 17H8" />
 </svg> Summary</h2><section class="plan-summary" data-plan-ref="meta:auth-refactor"><div class="summary-grid"><div class="summary-exec"><p>This refactor extracts <code>SessionStore</code> behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the <em>lock contention</em> risk by sharding the store. The ask: review the trait boundary in <code>t-session-store</code> before Redis work starts.</p>
-</div><aside class="summary-glance"><p class="glance-title">At a glance</p><p class="summary-counts">5 tasks · 2 phases · 1 small · 1 medium · 1 large · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><table class="summary-phases"><thead><tr><th>Phase</th><th>Tasks</th><th>Estimate</th><th>Risk</th></tr></thead><tbody><tr><td><a href="#phase-p-core">Core</a></td><td>2</td><td>1 small, 1 medium</td><td>1 medium</td></tr><tr><td><a href="#phase-p-backend">Backend</a></td><td>3</td><td>1 large</td><td>1 high</td></tr></tbody></table><p class="summary-risks has-high">1 risk (1 high)</p><p class="summary-ask has-blocking">⚠ 1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></p></aside></div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
+</div><aside class="summary-glance"><p class="glance-title">At a glance</p><p class="summary-counts">5 tasks · 2 phases · 1 small · 1 medium · 1 large · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><table class="summary-phases"><thead><tr><th>Phase</th><th>Tasks</th><th>Est.</th><th>Risk</th></tr></thead><tbody><tr><td><a href="#phase-p-core">Core</a></td><td>2</td><td>1s · 1m</td><td>1 medium</td></tr><tr><td><a href="#phase-p-backend">Backend</a></td><td>3</td><td>1l</td><td>1 high</td></tr></tbody></table><p class="summary-risks has-high">1 risk (1 high)</p><p class="summary-ask has-blocking">⚠ 1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></p></aside></div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
 </li><li><p><strong>Redis backend</strong> (<code>t-redis</code>) is blocked on the trait boundary landing first.</p>
 </li><li><p><strong>Lock contention</strong> (<code>r-locking</code>) is mitigated by sharding the store, not by removing the lock.</p>
 </li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p></section><section class="questions"><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">

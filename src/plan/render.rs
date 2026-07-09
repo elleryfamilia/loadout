@@ -381,11 +381,19 @@ fn phase_estimate_dist(phase: &Phase) -> String {
     }
     sizes
         .iter()
-        .zip(["small", "medium", "large"])
+        .zip(["s", "m", "l"])
         .filter(|(n, _)| **n > 0)
-        .map(|(n, label)| format!("{n} {label}"))
+        .map(|(n, label)| format!("{n}{label}"))
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(" · ")
+}
+
+/// The rail's phase cell: the head of a `title — subtitle` name, capped for
+/// the narrow column (the full title is one click away on the phase row
+/// itself). Titles without the separator just truncate.
+fn short_phase_title(title: &str) -> String {
+    let head = title.split(" — ").next().unwrap_or(title);
+    truncate_chars(head, 28)
 }
 
 /// A phase's risk heat for the rollup table: the count of tasks at the
@@ -558,12 +566,12 @@ pub fn render(plan: &Plan) -> String {
                             @if !plan.phases.is_empty() {
                                 table.summary-phases {
                                     thead {
-                                        tr { th { "Phase" } th { "Tasks" } th { "Estimate" } th { "Risk" } }
+                                        tr { th { "Phase" } th { "Tasks" } th { "Est." } th { "Risk" } }
                                     }
                                     tbody {
                                         @for phase in &plan.phases {
                                             tr {
-                                                td { a href=(format!("#phase-{}", phase.id)) { (phase.title) } }
+                                                td { a href=(format!("#phase-{}", phase.id)) { (short_phase_title(&phase.title)) } }
                                                 td { (phase.tasks.len().to_string()) }
                                                 td { (phase_estimate_dist(phase)) }
                                                 td { (phase_risk_heat(phase)) }

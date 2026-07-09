@@ -56,7 +56,10 @@
 * { box-sizing: border-box; }
 
 body {
-  margin: 0;
+  margin: 0 auto;
+  /* Centered with a ceiling: on a wide monitor the content column stays a
+     coherent page instead of hugging the left edge with a dead right half. */
+  max-width: 1480px;
   padding: 1.5rem 1.5rem 4.5rem;
   font-family: var(--font);
   background: var(--bg);
@@ -293,7 +296,12 @@ details.phase > :not(summary):not(.task) {
 
 @media (min-width: 1100px) {
   .summary-grid {
-    grid-template-columns: minmax(0, 1fr) 340px;
+    /* The prose column is capped at its reading measure, so a plain 1fr
+       would strand dead space between the text and the rail — pin the
+       prose left and the rail right instead, and let space-between absorb
+       whatever the viewport adds. */
+    grid-template-columns: minmax(0, 72ch) 360px;
+    justify-content: space-between;
     align-items: start;
     gap: 2.5rem;
   }
@@ -386,7 +394,7 @@ details.phase > :not(summary):not(.task) {
   width: 100%;
   border-collapse: collapse;
   margin: 0 0 0.25rem;
-  font-size: 0.9em;
+  font-size: 0.85em;
 }
 
 .summary-phases th,
@@ -394,6 +402,14 @@ details.phase > :not(summary):not(.task) {
   text-align: left;
   padding: 0.3rem 0.6rem 0.3rem 0;
   border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+/* Only the phase-name cell may wrap; the count/estimate/risk cells stay
+   one line each so rows read as rows. */
+.summary-phases th:not(:first-child),
+.summary-phases td:not(:first-child) {
+  white-space: nowrap;
 }
 
 .summary-phases th { color: var(--muted); font-weight: 600; }
