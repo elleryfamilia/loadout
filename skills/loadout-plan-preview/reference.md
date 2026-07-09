@@ -130,11 +130,14 @@ their time. Write for both readers at once:
   idea each — a single block of prose renders as a wall of text, and `check`
   warns on it (`wall_of_text`).
 - **`key_points`** — 4-8 bullets, one per major workstream or decision. Lead
-  each bullet with a bold clause naming the workstream, then one sentence of
-  detail, e.g. `"**Redis backend** lands behind a trait boundary shipping
-  first."` The summary plus these bullets must stand alone as a complete
-  overview — a reader should not need to open a single phase to know what
-  the plan does.
+  each bullet with a bold clause naming the workstream, then one or two
+  **complete, plain-language sentences** of detail, e.g. `"**Redis backend**
+  lands behind a trait boundary shipping first."` Write for a reader, not a
+  spec: expand jargon, no semicolon-chained fragment runs — implementation
+  minutiae belong in the task cards, which the reviewer opens next. `check`
+  warns (`long_key_point`) past 500 chars. The summary plus these bullets
+  must stand alone as a complete overview — a reader should not need to
+  open a single phase to know what the plan does.
 - **`out_of_scope`** — explicit non-goals: things a reader might reasonably
   assume are covered but aren't. Keep each item short; this is a boundary
   list, not a design doc.

@@ -879,11 +879,32 @@ mod tests {
         assert!(crate::plan::model::validate(&parsed.plan).is_empty());
         let html = render(&parsed.plan);
         assert_eq!(html.matches("id=\"task-").count(), 23, "23 task cards");
-        // Its revision-1 meta is exactly the shape the advisories exist for
-        // — an overlong single-paragraph summary AND a goal that reads as a
-        // second summary; the kitchen sink's is neither.
-        assert_eq!(crate::plan::model::advisories(&parsed.plan).len(), 3);
+        // Its revision-1 meta is exactly the shape the advisories exist for:
+        // an overlong single-paragraph summary and a goal that reads as a
+        // second summary. The kitchen sink trips none of them.
+        let codes: Vec<String> = crate::plan::model::advisories(&parsed.plan)
+            .into_iter()
+            .map(|i| i.code)
+            .collect();
+        for expected in ["long_summary", "wall_of_text", "long_goal"] {
+            assert!(
+                codes.iter().any(|c| c == expected),
+                "missing {expected} in {codes:?}"
+            );
+        }
         assert!(crate::plan::model::advisories(&plan_from("kitchen-sink.json")).is_empty());
+        // A spec-compressed key point (the shape a later revision actually
+        // shipped before review caught it) trips the fourth advisory.
+        let mut bloated = parsed.plan.clone();
+        bloated.meta.key_points.push("k".repeat(501));
+        let codes: Vec<String> = crate::plan::model::advisories(&bloated)
+            .into_iter()
+            .map(|i| i.code)
+            .collect();
+        assert!(
+            codes.iter().any(|c| c == "long_key_point"),
+            "missing long_key_point in {codes:?}"
+        );
     }
 
     #[test]

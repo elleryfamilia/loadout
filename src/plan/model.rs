@@ -662,6 +662,22 @@ pub fn advisories(plan: &Plan) -> Vec<Issue> {
             out.push(issue);
         }
     }
+    for (i, kp) in plan.meta.key_points.iter().enumerate() {
+        let n = kp.chars().count();
+        if n > 500 {
+            let mut issue = Issue::new(
+                format!("/meta/key_points/{i}"),
+                "long_key_point",
+                format!("key point is {n} chars — it reads as compressed spec, not a headline"),
+            );
+            issue.hint = Some(
+                "a bold lead plus one or two plain sentences; implementation \
+                 detail belongs in the task cards"
+                    .into(),
+            );
+            out.push(issue);
+        }
+    }
     out
 }
 
