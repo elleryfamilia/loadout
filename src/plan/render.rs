@@ -46,22 +46,43 @@ fn md(text: &Option<String>) -> Markup {
     }
 }
 
-/// Markdown rendered for a phrasing-content position (inside `<summary>`):
-/// the block renderer's output with paragraph tags stripped, so inline
-/// markup (code spans, emphasis, links) survives but no block element lands
-/// where HTML forbids one. Multi-paragraph input flattens to one line —
-/// acceptable for the 1-2 sentence phase summaries this renders.
-fn inline_md(text: &Option<String>) -> Option<Markup> {
-    let t = text.as_ref()?;
-    let inline = crate::markdown::render_markdown(t)
-        .replace("<p>", "")
-        .replace("</p>", " ")
-        .trim()
-        .to_string();
-    if inline.is_empty() {
-        return None;
+/// Split a phase's `summary_md` into a teaser that is safe inside the
+/// phrasing-content `<summary>` element and whatever block content remains.
+///
+/// The teaser is the FIRST paragraph's inner HTML — a paragraph's content is
+/// phrasing content by construction (the sanitizer already rewrites images,
+/// the only exception, into links/emphasis), so no `<ul>`/`<pre>`/`<table>`
+/// can leak into `<summary>` (Savio's PR #22 finding: stripping only `<p>`
+/// tags let every other block element through). Everything after the first
+/// paragraph — or the whole rendering when the summary doesn't START with a
+/// paragraph — is returned as the remainder for the caller to render inside
+/// the expanded `<details>` body, so block-heavy summaries lose nothing.
+///
+/// `</p>` cannot occur inside the first paragraph's inner HTML (the
+/// sanitizer escapes literal `</p>` text and HTML forbids nested `<p>`), so
+/// the split point is unambiguous.
+fn phase_summary_parts(text: &Option<String>) -> (Option<Markup>, Option<Markup>) {
+    let Some(t) = text.as_ref() else {
+        return (None, None);
+    };
+    let html = crate::markdown::render_markdown(t);
+    let html = html.trim();
+    if let Some(after_open) = html.strip_prefix("<p>") {
+        if let Some(close) = after_open.find("</p>") {
+            let teaser = after_open[..close].trim().to_string();
+            let rest = after_open[close + "</p>".len()..].trim().to_string();
+            return (
+                (!teaser.is_empty()).then_some(PreEscaped(teaser)),
+                (!rest.is_empty()).then_some(PreEscaped(rest)),
+            );
+        }
     }
-    Some(PreEscaped(inline))
+    // First block isn't a paragraph: there is no phrasing-safe teaser;
+    // render the whole summary in the body instead.
+    (
+        None,
+        (!html.is_empty()).then_some(PreEscaped(html.to_string())),
+    )
 }
 
 /// A copy of `plan` with every markdown field (`goal_md`, `meta.summary_md`,
@@ -670,6 +691,7 @@ pub fn render(plan: &Plan) -> String {
                 }
                 @for (i, phase) in plan.phases.iter().enumerate() {
                     details.phase id=(format!("phase-{}", phase.id)) data-plan-ref=(format!("phase:{}", phase.id)) {
+                        @let (teaser, summary_rest) = phase_summary_parts(&phase.summary_md);
                         summary {
                             (chevron_markup())
                             h2 {
@@ -681,14 +703,18 @@ pub fn render(plan: &Plan) -> String {
                                 // The phase's plain-english description is
                                 // part of the collapsed row — a reader
                                 // scanning closed phases still learns what
-                                // each one is. Inline-rendered (block
-                                // structure stripped) because it sits inside
-                                // <summary>, which is phrasing content.
-                                @if let Some(teaser) = inline_md(&phase.summary_md) {
+                                // each one is. First paragraph only: it sits
+                                // inside <summary>, which is phrasing
+                                // content (see phase_summary_parts).
+                                @if let Some(teaser) = teaser {
                                     span.phase-teaser { (teaser) }
                                 }
                             }
                         }
+                        // Block content the teaser couldn't carry (lists,
+                        // tables, paragraphs past the first) shows once the
+                        // phase is expanded.
+                        @if let Some(rest) = summary_rest { div.phase-summary-rest { (rest) } }
                         @if let Some(g) = svg::phase_svg(plan, &phase.id) { (PreEscaped(g)) }
                         @for task in &phase.tasks { (task_card(task)) }
                     }
@@ -853,15 +879,31 @@ mod tests {
     }
 
     #[test]
-    fn inline_md_flattens_paragraphs_and_keeps_inline_markup() {
-        let got = inline_md(&Some("Extract *session* handling.\n\nSecond.".into()))
-            .expect("some")
-            .into_string();
-        assert!(got.contains("<em>session</em>"), "{got}");
-        assert!(!got.contains("<p>"), "{got}");
-        assert!(got.contains("Second."), "{got}");
-        assert!(inline_md(&None).is_none());
-        assert!(inline_md(&Some(String::new())).is_none());
+    fn phase_summary_teaser_is_phrasing_safe() {
+        // Single paragraph: all teaser, no remainder, inline markup kept.
+        let (teaser, rest) = phase_summary_parts(&Some("Extract *session* handling.".into()));
+        let teaser = teaser.expect("teaser").into_string();
+        assert!(teaser.contains("<em>session</em>"), "{teaser}");
+        assert!(!teaser.contains("<p>"), "{teaser}");
+        assert!(rest.is_none());
+
+        // Paragraph followed by a list: the list must NOT reach the teaser
+        // (Savio's PR #22 finding) — it lands in the remainder instead.
+        let (teaser, rest) = phase_summary_parts(&Some("Lead sentence.\n\n- alpha\n- beta".into()));
+        let teaser = teaser.expect("teaser").into_string();
+        assert_eq!(teaser, "Lead sentence.");
+        let rest = rest.expect("remainder").into_string();
+        assert!(rest.contains("<ul>"), "{rest}");
+
+        // Summary that STARTS with a block element: no teaser at all, the
+        // whole rendering goes to the body.
+        let (teaser, rest) = phase_summary_parts(&Some("- only\n- a list".into()));
+        assert!(teaser.is_none());
+        assert!(rest.expect("remainder").into_string().contains("<ul>"));
+
+        assert!(phase_summary_parts(&None).0.is_none());
+        let (t, r) = phase_summary_parts(&Some(String::new()));
+        assert!(t.is_none() && r.is_none());
     }
 
     /// Regression fixture: the first real plan written against the schema
