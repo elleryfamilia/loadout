@@ -35,4 +35,10 @@ before emitting anything.
 - Never hand-write plan.html or edit the rendered file.
 - Never put secrets, tokens, or credentials in plan.json — it renders to a
   reviewable page.
+- Never compress or omit plan content to fit size limits. For a genuinely
+  large plan (hundreds of KB), tell the user roughly what generating it will
+  cost in output tokens and ask whether they want the visual plan.json or a
+  plain markdown plan — then produce whichever they pick at full detail.
+- Use markdown for scannability in every `*_md` field — tables, fenced code
+  blocks, task lists all render; raw HTML does not.
 - `load plan schema` prints the schema reference if you need it inline.

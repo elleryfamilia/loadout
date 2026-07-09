@@ -349,7 +349,11 @@ pub const MAX_PHASES: usize = 50;
 pub const MAX_RISKS: usize = 100;
 pub const MAX_QUESTIONS: usize = 100;
 pub const MAX_EDGES: usize = 2000;
-pub const MAX_STRING: usize = 10_000;
+// Generous on purpose: the limit exists to bound a pathological single
+// string, not to shape how much a plan author writes — big plans are a
+// supported case (the 2 MiB document cap is the real ceiling). Raised from
+// 10k after the first real plan's task summaries pressed against it.
+pub const MAX_STRING: usize = 65_536;
 pub const MAX_KEY_POINTS: usize = 25;
 pub const MAX_OUT_OF_SCOPE: usize = 25;
 const ID_HINT: &str = "ids match ^[a-z][a-z0-9_-]{0,63}$ and are unique document-wide";
@@ -936,7 +940,7 @@ mod tests {
     #[test]
     fn collection_and_string_limits_enforced() {
         let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
-        p.phases[0].tasks[0].summary_md = Some("y".repeat(10_001));
+        p.phases[0].tasks[0].summary_md = Some("y".repeat(MAX_STRING + 1));
         assert!(validate(&p).iter().any(|e| e.code == "string_too_long"));
         for i in 0..501 {
             p.phases[0].tasks.push(PlanTask {
@@ -1037,8 +1041,8 @@ mod tests {
     #[test]
     fn new_meta_string_caps_enforced() {
         let mut p = parse(&fixture("minimal.json"), false).unwrap().plan;
-        p.meta.summary_md = Some("x".repeat(10_001));
-        p.meta.key_points = vec!["y".repeat(10_001)];
+        p.meta.summary_md = Some("x".repeat(MAX_STRING + 1));
+        p.meta.key_points = vec!["y".repeat(MAX_STRING + 1)];
         let errs = validate(&p);
         assert!(
             errs.iter()

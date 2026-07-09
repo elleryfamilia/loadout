@@ -46,10 +46,31 @@ re-render.
 | dependency edges (`depends_on` entries) | 2000 |
 | `meta.key_points` items | 25 |
 | `meta.out_of_scope` items | 25 |
-| any single string field | 10,000 chars |
+| any single string field | 65,536 chars |
 
 Exceeding a collection limit reports `too_many` at the relevant path.
 Exceeding a string limit reports `string_too_long`.
+
+### Big plans
+
+The limits bound a pathological document, not your writing — **never
+compress, abbreviate, or omit plan content to stay clear of them**. Big
+plans are a supported case. If a plan is going to be genuinely large
+(hundreds of KB of JSON — think 50+ richly detailed tasks), tell the user
+up front roughly what generating it will cost in output tokens and ask
+whether they want the visual plan.json or a plain markdown plan instead;
+generate whichever they pick at full detail.
+
+### Markdown in `*_md` fields
+
+Every `*_md` field (and each `key_points` item) renders GitHub-style
+markdown: tables, fenced code blocks, task lists (`- [ ]`), strikethrough,
+links. Raw HTML is neutralized to text — markdown is the only formatting
+channel. Use it for scannability instead of prose walls: a table for a
+set of parallel decisions, a fenced block for exact commands or code an
+implementer must reproduce, a task list for sub-steps. The renderer styles
+all of these to the card's scale, and wide tables scroll inside their own
+box.
 
 ## Enums
 
@@ -86,9 +107,9 @@ phases and optionally on notable tasks; omit rather than repeat.
 | `id` | string | yes | id rule; the plan's own id — used in feedback's `plan_id` |
 | `title` | string | yes | |
 | `goal_md` | string | no | markdown |
-| `summary_md` | string | no | markdown, ≤10,000 chars; the executive summary — see the recipe below |
-| `key_points` | array\<string\> | no (default `[]`) | markdown bullet items, ≤25 items, each ≤10,000 chars |
-| `out_of_scope` | array\<string\> | no (default `[]`) | plain-text bullet items (no markdown), ≤25 items, each ≤10,000 chars |
+| `summary_md` | string | no | markdown; the executive summary — see the recipe below (4-6 sentences; `check` warns past 1,500 chars) |
+| `key_points` | array\<string\> | no (default `[]`) | markdown bullet items, ≤25 items |
+| `out_of_scope` | array\<string\> | no (default `[]`) | plain-text bullet items (no markdown), ≤25 items |
 | `agent` | string | no | free text, e.g. `"claude"` |
 | `created` | string | no | free text (a date is conventional, e.g. `"2026-07-07"`) |
 | `revision` | integer | no | bump when you re-emit a revised plan |
