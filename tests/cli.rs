@@ -870,6 +870,58 @@ fn doctor_warns_when_a_script_fragment_changed_outside_loadout() {
         .stderr(predicate::str::contains("load fragments trust probe"));
 }
 
+/// Write an executable `codex` stub into a dir and return that dir (for PATH).
+#[cfg(unix)]
+fn agent_stub(fx: &Fixture, script: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = fx.global.path().join("stub-bin");
+    fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("codex");
+    fs::write(&stub, script).unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_completes_when_an_agent_cli_leaves_a_pipe_holding_grandchild() {
+    // The GitHub Copilot repro: `<cli> --version` exits quickly but leaves a
+    // background child (an update check) that inherited the stdout pipe and
+    // outlives it. An unbounded `Command::output()` read blocks until that
+    // grandchild dies — doctor hung for hours in the wild. The probe must be
+    // deadline-bounded and still report the CLI (its version line was written
+    // before the grandchild lingered).
+    let fx = Fixture::new();
+    fx.rust_project();
+    let bin = agent_stub(&fx, "#!/bin/sh\necho codex-cli 9.9.9\nsleep 30 &\nexit 0\n");
+    fx.cmd()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "400")
+        .timeout(std::time::Duration::from_secs(20))
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("codex: CLI 'codex' found"));
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_reports_probe_timeout_for_a_wedged_agent_cli() {
+    // A CLI that never returns from `--version` (wedged daemon, TTY wait, …)
+    // must degrade to a "probe timed out" warning — never hang doctor.
+    let fx = Fixture::new();
+    fx.rust_project();
+    let bin = agent_stub(&fx, "#!/bin/sh\nsleep 30\n");
+    fx.cmd()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "400")
+        .timeout(std::time::Duration::from_secs(20))
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("probe timed out"));
+}
+
 #[test]
 fn off_repo_launch_prompt_redacts_workflow_map_secrets() {
     // Off-repo (cwd == $HOME), Claude's context is delivered at launch via

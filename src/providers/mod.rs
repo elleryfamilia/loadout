@@ -515,60 +515,109 @@ const EXEC_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// `Command::output()` with a deadline. stdout/stderr are drained by reader
 /// threads (a chatty child can't deadlock on a full pipe), stdin is null (a
-/// CLI that prompts gets EOF, not a wait), and the child is killed at the
-/// deadline. `Ok(None)` = timed out. On timeout the reader threads are
-/// deliberately **not** joined — a grandchild holding the pipe write-end
-/// (e.g. a killed `sh -c` leaving its command behind) must not resurrect the
-/// hang; the threads expire with the process.
+/// CLI that prompts gets EOF, not a wait), and the child — plus, on unix, its
+/// whole process group — is killed at the deadline. `Ok(None)` = the child was
+/// still running at the deadline.
+///
+/// The deadline covers the **reads** too, not just the child's exit: a
+/// grandchild that inherited a pipe write-end (a CLI's background update
+/// check, a `sh -c` leaving its command behind) keeps the pipe open long
+/// after the direct child exited, so an unconditional reader join would
+/// resurrect the hang. Readers therefore drain into shared buffers, the
+/// post-exit wait is deadline-bounded, and on expiry the process group is
+/// killed (reaping the pipe-holder) and whatever was read so far is returned.
+/// Never-joined reader threads expire with the killed group.
 fn output_with_timeout(
     cmd: &mut Command,
     timeout: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {
-    use std::io::Read as _;
     use std::process::Stdio;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
+    // A fresh process group (unix) so the deadline kill reaches background
+    // grandchildren, not just the direct child.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let mut out_pipe = child.stdout.take();
-    let mut err_pipe = child.stderr.take();
-    let t_out = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = out_pipe.as_mut() {
-            let _ = p.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let t_err = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = err_pipe.as_mut() {
-            let _ = p.read_to_end(&mut buf);
-        }
-        buf
-    });
+
+    fn drain<R: std::io::Read + Send + 'static>(
+        pipe: Option<R>,
+        buf: Arc<Mutex<Vec<u8>>>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let Some(mut p) = pipe else { return };
+            let mut chunk = [0u8; 4096];
+            loop {
+                match p.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.lock().unwrap().extend_from_slice(&chunk[..n]),
+                }
+            }
+        })
+    }
+    let out_buf = Arc::new(Mutex::new(Vec::new()));
+    let err_buf = Arc::new(Mutex::new(Vec::new()));
+    let t_out = drain(child.stdout.take(), Arc::clone(&out_buf));
+    let t_err = drain(child.stderr.take(), Arc::clone(&err_buf));
 
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait()? {
             Some(s) => break s,
             None if Instant::now() >= deadline => {
-                let _ = child.kill();
+                kill_group(&mut child);
                 let _ = child.wait();
-                return Ok(None); // timed out — do NOT join the readers
+                return Ok(None); // timed out
             }
             None => std::thread::sleep(Duration::from_millis(20)),
         }
     };
-    let stdout = t_out.join().unwrap_or_default();
-    let stderr = t_err.join().unwrap_or_default();
+    // The child exited; the reads are only complete once both pipes hit EOF,
+    // which a lingering grandchild can hold off indefinitely — bound this too.
+    let drained = loop {
+        if t_out.is_finished() && t_err.is_finished() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    if drained {
+        let _ = t_out.join();
+        let _ = t_err.join();
+    } else {
+        kill_group(&mut child); // reap the pipe-holding grandchildren
+    }
+    let stdout = std::mem::take(&mut *out_buf.lock().unwrap());
+    let stderr = std::mem::take(&mut *err_buf.lock().unwrap());
     Ok(Some(std::process::Output {
         status,
         stdout,
         stderr,
     }))
+}
+
+/// Kill the child and, on unix, its whole process group — the child was
+/// spawned as a group leader (`process_group(0)`), so this also takes out
+/// background grandchildren that would otherwise linger holding a pipe end
+/// (observed: agent-CLI update checks surviving `--version` for hours).
+fn kill_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    // SAFETY: killpg only sends a signal; the pgid can't have been reused
+    // while a member of the group is still alive.
+    unsafe {
+        libc::killpg(child.id() as i32, libc::SIGKILL);
+    }
+    let _ = child.kill();
 }
 
 /// Run `program args…` and return its stdout (trimmed) on success, falling back
@@ -588,6 +637,48 @@ pub(crate) fn run_ok(program: &str, args: &[&str]) -> Option<String> {
     }
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     (!stderr.is_empty()).then_some(stderr)
+}
+
+/// Hard cap on an agent-CLI `--version` probe (doctor's PATH checks) — the
+/// same discipline as script predicates ([`PREDICATE_TIMEOUT`]): a wedged CLI
+/// must degrade to a warning, never hang. `LOADOUT_PROBE_TIMEOUT_MS` overrides
+/// it (tests use this; it's also an escape hatch for a legitimately slow CLI).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn probe_timeout() -> Duration {
+    std::env::var("LOADOUT_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(PROBE_TIMEOUT)
+}
+
+/// Outcome of a bounded `<program> --version` probe.
+pub(crate) enum CliProbe {
+    /// Spawned and answered — carries the trimmed version output.
+    Found(String),
+    /// Could not spawn (not installed) or produced no usable answer.
+    Missing,
+    /// Spawned but still running at the deadline — killed. The binary exists,
+    /// but the CLI is wedged (or slower than [`PROBE_TIMEOUT`]).
+    TimedOut,
+}
+
+/// Probe `<program> --version` under [`probe_timeout`]. Replaces doctor's raw
+/// `Command::output()` PATH check, which had no deadline and hung indefinitely
+/// on CLIs whose version check leaves a pipe-holding background updater
+/// (GitHub Copilot's `--version` was observed doing exactly that).
+pub(crate) fn probe_cli(program: &str) -> CliProbe {
+    let mut cmd = Command::new(program);
+    cmd.arg("--version");
+    match output_with_timeout(&mut cmd, probe_timeout()) {
+        Ok(Some(o)) if o.status.success() || !o.stdout.is_empty() => {
+            CliProbe::Found(String::from_utf8_lossy(&o.stdout).trim().to_string())
+        }
+        Ok(Some(_)) => CliProbe::Missing,
+        Ok(None) => CliProbe::TimedOut,
+        Err(_) => CliProbe::Missing,
+    }
 }
 
 /// Probe `<tool> --version` for each tool, collecting `(tool, version)` for the
@@ -783,6 +874,31 @@ mod tests {
         assert!(out.status.success());
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "out");
         assert_eq!(String::from_utf8_lossy(&out.stderr).trim(), "err");
+    }
+
+    #[test]
+    fn output_with_timeout_survives_a_pipe_holding_grandchild() {
+        use std::time::{Duration, Instant};
+        // The copilot repro: the probed CLI exits quickly but leaves behind a
+        // background child (an update check) that inherited the stdout pipe.
+        // The pipe's write end stays open long after the direct child exited,
+        // so an unbounded read_to_end/join would block until the grandchild
+        // dies — minutes to hours. The deadline must cover the reads too.
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "echo held; sleep 30 & exit 0"]);
+        let started = Instant::now();
+        let out = super::output_with_timeout(&mut cmd, Duration::from_millis(500)).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "must return by the deadline even though a grandchild holds the pipe"
+        );
+        let out = out.expect("child exited before the deadline — not a timeout");
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "held",
+            "output written before the deadline must be captured"
+        );
     }
 
     #[test]
