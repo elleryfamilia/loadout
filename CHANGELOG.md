@@ -8,6 +8,58 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.14.1 — 2026-07-09
+
+Follow-ups from the first real-world use of the plan preview (a 23-task plan
+reviewed through six rounds of the paste-back loop). All changes apply to
+`load plan`.
+
+### Added
+
+- **Authoring guardrails in `load plan check`** — a per-phase task breakdown
+  after validation, plus four non-gating advisories that catch plans which
+  validate but read badly: `long_summary` (executive summary past 1,500
+  chars), `wall_of_text` (a long summary with no paragraph breaks),
+  `long_goal` (a `goal_md` that reads as a second summary), and
+  `long_key_point` (spec-compressed bullets). Each hint names the fix. The
+  schema reference grew matching guidance: goal-vs-summary roles, short
+  paragraphs, plain-language key points, and markdown (tables, code blocks,
+  task lists) for scannability.
+- **Big plans are supported** — the per-string limit rose from 10,000 to
+  65,536 chars (the 2 MiB document cap remains the ceiling), and the
+  `loadout-plan-preview` skill now tells the authoring agent to never
+  compress plan content to fit limits — for genuinely huge plans it should
+  surface the token cost and offer a markdown plan instead. A plan using
+  longer strings reports a clear `string_too_long` on older loadouts; the
+  fix is `load update`.
+
+### Changed
+
+- **The review page got its first-contact redesign** — the page centers
+  under a width ceiling; the byline sits above the title as an eyebrow with
+  the created date; the summary card pairs the executive prose with an
+  "At a glance" rail (task/phase counts, a per-phase rollup with compact
+  estimates and risk heat, the risk register, and the ready/blocked banner);
+  key points get accent markers and flow into two columns on wide screens.
+- **Feedback copy is human-first** — the copied block leads with the
+  readable markdown mirror; the canonical fenced JSON (stable refs,
+  `plan_hash`, blocking flags) follows in a labeled block. "Copy feedback"
+  stays disabled until a comment exists, open questions get an **Answer**
+  CTA, and the reviewed checkbox became a labeled **Mark reviewed** toggle.
+
+### Fixed
+
+- Phase descriptions were rendered inside the collapsed `<details>` and so
+  were invisible until a phase was expanded; the first paragraph now shows
+  as a teaser in the collapsed row (any remaining block content renders in
+  the expanded body — teasers are strictly phrasing-safe, a review finding).
+- Dependency-graph node labels hard-truncated at 28 characters on one line;
+  they now word-wrap to two lines, nodes grew to fit, and every node carries
+  a full-title tooltip.
+- Per-criterion comment buttons overflowed their one-line rows and stacked
+  into a misaligned column; line anchors now use a hover-revealed, icon-only
+  line-comment treatment while card-level buttons stay persistent.
+
 ## 0.14.0 — 2026-07-08
 
 ### Added
