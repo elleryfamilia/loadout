@@ -1,8 +1,6 @@
-<h1>
-  <img src="docs/loadout-wordmark.svg" alt="Loadout" width="320">
-</h1>
-
-*Equip the right context for the job.*
+<p align="center">
+  <img src="docs/loadout-hero.png" alt="Loadout — equip the right context for the job. Reusable kits of context and workflows, injected when you launch your coding agent: load claude, load codex, load cursor.">
+</p>
 
 [![Release](https://img.shields.io/github/v/release/elleryfamilia/loadout)](https://github.com/elleryfamilia/loadout/releases)
 [![CI](https://github.com/elleryfamilia/loadout/actions/workflows/ci.yml/badge.svg)](https://github.com/elleryfamilia/loadout/actions/workflows/ci.yml)
@@ -18,11 +16,6 @@ A *loadout* is the kit you equip before a job — your conventions, your tooling
 - Loadout carries **what you bring to it** — across every project, machine, and agent.
 
 Works with **Claude, Codex, Gemini, Cursor, opencode, and Copilot**. Your context arrives as a local, gitignored file each agent reads — committed project instruction files are never touched.
-
-<p align="center">
-  <img src="docs/screenshots/loadouts.png" alt="load studio — the Loadouts tab: composing a machine loadout from fragments, with live script re-runs" width="900">
-</p>
-<p align="center"><sub><i><code>load studio</code> — assemble reusable context kits from your fragment library.</i></sub></p>
 
 ---
 
@@ -133,7 +126,7 @@ multiple loadouts match     →  ask once, then remember the choice for this pro
 A loadout carries your *context*. A **workflow** carries your *process* — the way you like to work, across every agent. Loadout exposes one fixed set of six slash commands — `/loadout:explore`, `brainstorm`, `plan`, `implement`, `verify`, `ship` — and the workflow your loadout equips decides what each step *means*. "Plan like spec-kit" and "plan compound-style" are the same `/loadout:plan`, carrying different instructions.
 
 <p align="center">
-  <img src="docs/screenshots/workflows.png" alt="load studio — the Workflows tab: a gallery of built-in processes mapped onto the fixed explore/brainstorm/plan/implement/verify/ship spine" width="900">
+  <img src="docs/screenshots/workflows.png" alt="load studio — the workflows library: a gallery of built-in processes mapped onto the fixed explore/brainstorm/plan/implement/verify/ship spine" width="900">
 </p>
 <p align="center"><sub><i><code>load studio</code> — pick a house process, or build your own; each fills the same six-command spine.</i></sub></p>
 
@@ -187,6 +180,11 @@ It never edits committed shared files like `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`
 ```bash
 load studio
 ```
+
+<p align="center">
+  <img src="docs/screenshots/loadouts.png" alt="load studio — the rust loadout selected: its targets, eight fragments, and the superpowers workflow slot" width="900">
+</p>
+<p align="center"><sub><i><code>load studio</code> — a loadout is targets + fragments + an optional workflow, composed visually.</i></sub></p>
 
 Use it to create and edit fragments, compose loadouts, assign them to targets, browse and build [workflows](#workflows), preview generated overlays, run dynamic fragment previews, and review diffs before applying.
 
@@ -251,6 +249,9 @@ A read-only **palette** of starter fragments also ships inside the binary; dupli
 | `load detect [--probes]`                     | Print detected context and optional provider data                   |
 | `load doctor`                                | Diagnose config, agents, overlays, and safety issues                |
 | `load plan [check\|render\|schema\|clean]`   | Validate, render, and review an agent-written development plan       |
+| `load trust [--rebuild]`                     | Show the per-machine script-trust store (`--rebuild` re-approves all) |
+| `load fragments trust <id>`                  | Re-approve a fragment's script after an out-of-band change          |
+| `load targets trust <id>`                    | Re-approve a target's script after an out-of-band change            |
 | `load sync [init [url]\|clone <url>]`        | Sync global config across machines                                  |
 | `load skill [install\|remove\|status]`       | Manage embedded agent skills                                        |
 | `load update [--check]`                      | Self-update installer-based installs                                |
@@ -278,6 +279,13 @@ Installer-based installs update in place with `load update`. From source:
 ```bash
 cargo install --git https://github.com/elleryfamilia/loadout
 ```
+
+**Verified install channels.** These are the only official sources — treat a binary from anywhere else as untrusted:
+
+- **GitHub releases** — <https://github.com/elleryfamilia/loadout/releases>: the prebuilt binaries and the installer script above, built by cargo-dist from tagged commits of this repo.
+- **This repo, from source** — the `cargo install --git …` line above, or a clone and `cargo build`.
+
+An npm installer is planned and will be announced here when it ships. There is no official Homebrew tap or third-party package today.
 
 ---
 

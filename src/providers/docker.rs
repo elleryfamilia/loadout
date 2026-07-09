@@ -49,7 +49,11 @@ impl EnvProvider for DockerProvider {
                 .map(|c| serde_json::json!({"name": c.name, "image": c.image, "status": c.status}))
                 .collect(),
         );
-        Ok(Some(ProviderOutput { text, data }))
+        Ok(Some(ProviderOutput {
+            text,
+            data,
+            redacted: 0,
+        }))
     }
 }
 

@@ -108,7 +108,11 @@ impl EnvProvider for TailnetProvider {
                 })
                 .collect(),
         );
-        Ok(Some(ProviderOutput { text, data }))
+        Ok(Some(ProviderOutput {
+            text,
+            data,
+            redacted: 0,
+        }))
     }
 }
 

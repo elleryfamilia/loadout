@@ -50,6 +50,7 @@ pub mod style;
 pub mod sync;
 pub mod target;
 pub mod templates;
+pub mod trust;
 pub mod tui;
 pub mod update;
 pub mod workflow;

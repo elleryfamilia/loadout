@@ -62,5 +62,30 @@ pub fn run(rt: &Runtime, args: &EditArgs) -> crate::Result<()> {
     if !status.success() {
         bail!("editor '{editor}' exited without success ({status})");
     }
+
+    // The explicit edit is the approval: re-record trust for every
+    // script-bearing object defined in the file that was just edited (the
+    // global config layer). Best-effort — trust must never fail the edit
+    // itself.
+    if let Ok(config) = Config::load(&context::repo_base_for(&rt.cwd)) {
+        let mut store = crate::trust::TrustStore::load_default();
+        for cap in &config.fragments {
+            if cap.origin == crate::fragment::Layer::Global {
+                if let Some(h) = crate::trust::fragment_hashes(cap) {
+                    let _ = store.record(crate::trust::Kind::Fragment, &cap.id, &h);
+                }
+            }
+        }
+        for t in &config.targets {
+            if t.origin == crate::fragment::Layer::Global && t.rule.has_script() {
+                let _ = store.record(
+                    crate::trust::Kind::Target,
+                    &t.id,
+                    &crate::trust::target_hashes(t),
+                );
+            }
+        }
+    }
+
     Ok(())
 }

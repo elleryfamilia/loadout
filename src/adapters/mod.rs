@@ -122,6 +122,13 @@ pub struct AgentDescriptor {
     /// Ignored unless `commands_dir` is set; defaults to markdown.
     #[serde(default)]
     pub command_format: Option<commands::CommandFormat>,
+    /// Native review commands to run during the verify stage (e.g. Claude
+    /// Code's `/code-review`, `/security-review`). Built-in descriptor data
+    /// only — deliberately NOT part of the `[[agents]]` config schema
+    /// (`deny_unknown_fields` still rejects it there), so a newer-written,
+    /// synced config can never brick an older binary.
+    #[serde(skip)]
+    pub review_commands: Vec<String>,
 }
 
 fn default_template() -> String {
@@ -213,6 +220,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             launch_context_dir: None,
             commands_dir: None,
             command_format: None,
+            review_commands: Vec::new(),
         }
     }
     vec![
@@ -224,6 +232,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             // Claude reads project commands from `.claude/commands/`; a `loadout/`
             // subdir namespaces them as `/loadout:<stage>`.
             commands_dir: Some(".claude/commands".into()),
+            review_commands: vec!["/code-review".into(), "/security-review".into()],
             ..d("claude", "claude.md")
         },
         AgentDescriptor {
@@ -456,7 +465,15 @@ pub fn apply(
         opts.workflow_override.as_deref(),
         app.composition.primary_profile(),
     );
-    let rendered = render_overlay(d, app, workflow.as_ref())?;
+    let mut rendered = render_overlay(d, app, workflow.as_ref())?;
+    rendered.content = redact_artifact(std::mem::take(&mut rendered.content), "overlay");
+    // `profile_guidance` is injected into the launch prompt off-repo
+    // (`--append-system-prompt`), not just written to the overlay. Its fragment
+    // sections were already redacted at render, but the appended workflow-map
+    // section was not — scrub it here so a secret in a workflow step can't reach
+    // the agent's prompt. Silent (no warning): the same secret already surfaced
+    // via the overlay pass above; this is idempotent over already-redacted text.
+    rendered.profile_guidance = crate::redact::redact_secrets(&rendered.profile_guidance);
     let mut files = Vec::new();
     let mut warnings = Vec::new();
     let mut notes = Vec::new();
@@ -869,6 +886,21 @@ fn render_overlay(
     })
 }
 
+/// Belt-and-braces: final redaction over loadout-generated artifact bytes just
+/// before they are written. Fragment-sourced secrets were already caught (and
+/// warned about, naming the fragment) at render time; anything caught here
+/// came from a non-fragment channel (header, workflow text), so the warning
+/// names the artifact instead. Repo-authored base content merged around a
+/// marker block is deliberately NOT covered — the repo's own text is the
+/// repo's business.
+fn redact_artifact(content: String, what: &str) -> String {
+    let (clean, n) = crate::redact::redact_secrets_report(&content);
+    if n > 0 {
+        crate::warn_user!("redacted a token-like string in generated {what} — check its sources");
+    }
+    clean
+}
+
 /// The directory loadout owns under an agent's command dir, for `wf`'s stages.
 fn command_namespace_dir(repo_base: &Path, commands_dir: &str) -> PathBuf {
     repo_base
@@ -901,7 +933,7 @@ fn write_stage_commands(
         .command_format
         .unwrap_or(commands::CommandFormat::Markdown);
     let ns_dir = command_namespace_dir(app.repo_base(), commands_dir);
-    let generated = commands::stage_commands(wf, format);
+    let generated = commands::stage_commands(wf, format, &d.review_commands);
     // A command's top-level entry in the namespace dir: the file itself, or —
     // for folder-shaped formats (Cursor skills' `loadout-plan/SKILL.md`) — the
     // folder. Pruning compares at that level.
@@ -926,10 +958,8 @@ fn write_stage_commands(
     }
 
     for cmd in &generated {
-        files.push(
-            app.writer
-                .write(&ns_dir.join(&cmd.filename), &cmd.content)?,
-        );
+        let content = redact_artifact(cmd.content.clone(), &cmd.filename);
+        files.push(app.writer.write(&ns_dir.join(&cmd.filename), &content)?);
     }
     Ok(())
 }

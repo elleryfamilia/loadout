@@ -122,6 +122,21 @@ upstream = "skills/ce-compound/SKILL.md"
 vendored = "vendored/compound-engineering/ce-compound.SKILL.md"
 step = "compound (extra)"
 
+# Security-review checklist prompt for the verify step, for agents that have no
+# native security-review command of their own to fall back on.
+[[source]]
+id = "security-review"
+repo = "anthropics/claude-code-security-review"
+homepage = "https://github.com/anthropics/claude-code-security-review"
+license = "MIT"
+ref_strategy = "commit"
+release = "none (repo has cut no GitHub releases; pinned from default-branch HEAD)"
+commit = "0c6a49f1fa56a1d472575da86a94dbc1edb78eda"
+
+[[source.files]]
+upstream = ".claude/commands/security-review.md"
+vendored = "vendored/security-review/security-review.md"
+step = "verify"
 # --- UI assets (not workflow content) ---------------------------------------
 #
 # Everything above this line is workflow *content* (skill/command text) that

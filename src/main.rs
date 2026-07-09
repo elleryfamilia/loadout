@@ -41,6 +41,8 @@ fn main() -> ExitCode {
         Command::Use(args) => commands::bind::run(&rt, args),
         Command::List(args) => commands::introspect::list(&rt, args),
         Command::Edit(args) => commands::edit::run(&rt, args),
+        Command::Targets(args) => commands::trust::targets(&rt, args),
+        Command::Trust(args) => commands::trust::run(&rt, args),
         // Bare `load <agent> [args…]` — the implicit form of `run`.
         Command::Launch(argv) => commands::run::run(&rt, &RunArgs::from_launch(argv.clone())),
     };
