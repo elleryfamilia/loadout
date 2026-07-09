@@ -812,6 +812,35 @@ fn doctor_flags_repo_declared_caps_and_profiles() {
 }
 
 #[test]
+fn refresh_all_agents_warns_once_per_changed_script() {
+    // `refresh --agent all` resolves the same fragment once per agent (seven of
+    // them), so a changed script must warn once, not once per agent.
+    let fx = Fixture::new();
+    fx.rust_project();
+    let cfg = "[[fragments]]\n\
+               id = \"probe\"\n\
+               command = \"echo one\"\n\
+               guidance = \"{{ provider.output }}\"\n\
+               \n\
+               [[loadouts]]\n\
+               name = \"dev\"\n\
+               fragments = [\"probe\"]\n";
+    fx.author(cfg);
+    fx.cmd()
+        .args(["refresh", "--agent", "all"])
+        .assert()
+        .success(); // TOFU
+    fx.author(&cfg.replace("echo one", "echo two"));
+    fx.cmd()
+        .args(["refresh", "--agent", "all"])
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("script fragment 'probe' changed outside loadout").count(1),
+        );
+}
+
+#[test]
 fn doctor_warns_when_a_script_fragment_changed_outside_loadout() {
     // `load doctor` executes script fragments to diagnose output-dropping, so it
     // is a script execution site and must warn on an out-of-band change like the

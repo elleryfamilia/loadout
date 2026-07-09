@@ -18,6 +18,12 @@ use serde::{Deserialize, Serialize};
 /// File name inside the state dir.
 pub const STORE_FILE: &str = "trust.json";
 
+/// Schema version of the on-disk store. A store written by a newer loadout
+/// (a higher version) is refused rather than misread — an older binary can't
+/// know a newer schema's meaning, and silently reading it as this version could
+/// misjudge trust. `load trust --rebuild` rewrites it at this version.
+const STORE_VERSION: u32 = 1;
+
 /// Which kind of object owns the scripts (keys are namespaced by it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -58,7 +64,7 @@ struct StoreFile {
 impl Default for StoreFile {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: STORE_VERSION,
             entries: BTreeMap::new(),
         }
     }
@@ -108,6 +114,10 @@ impl TrustStore {
         let (file, corrupt) = match std::fs::read_to_string(path) {
             Err(_) => (StoreFile::default(), false),
             Ok(text) => match serde_json::from_str::<StoreFile>(&text) {
+                // A store written by a newer loadout is refused, not misread —
+                // treated like a corrupt store (loud, record refused, rebuild
+                // recovers) rather than silently reinterpreted as this version.
+                Ok(f) if f.version > STORE_VERSION => (StoreFile::default(), true),
                 Ok(f) => (f, false),
                 Err(_) => (StoreFile::default(), true),
             },
@@ -222,6 +232,19 @@ fn store() -> &'static Mutex<TrustStore> {
     STORE.get_or_init(|| Mutex::new(TrustStore::load_default()))
 }
 
+/// True the first time a given object triggers a change warning in this
+/// process, false thereafter — so `refresh --agent all`, which resolves the
+/// same fragment once per agent, prints the "changed outside loadout" line
+/// once, not once per agent.
+fn first_change_warning(kind: Kind, id: &str) -> bool {
+    static WARNED: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+    WARNED
+        .get_or_init(|| Mutex::new(BTreeSet::new()))
+        .lock()
+        .unwrap()
+        .insert(format!("{}:{}", kind.as_str(), id))
+}
+
 /// Consult-and-record at a script execution site. TOFU: a first sighting is
 /// recorded silently; a set difference warns (and keeps warning until
 /// re-approved) but does not block execution in this release.
@@ -237,7 +260,7 @@ pub fn check_and_warn(kind: Kind, id: &str, hashes: &BTreeSet<String>) {
                 crate::vlog!("could not record script trust for {} '{id}': {e}", kind.as_str());
             }
         }
-        TrustStatus::Changed => match kind {
+        TrustStatus::Changed if first_change_warning(kind, id) => match kind {
             Kind::Fragment => crate::warn_user!(
                 "script fragment '{id}' changed outside loadout — review it, then run 'load fragments trust {id}'"
             ),
@@ -245,6 +268,9 @@ pub fn check_and_warn(kind: Kind, id: &str, hashes: &BTreeSet<String>) {
                 "target '{id}' script changed outside loadout — review it, then run 'load targets trust {id}'"
             ),
         },
+        // Already warned about this object this process (e.g. `refresh
+        // --agent all` resolves the same fragment once per agent) — stay quiet.
+        TrustStatus::Changed => {}
         TrustStatus::Unavailable => {
             static WARNED: Once = Once::new();
             WARNED.call_once(|| {
@@ -321,6 +347,27 @@ mod tests {
             .record(Kind::Target, "t", &hs(&["sha256:aa"]))
             .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+
+    #[test]
+    fn store_from_a_newer_loadout_is_refused_not_misread() {
+        // A higher schema version means a newer loadout wrote it; an older
+        // binary must refuse it (like corruption), not reinterpret its entries.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust.json");
+        let newer = r#"{"version":999,"entries":{"fragment:x":["sha256:aa"]}}"#;
+        std::fs::write(&path, newer).unwrap();
+        let mut store = TrustStore::load_from(&path);
+        assert!(store.is_corrupt());
+        assert_eq!(
+            store.status(Kind::Fragment, "x", &hs(&["sha256:aa"])),
+            TrustStatus::Unavailable
+        );
+        // Not overwritten: the newer store's bytes are preserved.
+        store
+            .record(Kind::Fragment, "x", &hs(&["sha256:aa"]))
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
     }
 
     #[test]
