@@ -1,10 +1,10 @@
 //! `load doctor` — diagnose environment, config, and generated state.
 
 use std::path::Path;
-use std::process::Command;
 
 use super::checks::{self, Status};
 use super::{prepare, Runtime};
+use crate::providers::CliProbe;
 use crate::render::header;
 use crate::{config, templates};
 
@@ -39,14 +39,13 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     let mut c = Checks::new();
 
     println!("Environment");
-    match Command::new("git").arg("--version").output() {
-        Ok(o) if o.status.success() => {
-            c.line(
-                Status::Ok,
-                format!("git: {}", String::from_utf8_lossy(&o.stdout).trim()),
-            );
-        }
-        _ => c.line(
+    match crate::providers::probe_cli("git") {
+        CliProbe::Found(version) => c.line(Status::Ok, format!("git: {version}")),
+        CliProbe::TimedOut => c.line(
+            Status::Warn,
+            "git: probe timed out — git is installed but not responding",
+        ),
+        CliProbe::Missing => c.line(
             Status::Fail,
             "git not found on PATH (git detection disabled)",
         ),
@@ -102,16 +101,25 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     println!("\nAgents ({} configured)", prep.config.agents.len());
     for a in &prep.config.agents {
         match &a.launch {
-            Some(prog) if on_path(prog) => {
-                c.line(Status::Ok, format!("{}: CLI '{prog}' found", a.id))
-            }
-            Some(prog) => c.line(
-                Status::Warn,
-                format!(
-                    "{}: CLI '{prog}' not on PATH (needed for `run {}`)",
-                    a.id, a.id
+            Some(prog) => match crate::providers::probe_cli(prog) {
+                CliProbe::Found(_) => {
+                    c.line(Status::Ok, format!("{}: CLI '{prog}' found", a.id))
+                }
+                CliProbe::TimedOut => c.line(
+                    Status::Warn,
+                    format!(
+                        "{}: CLI '{prog}' is installed but its version probe timed out — the CLI may be wedged",
+                        a.id
+                    ),
                 ),
-            ),
+                CliProbe::Missing => c.line(
+                    Status::Warn,
+                    format!(
+                        "{}: CLI '{prog}' not on PATH (needed for `run {}`)",
+                        a.id, a.id
+                    ),
+                ),
+            },
             None => c.line(Status::Ok, format!("{}: render-only", a.id)),
         }
         check_hook_registry(&mut c, a);
@@ -330,15 +338,6 @@ fn print_summary(c: &Checks) {
     } else {
         println!("doctor: all good ✓");
     }
-}
-
-fn on_path(program: &str) -> bool {
-    // `command -v` is portable across the shells we target.
-    Command::new(program)
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success() || !o.stdout.is_empty())
-        .unwrap_or(false)
 }
 
 fn writable(dir: &Path) -> bool {
