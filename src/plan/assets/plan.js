@@ -304,11 +304,19 @@
          placeholder) differ. */
       const kind = ref.split(":")[0];
       const isQuestion = kind === "question";
+      const label = isQuestion ? "Answer" : "Comment";
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "comment-btn";
       btn.appendChild(commentIcon());
-      btn.appendChild(document.createTextNode(isQuestion ? "Answer" : "Comment"));
+      /* The label rides in a span so CSS can collapse the button to
+         icon-only where a full button doesn't fit (the per-criterion
+         line anchors); title + aria-label keep the name either way. */
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "comment-btn-label";
+      labelSpan.textContent = label;
+      btn.appendChild(labelSpan);
+      btn.title = label;
       btn.setAttribute("aria-label", isQuestion ? "Answer this question" : "Add comment");
 
       const box = document.createElement("div");
@@ -488,7 +496,15 @@
       const ref = details.getAttribute("data-plan-ref");
       const heading = details.querySelector("summary h2");
       if (!ref || !heading) return;
-      heading.appendChild(addReviewedBox(details, ref));
+      /* Before the teaser (a block-level span), so the toggle stays on the
+         title line instead of wrapping under the description. */
+      const teaser = heading.querySelector(".phase-teaser");
+      const toggle = addReviewedBox(details, ref);
+      if (teaser) {
+        heading.insertBefore(toggle, teaser);
+      } else {
+        heading.appendChild(toggle);
+      }
     });
 
     taskEls.forEach(function (el) {

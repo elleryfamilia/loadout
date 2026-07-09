@@ -616,6 +616,34 @@ pre {
   flex: none;
 }
 
+/* Per-criterion comment anchors: each acceptance <li> carries its task's
+   ref so a comment can quote the exact criterion, but a persistent
+   labeled button per ~one-line <li> overflowed its line and stacked into
+   the neighbours'. Line anchors get the line-comment treatment instead:
+   icon-only, vertically centered on their own line, and revealed only on
+   hover or keyboard focus. The card-level buttons stay persistent. */
+.acceptance li { padding-right: 2rem; }
+
+.acceptance .comment-btn {
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  padding: 0.3em;
+  opacity: 0;
+  transition: opacity 80ms ease-in;
+}
+
+.acceptance .comment-btn .comment-btn-label { display: none; }
+
+.acceptance li:hover .comment-btn,
+.acceptance li:focus-within .comment-btn {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acceptance .comment-btn { transition: none; }
+}
+
 .comment-box {
   margin: 0.5rem 0;
   padding: 0.6rem;
@@ -1046,11 +1074,19 @@ pre {
          placeholder) differ. */
       const kind = ref.split(":")[0];
       const isQuestion = kind === "question";
+      const label = isQuestion ? "Answer" : "Comment";
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "comment-btn";
       btn.appendChild(commentIcon());
-      btn.appendChild(document.createTextNode(isQuestion ? "Answer" : "Comment"));
+      /* The label rides in a span so CSS can collapse the button to
+         icon-only where a full button doesn't fit (the per-criterion
+         line anchors); title + aria-label keep the name either way. */
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "comment-btn-label";
+      labelSpan.textContent = label;
+      btn.appendChild(labelSpan);
+      btn.title = label;
       btn.setAttribute("aria-label", isQuestion ? "Answer this question" : "Add comment");
 
       const box = document.createElement("div");
@@ -1230,7 +1266,15 @@ pre {
       const ref = details.getAttribute("data-plan-ref");
       const heading = details.querySelector("summary h2");
       if (!ref || !heading) return;
-      heading.appendChild(addReviewedBox(details, ref));
+      /* Before the teaser (a block-level span), so the toggle stays on the
+         title line instead of wrapping under the description. */
+      const teaser = heading.querySelector(".phase-teaser");
+      const toggle = addReviewedBox(details, ref);
+      if (teaser) {
+        heading.insertBefore(toggle, teaser);
+      } else {
+        heading.appendChild(toggle);
+      }
     });
 
     taskEls.forEach(function (el) {
