@@ -445,31 +445,43 @@
     }
 
     function addReviewedBox(container, ref) {
+      /* A bare checkbox read as decoration at first glance (first-dogfood
+         feedback) -- the visible label says what checking it does, and
+         flips to a past-tense confirmation once checked. */
+      const label = document.createElement("label");
+      label.className = "reviewed-toggle";
       const box = document.createElement("input");
       box.type = "checkbox";
       box.className = "reviewed-box";
-      box.setAttribute("aria-label", "mark reviewed");
+      const text = document.createElement("span");
+      text.className = "reviewed-toggle-text";
+      function sync() {
+        text.textContent = box.checked ? "Reviewed" : "Mark reviewed";
+        container.classList.toggle("is-reviewed", box.checked);
+      }
       box.checked = reviewed.has(ref);
-      if (box.checked) container.classList.add("is-reviewed");
-      box.addEventListener("click", function (e) {
-        /* A checkbox nested inside a <summary> still bubbles its click up
+      sync();
+      label.appendChild(box);
+      label.appendChild(text);
+      label.addEventListener("click", function (e) {
+        /* A control nested inside a <summary> still bubbles its click up
            to the <summary>'s default action (toggling the parent
-           <details> open/closed) unless stopped here -- checking the box
-           should not also collapse or expand the phase. */
+           <details> open/closed) unless stopped here -- marking reviewed
+           should not also collapse or expand the phase. On the label, so
+           it covers clicks on the text as well as the box. */
         e.stopPropagation();
       });
       box.addEventListener("change", function () {
         if (box.checked) {
           reviewed.add(ref);
-          container.classList.add("is-reviewed");
         } else {
           reviewed.delete(ref);
-          container.classList.remove("is-reviewed");
         }
+        sync();
         persistReviewed();
         renderReviewedCount();
       });
-      return box;
+      return label;
     }
 
     document.querySelectorAll("details.phase").forEach(function (details) {

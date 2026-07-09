@@ -507,12 +507,15 @@ pub fn render(plan: &Plan) -> String {
             }
             body data-plan-fingerprint=(hash) {
                 header {
-                    h1 { (plan.meta.title) }
+                    // Eyebrow above the title: the metadata a reader wants
+                    // placed before the name, not after it.
                     p.meta {
                         "plan " code { (plan.meta.id) }
                         @if let Some(rev) = plan.meta.revision { " · revision " (rev) }
                         @if let Some(agent) = &plan.meta.agent { " · by " (agent) }
+                        @if let Some(created) = &plan.meta.created { " · " (created) }
                     }
+                    h1 { (plan.meta.title) }
                     (md(&plan.meta.goal_md))
                 }
                 // A labeled section heading, same convention as Open
@@ -526,20 +529,77 @@ pub fn render(plan: &Plan) -> String {
                 // whole" reads as commenting on the executive summary, and
                 // the byline gave the button no visible target worth quoting.
                 section.plan-summary data-plan-ref=(format!("meta:{}", plan.meta.id)) {
-                    // (a) The executive summary itself — the top of the page,
-                    // so a reader who stops here still gets a correct
-                    // high-level picture. Never fabricated: absent summary_md
-                    // gets a plain note, not invented content.
-                    div.summary-exec {
-                        @if let Some(summary) = &plan.meta.summary_md {
-                            (PreEscaped(crate::markdown::render_markdown(summary)))
-                        } @else {
-                            p.summary-missing {
-                                "No executive summary — the plan author can set meta.summary_md."
+                    // Two zones side by side on wide viewports (first-dogfood
+                    // feedback: the exec prose alone left half the card
+                    // empty): the prose on the left, an "at a glance" rail —
+                    // counts, per-phase rollup, risk register, the ask — on
+                    // the right, where a scanner looks first.
+                    div.summary-grid {
+                        // (a) The executive summary itself — the top of the
+                        // page, so a reader who stops here still gets a
+                        // correct high-level picture. Never fabricated:
+                        // absent summary_md gets a plain note, not invented
+                        // content.
+                        div.summary-exec {
+                            @if let Some(summary) = &plan.meta.summary_md {
+                                (PreEscaped(crate::markdown::render_markdown(summary)))
+                            } @else {
+                                p.summary-missing {
+                                    "No executive summary — the plan author can set meta.summary_md."
+                                }
+                            }
+                        }
+                        aside.summary-glance {
+                            p.glance-title { "At a glance" }
+                            // (e) Whole-plan counts, the per-phase rollup,
+                            // the risk register counts (distinct from the
+                            // per-task risk heat shown per phase below).
+                            p.summary-counts { (summary_counts_line(plan)) }
+                            @if !plan.phases.is_empty() {
+                                table.summary-phases {
+                                    thead {
+                                        tr { th { "Phase" } th { "Tasks" } th { "Estimate" } th { "Risk" } }
+                                    }
+                                    tbody {
+                                        @for phase in &plan.phases {
+                                            tr {
+                                                td { a href=(format!("#phase-{}", phase.id)) { (phase.title) } }
+                                                td { (phase.tasks.len().to_string()) }
+                                                td { (phase_estimate_dist(phase)) }
+                                                td { (phase_risk_heat(phase)) }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            @if let Some((line, has_high)) = &risk_line {
+                                p class=(if *has_high { "summary-risks has-high" } else { "summary-risks" }) {
+                                    (line)
+                                }
+                            }
+                            // (d) The ask: whether this plan can move
+                            // forward as-is — the rail's bottom line.
+                            p class=(if !blocking.is_empty() { "summary-ask has-blocking" } else { "summary-ask" }) {
+                                @if !blocking.is_empty() {
+                                    (format!(
+                                        "⚠ {} blocking question(s) must be resolved before implementation: ",
+                                        blocking.len()
+                                    ))
+                                    @for (i, q) in blocking.iter().enumerate() {
+                                        @if i > 0 { ", " }
+                                        a href=(format!("#question-{}", q.id)) {
+                                            (truncate_chars(&q.question_md, 100))
+                                        }
+                                    }
+                                } @else {
+                                    "No blocking questions — plan is ready to review and approve."
+                                }
                             }
                         }
                     }
-                    // (b) Supporting bullets, one per major workstream/decision.
+                    // (b) Supporting bullets, one per major workstream or
+                    // decision, spanning the card's full width below both
+                    // zones.
                     @if !plan.meta.key_points.is_empty() {
                         ul.summary-keypoints {
                             @for kp in &plan.meta.key_points {
@@ -555,49 +615,6 @@ pub fn render(plan: &Plan) -> String {
                                 @if i > 0 { ", " }
                                 (item)
                             }
-                        }
-                    }
-                    // (d) The ask: whether this plan can move forward as-is.
-                    p class=(if !blocking.is_empty() { "summary-ask has-blocking" } else { "summary-ask" }) {
-                        @if !blocking.is_empty() {
-                            (format!(
-                                "⚠ {} blocking question(s) must be resolved before implementation: ",
-                                blocking.len()
-                            ))
-                            @for (i, q) in blocking.iter().enumerate() {
-                                @if i > 0 { ", " }
-                                a href=(format!("#question-{}", q.id)) {
-                                    (truncate_chars(&q.question_md, 100))
-                                }
-                            }
-                        } @else {
-                            "No blocking questions — plan is ready to review and approve."
-                        }
-                    }
-                    // (e) Whole-plan counts, then a per-phase rollup table,
-                    // then the risk register counts (distinct from the
-                    // per-task risk heat shown per phase below).
-                    p.summary-counts { (summary_counts_line(plan)) }
-                    @if !plan.phases.is_empty() {
-                        table.summary-phases {
-                            thead {
-                                tr { th { "Phase" } th { "Tasks" } th { "Estimate" } th { "Risk" } }
-                            }
-                            tbody {
-                                @for phase in &plan.phases {
-                                    tr {
-                                        td { a href=(format!("#phase-{}", phase.id)) { (phase.title) } }
-                                        td { (phase.tasks.len().to_string()) }
-                                        td { (phase_estimate_dist(phase)) }
-                                        td { (phase_risk_heat(phase)) }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    @if let Some((line, has_high)) = &risk_line {
-                        p class=(if *has_high { "summary-risks has-high" } else { "summary-risks" }) {
-                            (line)
                         }
                     }
                 }
@@ -770,6 +787,32 @@ mod tests {
         // And the font did actually land: two @font-face blocks (400 + 600).
         assert_eq!(CSS.matches("@font-face").count(), 2);
         assert_eq!(CSS.matches("url(\"data:font/woff2;base64,").count(), 2);
+    }
+
+    #[test]
+    fn top_of_page_structure() {
+        let html = render(&plan_from("kitchen-sink.json"));
+        // Eyebrow (byline + created) renders above the h1.
+        let meta_pos = html.find("<p class=\"meta\">").expect("byline eyebrow");
+        let h1_pos = html.find("<h1>").expect("title");
+        assert!(meta_pos < h1_pos, "eyebrow above the title");
+        assert!(html.contains(" · 2026-07-07"), "created date in eyebrow");
+        // Exec prose and the at-a-glance rail share the summary grid; the
+        // ask lives at the rail's bottom; key points span below the grid.
+        // (Tag-anchored substrings — bare class names also appear in the
+        // embedded stylesheet.)
+        let grid_pos = html.find("<div class=\"summary-grid\">").expect("grid");
+        let glance_pos = html
+            .find("<aside class=\"summary-glance\">")
+            .expect("glance rail");
+        let ask_pos = html.find("<p class=\"summary-ask").expect("ask");
+        let keypoints_pos = html
+            .find("<ul class=\"summary-keypoints\">")
+            .expect("keypoints");
+        assert!(grid_pos < glance_pos, "rail inside the grid");
+        assert!(glance_pos < ask_pos, "ask inside the rail");
+        assert!(ask_pos < keypoints_pos, "key points after the grid");
+        assert!(html.contains("At a glance"));
     }
 
     #[test]

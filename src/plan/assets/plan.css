@@ -86,7 +86,15 @@ h3 { font-size: 1rem; margin: 0 0 0.5rem; }
 details.phase > summary h2 { margin: 0; }
 
 /* The header's plan-id/revision/agent line: metadata, not content. */
-header .meta { color: var(--muted); font-size: 0.9em; margin: 0 0 0.75rem; }
+/* Eyebrow above the h1: quiet metadata a reader takes in before the title.
+   No text-transform — the plan id's casing is meaningful. */
+header .meta {
+  color: var(--muted);
+  font-size: 0.8em;
+  letter-spacing: 0.02em;
+  margin: 0 0 0.3rem;
+}
+header h1 { margin: 0 0 0.6rem; }
 
 header { margin: 0 0 1.5rem; }
 
@@ -277,6 +285,40 @@ details.phase > :not(summary):not(.task) {
 
 /* Executive summary — the first thing in the summary card, slightly larger
    than body text since it carries the most weight per word on the page. */
+/* Two-zone summary card (first-dogfood feedback): exec prose left, an
+   "at a glance" rail right on wide viewports, stacked on narrow ones. The
+   rail is an inset panel — one step down from the card, so it reads as
+   supporting data, not a second card. */
+.summary-grid { display: grid; gap: 1.5rem; margin: 0 0 1rem; }
+
+@media (min-width: 1100px) {
+  .summary-grid {
+    grid-template-columns: minmax(0, 1fr) 340px;
+    align-items: start;
+    gap: 2.5rem;
+  }
+}
+
+.summary-glance {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+}
+
+.glance-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* A gentle lede: the exec summary's opening paragraph sits a step larger,
+   giving the prose a visual way in. */
+.summary-exec > p:first-child { font-size: 1.05em; }
+
 .summary-exec {
   font-size: 1.05em;
   margin: 0 0 1rem;
@@ -320,7 +362,7 @@ details.phase > :not(summary):not(.task) {
 /* The ask banner — computed, not authored: loud red when something is
    blocking, calm green once nothing is. */
 .summary-ask {
-  margin: 0 0 0.75rem;
+  margin: 0.75rem 0 0;
   padding: 0.55rem 0.8rem;
   border-radius: 6px;
   font-weight: 600;
@@ -385,17 +427,65 @@ section.risks {
 
 .expand-ctl button:hover { color: var(--fg); border-color: var(--accent); }
 
-/* Reviewed-state tracking: a small checkbox on a phase's summary line or a
-   task card's heading; checking it dims the whole card slightly. */
+/* Reviewed-state tracking: a labeled toggle on a phase's summary line or a
+   task card's heading; checking it dims the whole card slightly. The label
+   text ("Mark reviewed" → "Reviewed") is set by plan.js. */
+.reviewed-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reviewed-toggle:hover { color: var(--fg); }
+
 .reviewed-box {
-  width: 1rem;
-  height: 1rem;
-  margin-left: 0.5rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0;
   vertical-align: middle;
   cursor: pointer;
 }
 
 .is-reviewed { opacity: 0.6; }
+
+/* Markdown content inside cards: authors can use tables, code blocks, and
+   task lists in any *_md field — style them to the card's scale, and keep
+   wide tables scrolling inside their own box rather than the page. */
+.task table:not(.summary-phases),
+.summary-exec table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.task table:not(.summary-phases) th,
+.task table:not(.summary-phases) td,
+.summary-exec th,
+.summary-exec td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.6rem;
+  text-align: left;
+}
+
+pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  font-size: 0.9em;
+}
 
 [data-plan-ref] { position: relative; }
 

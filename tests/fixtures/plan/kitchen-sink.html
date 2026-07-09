@@ -87,7 +87,15 @@ h3 { font-size: 1rem; margin: 0 0 0.5rem; }
 details.phase > summary h2 { margin: 0; }
 
 /* The header's plan-id/revision/agent line: metadata, not content. */
-header .meta { color: var(--muted); font-size: 0.9em; margin: 0 0 0.75rem; }
+/* Eyebrow above the h1: quiet metadata a reader takes in before the title.
+   No text-transform — the plan id's casing is meaningful. */
+header .meta {
+  color: var(--muted);
+  font-size: 0.8em;
+  letter-spacing: 0.02em;
+  margin: 0 0 0.3rem;
+}
+header h1 { margin: 0 0 0.6rem; }
 
 header { margin: 0 0 1.5rem; }
 
@@ -278,6 +286,40 @@ details.phase > :not(summary):not(.task) {
 
 /* Executive summary — the first thing in the summary card, slightly larger
    than body text since it carries the most weight per word on the page. */
+/* Two-zone summary card (first-dogfood feedback): exec prose left, an
+   "at a glance" rail right on wide viewports, stacked on narrow ones. The
+   rail is an inset panel — one step down from the card, so it reads as
+   supporting data, not a second card. */
+.summary-grid { display: grid; gap: 1.5rem; margin: 0 0 1rem; }
+
+@media (min-width: 1100px) {
+  .summary-grid {
+    grid-template-columns: minmax(0, 1fr) 340px;
+    align-items: start;
+    gap: 2.5rem;
+  }
+}
+
+.summary-glance {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+}
+
+.glance-title {
+  margin: 0 0 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* A gentle lede: the exec summary's opening paragraph sits a step larger,
+   giving the prose a visual way in. */
+.summary-exec > p:first-child { font-size: 1.05em; }
+
 .summary-exec {
   font-size: 1.05em;
   margin: 0 0 1rem;
@@ -321,7 +363,7 @@ details.phase > :not(summary):not(.task) {
 /* The ask banner — computed, not authored: loud red when something is
    blocking, calm green once nothing is. */
 .summary-ask {
-  margin: 0 0 0.75rem;
+  margin: 0.75rem 0 0;
   padding: 0.55rem 0.8rem;
   border-radius: 6px;
   font-weight: 600;
@@ -386,17 +428,65 @@ section.risks {
 
 .expand-ctl button:hover { color: var(--fg); border-color: var(--accent); }
 
-/* Reviewed-state tracking: a small checkbox on a phase's summary line or a
-   task card's heading; checking it dims the whole card slightly. */
+/* Reviewed-state tracking: a labeled toggle on a phase's summary line or a
+   task card's heading; checking it dims the whole card slightly. The label
+   text ("Mark reviewed" → "Reviewed") is set by plan.js. */
+.reviewed-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: 0.75rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reviewed-toggle:hover { color: var(--fg); }
+
 .reviewed-box {
-  width: 1rem;
-  height: 1rem;
-  margin-left: 0.5rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0;
   vertical-align: middle;
   cursor: pointer;
 }
 
 .is-reviewed { opacity: 0.6; }
+
+/* Markdown content inside cards: authors can use tables, code blocks, and
+   task lists in any *_md field — style them to the card's scale, and keep
+   wide tables scrolling inside their own box rather than the page. */
+.task table:not(.summary-phases),
+.summary-exec table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.task table:not(.summary-phases) th,
+.task table:not(.summary-phases) td,
+.summary-exec th,
+.summary-exec td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.6rem;
+  text-align: left;
+}
+
+pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  font-size: 0.9em;
+}
 
 [data-plan-ref] { position: relative; }
 
@@ -591,18 +681,18 @@ section.risks {
   cursor: pointer;
   font-weight: 600;
 }
-</style></head><body data-plan-fingerprint="sha256:699871414238a39a2db87e400affe5dfdc397fbf6bbcde124e0b394ab04812cf"><header><h1>Auth refactor</h1><p class="meta">plan <code>auth-refactor</code> · revision 2 · by claude</p><p>Extract <em>session</em> handling.</p>
+</style></head><body data-plan-fingerprint="sha256:699871414238a39a2db87e400affe5dfdc397fbf6bbcde124e0b394ab04812cf"><header><p class="meta">plan <code>auth-refactor</code> · revision 2 · by claude · 2026-07-07</p><h1>Auth refactor</h1><p>Extract <em>session</em> handling.</p>
 </header><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" />
   <path d="M14 2v5a1 1 0 0 0 1 1h5" />
   <path d="M10 9H8" />
   <path d="M16 13H8" />
   <path d="M16 17H8" />
-</svg> Summary</h2><section class="plan-summary" data-plan-ref="meta:auth-refactor"><div class="summary-exec"><p>This refactor extracts <code>SessionStore</code> behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the <em>lock contention</em> risk by sharding the store. The ask: review the trait boundary in <code>t-session-store</code> before Redis work starts.</p>
-</div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
+</svg> Summary</h2><section class="plan-summary" data-plan-ref="meta:auth-refactor"><div class="summary-grid"><div class="summary-exec"><p>This refactor extracts <code>SessionStore</code> behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the <em>lock contention</em> risk by sharding the store. The ask: review the trait boundary in <code>t-session-store</code> before Redis work starts.</p>
+</div><aside class="summary-glance"><p class="glance-title">At a glance</p><p class="summary-counts">5 tasks · 2 phases · 1 small · 1 medium · 1 large · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><table class="summary-phases"><thead><tr><th>Phase</th><th>Tasks</th><th>Estimate</th><th>Risk</th></tr></thead><tbody><tr><td><a href="#phase-p-core">Core</a></td><td>2</td><td>1 small, 1 medium</td><td>1 medium</td></tr><tr><td><a href="#phase-p-backend">Backend</a></td><td>3</td><td>1 large</td><td>1 high</td></tr></tbody></table><p class="summary-risks has-high">1 risk (1 high)</p><p class="summary-ask has-blocking">⚠ 1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></p></aside></div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
 </li><li><p><strong>Redis backend</strong> (<code>t-redis</code>) is blocked on the trait boundary landing first.</p>
 </li><li><p><strong>Lock contention</strong> (<code>r-locking</code>) is mitigated by sharding the store, not by removing the lock.</p>
-</li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p><p class="summary-ask has-blocking">⚠ 1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></p><p class="summary-counts">5 tasks · 2 phases · 1 small · 1 medium · 1 large · 1 done · 1 in_progress · 1 blocked · 1 planned · 1 cut</p><table class="summary-phases"><thead><tr><th>Phase</th><th>Tasks</th><th>Estimate</th><th>Risk</th></tr></thead><tbody><tr><td><a href="#phase-p-core">Core</a></td><td>2</td><td>1 small, 1 medium</td><td>1 medium</td></tr><tr><td><a href="#phase-p-backend">Backend</a></td><td>3</td><td>1 large</td><td>1 high</td></tr></tbody></table><p class="summary-risks has-high">1 risk (1 high)</p></section><section class="questions"><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+</li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p></section><section class="questions"><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="m21 21-4.34-4.34" />
   <circle cx="11" cy="11" r="8" />
 </svg> Open questions</h2><div class="task" id="question-q-ttl" data-plan-ref="question:q-ttl"><span class="badge blocking">blocking</span><p>Session TTL?</p>
@@ -1081,31 +1171,43 @@ section.risks {
     }
 
     function addReviewedBox(container, ref) {
+      /* A bare checkbox read as decoration at first glance (first-dogfood
+         feedback) -- the visible label says what checking it does, and
+         flips to a past-tense confirmation once checked. */
+      const label = document.createElement("label");
+      label.className = "reviewed-toggle";
       const box = document.createElement("input");
       box.type = "checkbox";
       box.className = "reviewed-box";
-      box.setAttribute("aria-label", "mark reviewed");
+      const text = document.createElement("span");
+      text.className = "reviewed-toggle-text";
+      function sync() {
+        text.textContent = box.checked ? "Reviewed" : "Mark reviewed";
+        container.classList.toggle("is-reviewed", box.checked);
+      }
       box.checked = reviewed.has(ref);
-      if (box.checked) container.classList.add("is-reviewed");
-      box.addEventListener("click", function (e) {
-        /* A checkbox nested inside a <summary> still bubbles its click up
+      sync();
+      label.appendChild(box);
+      label.appendChild(text);
+      label.addEventListener("click", function (e) {
+        /* A control nested inside a <summary> still bubbles its click up
            to the <summary>'s default action (toggling the parent
-           <details> open/closed) unless stopped here -- checking the box
-           should not also collapse or expand the phase. */
+           <details> open/closed) unless stopped here -- marking reviewed
+           should not also collapse or expand the phase. On the label, so
+           it covers clicks on the text as well as the box. */
         e.stopPropagation();
       });
       box.addEventListener("change", function () {
         if (box.checked) {
           reviewed.add(ref);
-          container.classList.add("is-reviewed");
         } else {
           reviewed.delete(ref);
-          container.classList.remove("is-reviewed");
         }
+        sync();
         persistReviewed();
         renderReviewedCount();
       });
-      return box;
+      return label;
     }
 
     document.querySelectorAll("details.phase").forEach(function (details) {
