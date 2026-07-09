@@ -8,7 +8,7 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased
+## 0.14.0 — 2026-07-08
 
 ### Added
 
@@ -35,6 +35,25 @@ version and date (see [RELEASING.md](RELEASING.md)).
 - **Per-skill install/remove toggles** — Studio: per-skill install/remove toggles
   on the skills card (previously the card only offered install-all; the CLI's
   `load skill install/remove <id>` already supported single skills).
+
+### Fixed
+
+- **`load doctor` could hang forever probing an agent CLI.** Doctor checked
+  each agent's launch CLI with an unbounded `--version` run; GitHub Copilot's
+  version check can leave a background updater holding the output pipe, which
+  blocked doctor indefinitely. Agent probes now get the same hard deadline as
+  script probes (3s): a wedged CLI degrades to a "probe timed out" warning.
+  The shared probe runner also bounds its output reads (not just the child's
+  exit) and kills the probe's whole process group on expiry, so lingering
+  update-checker grandchildren are reaped instead of orphaned — this protects
+  `refresh`/`render` environment probes too.
+- **Duplicate "changed outside loadout" warnings on `refresh --agent all`.**
+  The out-of-band script-change warning printed once per agent resolving the
+  same fragment; it now prints once per changed script per run.
+- **A trust store written by a newer loadout is refused, not misread.** After
+  a downgrade, a trust store with a higher schema version is now treated like
+  a corrupt store — loud warning, record refused, `load trust --rebuild`
+  recovers — instead of reinterpreting entries whose meaning may have changed.
 
 ### Security
 

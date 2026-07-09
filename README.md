@@ -147,7 +147,7 @@ Workflows are global-only and never enforced — guidance rendered into each age
 `load plan` turns an agent-written development plan into a reviewable page instead of a wall of chat text. The loop: the agent (with the embedded `loadout-plan-preview` skill) writes a structured `plan.json`; `load plan check` validates it; `load plan render` renders a self-contained `plan.html` and opens it in your browser; you leave comments on individual tasks, phases, risks, and open questions right on the page; a **Copy feedback** button assembles them into a structured document you paste back to the agent, which revises the plan and re-renders.
 
 <p align="center">
-  <img src="docs/screenshots/plan-preview.png" alt="load plan render — a rendered development plan with a dependency graph, task cards, and inline comments" width="900">
+  <img src="docs/screenshots/plan-preview.png" alt="load plan render — a rendered development plan: executive summary with key points and out-of-scope, a blocking-question banner, the per-phase rollup table, and the Copy feedback bar" width="900">
 </p>
 <p align="center"><sub><i><code>load plan render</code> — an agent's plan, rendered for review with element-anchored comments.</i></sub></p>
 
