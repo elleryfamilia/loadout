@@ -609,6 +609,30 @@ fn check_strings(plan: &Plan, errs: &mut Vec<Issue>) {
     }
 }
 
+/// Author-guidance advisories: never errors, never gate a render. `load plan
+/// check` surfaces them as warnings so the plan author sees them in the
+/// write→check loop, where they're actionable.
+pub fn advisories(plan: &Plan) -> Vec<Issue> {
+    let mut out = Vec::new();
+    if let Some(s) = &plan.meta.summary_md {
+        let n = s.chars().count();
+        if n > 1500 {
+            let mut issue = Issue::new(
+                "/meta/summary_md",
+                "long_summary",
+                format!("executive summary is {n} chars — it reads best at 4-6 sentences"),
+            );
+            issue.hint = Some(
+                "move workstream detail into key_points and global constraints \
+                 into phase or task summaries"
+                    .into(),
+            );
+            out.push(issue);
+        }
+    }
+    out
+}
+
 pub fn validate(plan: &Plan) -> Vec<Issue> {
     let mut errs = Vec::new();
     let mut seen = std::collections::BTreeMap::new(); // id -> first path
