@@ -80,6 +80,15 @@ register it in the provider registry, and it becomes usable as
 for reference: `host`, `toolchain`, `ai-tools`, `tailnet`, `docker`. Probes must
 degrade gracefully (missing tool → empty), redact output, and be cacheable.
 
+## Change the plan schema **(implemented — code)**
+
+The `loadout.plan/1` schema (`load plan`'s `plan.json`) is defined in
+`src/plan/model.rs`. Additive optional fields don't bump the format id — only
+a breaking change (removing/renaming a field, tightening a constraint an
+existing plan could violate) does. See
+[`skills/loadout-plan-preview/reference.md`](../skills/loadout-plan-preview/reference.md)
+for the full field reference.
+
 ## Testing conventions
 
 - Pure logic → in-module `#[cfg(test)]` unit tests. Share fixtures via

@@ -137,3 +137,56 @@ commit = "0c6a49f1fa56a1d472575da86a94dbc1edb78eda"
 upstream = ".claude/commands/security-review.md"
 vendored = "vendored/security-review/security-review.md"
 step = "verify"
+# --- UI assets (not workflow content) ---------------------------------------
+#
+# Everything above this line is workflow *content* (skill/command text) that
+# feeds a `[[workflows]]` step's `instructions`. The entries below are plain
+# static assets the plan viewer (`src/plan/render.rs`, `src/plan/icons.rs`)
+# embeds at compile time via `include_str!` — an icon vocabulary and a web
+# font. Same faithfulness contract (pin by resolved commit, keep the license
+# file, record what changed), but there's no `step` — these aren't tied to a
+# workflow stage, so that column is omitted rather than left meaningless.
+
+[[source]]
+id = "lucide"
+repo = "lucide-icons/lucide"
+homepage = "https://lucide.dev"
+license = "ISC (some icons additionally MIT via the Feather project — see vendored/lucide/LICENSE, which is the upstream file verbatim)"
+ref_strategy = "release"
+release = "1.23.0"
+commit = "c67c9bdbfb43b0ecd69b52d37aeb4ab2d5386271"
+note = """
+16-icon subset for `Phase.icon`/`PlanTask.icon` (see `plan::icons`): \
+book-open, bug, database, file-text, flask-conical, git-branch, globe, \
+layout-dashboard, package, paintbrush, rocket, search, shield, terminal, \
+wrench, zap. Each SVG is vendored byte-for-byte from `icons/<name>.svg` at \
+the pinned commit — the renderer strips the outer <svg> wrapper at render \
+time (see `render::icon_markup`) rather than the vendored file being \
+pre-edited, so a drift diff against upstream stays a straight file compare. \
+Upstream has no `icons/layout.svg` (renamed); `layout-dashboard` is used in \
+its place.
+
+A 17th file, chevron-right, is also vendored from the same pinned commit but \
+is NOT part of that vocabulary — it's fixed UI chrome (the `<details>` \
+disclosure marker; see `plan::icons::ui_chevron`), not a name a `plan.json` \
+author can set via `Phase.icon`/`PlanTask.icon`.
+"""
+
+[[source]]
+id = "inter"
+repo = "rsms/inter"
+homepage = "https://rsms.me/inter/"
+license = "OFL-1.1 (see vendored/inter/LICENSE, upstream LICENSE.txt verbatim)"
+ref_strategy = "commit"
+commit = "google-fonts-api-v20"
+note = """
+Inter 400 (Inter-Regular.woff2) and 600 (Inter-SemiBold.woff2), latin \
+subset only, as served by the Google Fonts static woff2 endpoint \
+(fonts.gstatic.com/s/inter/v20/…, resolved via \
+fonts.googleapis.com/css2?family=Inter:wght@400;600 with a Chrome UA on \
+2026-07-08). Google Fonts versions its static files by the v20 path \
+segment rather than a git commit, so that's what's pinned above. The two \
+files are base64-embedded into src/plan/assets/plan.css's @font-face \
+rules (the page's CSP has font-src data: and nothing else); the vendored \
+copies here are the canonical originals those data: URIs must match.
+"""

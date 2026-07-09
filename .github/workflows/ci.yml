@@ -43,6 +43,18 @@ jobs:
       - name: test
         run: cargo test --all --locked
 
+  browser-smoke:
+    name: browser smoke (plan viewer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: browser smoke
+        run: cargo test --test browser_smoke --locked -- --ignored
+        env:
+          CHROME_BIN: google-chrome
+
   # Guard the declared MSRV (Cargo.toml `rust-version`) so it never silently
   # drifts ahead of what the manifest promises.
   msrv:

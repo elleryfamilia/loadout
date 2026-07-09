@@ -2602,6 +2602,207 @@ fn hook_remove_honors_dry_run() {
 }
 
 #[test]
+fn plan_status_ensures_gitignore_before_any_artifact_exists() {
+    let f = Fixture::new();
+    f.git_init();
+    f.cmd().args(["plan"]).assert().success();
+    let ignore = f.read(".gitignore");
+    assert!(ignore.contains(".loadout/workflow/artifacts/plan.json"));
+    assert!(ignore.contains(".loadout/workflow/artifacts/plan-feedback.json"));
+    assert!(ignore.contains(".loadout/generated/"));
+    // Status reports the missing input rather than failing.
+    f.cmd()
+        .args(["plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no plan.json"));
+}
+
+#[test]
+fn plan_check_reports_pointer_errors_as_json() {
+    let f = Fixture::new();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A", "depends_on": ["t-ghost"] } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "check", "--json"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("\"code\":\"unknown_ref\""))
+        .stdout(predicate::str::contains("/phases/0/tasks/0/depends_on/0"));
+}
+
+#[test]
+fn plan_check_passes_valid_input_and_warns_on_stale_feedback() {
+    let f = Fixture::new();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("plan.json is valid"));
+    f.write(
+        ".loadout/workflow/artifacts/plan-feedback.json",
+        r#"{ "format": "loadout.plan-feedback/1", "plan_id": "other",
+             "plan_hash": "sha256:dead", "comments": [] }"#,
+    );
+    f.cmd()
+        .args(["plan", "check"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("feedback"));
+}
+
+#[test]
+fn plan_render_writes_marked_html_and_respects_no_open() {
+    let f = Fixture::new();
+    f.git_init();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".loadout/generated/plan.html"));
+    let html = f.read(".loadout/generated/plan.html");
+    assert!(html.starts_with("<!-- loadout:generated context=sha256:"));
+    assert!(html.contains("data-plan-ref=\"task:t-a\""));
+    assert!(f.read(".gitignore").contains(".loadout/generated/"));
+}
+
+#[test]
+fn plan_render_fails_cleanly_on_invalid_input() {
+    let f = Fixture::new();
+    f.write(".loadout/workflow/artifacts/plan.json", "{ not json");
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("invalid_json"));
+    assert!(!f.exists(".loadout/generated/plan.html"));
+}
+
+#[test]
+fn plan_schema_prints_the_reference() {
+    let f = Fixture::new();
+    f.cmd()
+        .args(["plan", "schema"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("loadout.plan/1"));
+}
+
+#[test]
+fn plan_clean_removes_only_marked_html() {
+    let f = Fixture::new();
+    f.git_init();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+    f.cmd().args(["plan", "clean"]).assert().success();
+    assert!(!f.exists(".loadout/generated/plan.html"));
+    assert!(
+        f.exists(".loadout/workflow/artifacts/plan.json"),
+        "input untouched"
+    );
+
+    // A foreign (unmarked) plan.html is never deleted.
+    f.write(".loadout/generated/plan.html", "<html>mine</html>");
+    f.cmd()
+        .args(["plan", "clean"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not loadout-generated"));
+    assert!(f.exists(".loadout/generated/plan.html"));
+}
+
+/// An unreadable (but present) plan.html must surface as a hard error, not
+/// get folded into the "no plan artifacts" silent-skip path.
+#[cfg(unix)]
+#[test]
+fn plan_clean_errors_on_unreadable_html_instead_of_skipping() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // chmod 000 has no effect on root's own read access, so this test is
+    // meaningless (and would fail) when run as root.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
+    let f = Fixture::new();
+    f.git_init();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+
+    let html = f.repo_path().join(".loadout/generated/plan.html");
+    let mut perms = fs::metadata(&html).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&html, perms).unwrap();
+
+    let assert = f.cmd().args(["plan", "clean"]).assert().failure();
+    let output = assert.get_output();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("plan.html"),
+        "expected the error to name the unreadable path, got: {combined}"
+    );
+
+    // Restore so the temp dir can be cleaned up.
+    let mut perms = fs::metadata(&html).unwrap().permissions();
+    perms.set_mode(0o644);
+    fs::set_permissions(&html, perms).unwrap();
+}
+
+#[test]
+fn load_clean_sweeps_plan_html_without_agent_overlays() {
+    let f = Fixture::new();
+    f.git_init();
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+             "phases": [ { "id": "p1", "title": "P", "tasks": [
+               { "id": "t-a", "title": "A" } ] } ] }"#,
+    );
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+    f.cmd().args(["clean"]).assert().success();
+    assert!(!f.exists(".loadout/generated/plan.html"));
+}
+
+#[test]
 fn refresh_redacts_planted_tokens_and_warns_per_fragment() {
     let fx = Fixture::new();
     fx.rust_project();

@@ -1,0 +1,40 @@
+{
+  "format": "loadout.plan/1",
+  "meta": { "id": "auth-refactor", "title": "Auth refactor",
+            "goal_md": "Extract *session* handling.",
+            "summary_md": "This refactor extracts `SessionStore` behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the *lock contention* risk by sharding the store. The ask: review the trait boundary in `t-session-store` before Redis work starts.",
+            "key_points": [
+              "**Trait extraction** decouples session persistence from its backing store, gated behind a config flag.",
+              "**Redis backend** (`t-redis`) is blocked on the trait boundary landing first.",
+              "**Lock contention** (`r-locking`) is mitigated by sharding the store, not by removing the lock."
+            ],
+            "out_of_scope": [ "Migrating existing sessions between backends", "Multi-region session replication" ],
+            "agent": "claude",
+            "created": "2026-07-07", "revision": 2 },
+  "phases": [
+    { "id": "p-core", "title": "Core", "icon": "wrench", "summary_md": "The trait seam.",
+      "tasks": [
+        { "id": "t-config-flag", "title": "Config flag", "status": "done",
+          "estimate": "s", "acceptance": ["flag parses"], "validation": ["cargo test config::"] },
+        { "id": "t-session-store", "title": "Introduce SessionStore trait", "icon": "shield",
+          "summary_md": "Extract persistence behind a trait so `t-redis` can slot in.",
+          "status": "planned", "risk": "medium", "depends_on": ["t-config-flag"],
+          "files": [ { "path": "src/auth/session.rs", "action": "modify", "note": "extract trait" },
+                     { "path": "src/auth/store.rs", "action": "create" },
+                     { "path": "tests/auth.rs", "action": "test" } ],
+          "acceptance": [ "existing session tests pass unchanged",
+                          "no direct sled calls outside the trait impl" ],
+          "validation": [ "cargo test auth::" ], "estimate": "m" }
+      ] },
+    { "id": "p-backend", "title": "Backend", "icon": "database", "tasks": [
+        { "id": "t-redis", "title": "Redis backend", "status": "blocked",
+          "risk": "high", "depends_on": ["t-session-store"], "estimate": "l" },
+        { "id": "t-cleanup", "title": "Remove dead code", "status": "in_progress" },
+        { "id": "t-bench", "title": "Benchmarks", "status": "cut", "risk": "low" }
+      ] }
+  ],
+  "risks": [ { "id": "r-locking", "title": "Lock contention", "severity": "high",
+               "mitigation_md": "Shard the store." } ],
+  "open_questions": [ { "id": "q-ttl", "question_md": "Session TTL?", "blocking": true },
+                      { "id": "q-name", "question_md": "Trait name?" } ]
+}

@@ -142,6 +142,19 @@ Workflows are global-only and never enforced — guidance rendered into each age
 
 ---
 
+## Plan previews
+
+`load plan` turns an agent-written development plan into a reviewable page instead of a wall of chat text. The loop: the agent (with the embedded `loadout-plan-preview` skill) writes a structured `plan.json`; `load plan check` validates it; `load plan render` renders a self-contained `plan.html` and opens it in your browser; you leave comments on individual tasks, phases, risks, and open questions right on the page; a **Copy feedback** button assembles them into a structured document you paste back to the agent, which revises the plan and re-renders.
+
+<p align="center">
+  <img src="docs/screenshots/plan-preview.png" alt="load plan render — a rendered development plan with a dependency graph, task cards, and inline comments" width="900">
+</p>
+<p align="center"><sub><i><code>load plan render</code> — an agent's plan, rendered for review with element-anchored comments.</i></sub></p>
+
+Rendering is deterministic (the same `plan.json` and loadout version always produce byte-identical HTML) and self-contained — no CDN, no external fetches, everything inlined into one file. Full detail, including the schema and the feedback contract, in [docs/concepts.md](docs/concepts.md#plan-previews-implemented).
+
+---
+
 ## Supported agents
 
 Loadout produces one overlay and delivers it the way each agent expects.
@@ -203,7 +216,7 @@ load skill install
 
 Then, in an agent session, run `/loadout-migrate` or just ask *"Import my CLAUDE.md into Loadout."*
 
-Two more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session — instead of leaving it stranded in one agent's memory — and [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows). The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, Gemini, opencode, and Cursor.
+Three more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session (instead of leaving it stranded in one agent's memory), [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows), and [`loadout-plan-preview`](skills/loadout-plan-preview/SKILL.md) drives the [plan preview](#plan-previews) loop above. The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, Gemini, opencode, and Cursor.
 
 ---
 
@@ -235,6 +248,7 @@ A read-only **palette** of starter fragments also ships inside the binary; dupli
 | `load clean [--agent <id>\|all]`             | Remove generated overlays and managed blocks                        |
 | `load detect [--probes]`                     | Print detected context and optional provider data                   |
 | `load doctor`                                | Diagnose config, agents, overlays, and safety issues                |
+| `load plan [check\|render\|schema\|clean]`   | Validate, render, and review an agent-written development plan       |
 | `load trust [--rebuild]`                     | Show the per-machine script-trust store (`--rebuild` re-approves all) |
 | `load fragments trust <id>`                  | Re-approve a fragment's script after an out-of-band change          |
 | `load targets trust <id>`                    | Re-approve a target's script after an out-of-band change            |

@@ -127,3 +127,85 @@ fn shipped_example_config_is_a_valid_global_config() {
     assert!(cfg.fragments.iter().any(|c| c.id == "rust-conventions"));
     assert!(cfg.fragments.iter().any(|c| c.id == "work-strict"));
 }
+
+/// Every fenced ```json block in the plan-preview reference must parse and
+/// validate under the real deserializer — the doc IS the schema.
+#[test]
+fn plan_preview_reference_json_examples_are_valid() {
+    let path = format!(
+        "{}/skills/loadout-plan-preview/reference.md",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let md = std::fs::read_to_string(&path).expect("read reference.md");
+    let mut checked = 0;
+    let mut rest = md.as_str();
+    while let Some(start) = rest.find("```json") {
+        let after = &rest[start + 7..];
+        let Some(end) = after.find("```") else { break };
+        let block = after[..end].trim();
+        if block.contains("\"loadout.plan/1\"") {
+            let parsed = loadout::plan::model::parse(block, false)
+                .unwrap_or_else(|e| panic!("reference example must parse: {e:?}"));
+            assert!(loadout::plan::model::validate(&parsed.plan).is_empty());
+            checked += 1;
+        }
+        rest = &after[end + 3..];
+    }
+    assert!(checked >= 1, "expected at least one loadout.plan/1 example");
+}
+
+/// The reference doc's `icon` vocabulary row must list every name the
+/// renderer actually knows, and nothing it doesn't — otherwise an agent
+/// reading the doc gets a menu that's out of sync with `unknown_icon`'s real
+/// hint. This is the doc-honesty guard task 18c's icon vocabulary work asked
+/// for: every name in the doc's row resolves via `icon_svg`.
+#[test]
+fn plan_preview_reference_icon_vocabulary_matches_the_vendored_set() {
+    let path = format!(
+        "{}/skills/loadout-plan-preview/reference.md",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let md = std::fs::read_to_string(&path).expect("read reference.md");
+    let row = md
+        .lines()
+        .find(|l| l.starts_with("| `icon` (phase/task field) |"))
+        .unwrap_or_else(|| panic!("expected an `icon` vocabulary row in {path}"));
+
+    // The values cell packs backtick-quoted names separated by an escaped
+    // pipe (`\|`), matching the existing enum rows' convention (see the
+    // `status`/`severity`/`estimate`/`action` rows just above it) — mask
+    // that two-char escape before splitting on the real column-separator
+    // `|`, so an escaped pipe inside the cell isn't mistaken for one.
+    const MASK: &str = "\u{1}";
+    let masked = row.replace("\\|", MASK);
+    let values_cell = masked
+        .split('|')
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .nth(1) // cells[0] is the `icon` (phase/task field) label cell
+        .unwrap_or_else(|| panic!("icon row has no values cell: {row}"));
+    let names: Vec<&str> = values_cell
+        .split(MASK)
+        .map(|s| s.trim().trim_matches('`'))
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    assert!(
+        names.len() >= 16,
+        "expected at least 16 icon names in the reference row, got {names:?}"
+    );
+    for name in &names {
+        assert!(
+            loadout::plan::icons::icon_svg(name).is_some(),
+            "reference.md lists icon `{name}` but icon_svg has no matching vendored file"
+        );
+    }
+    // And the reverse: every real vendored icon is documented, so the doc
+    // never falls behind the vocabulary the renderer actually accepts.
+    for name in loadout::plan::icons::icon_names() {
+        assert!(
+            names.contains(name),
+            "icon `{name}` is in the vendored vocabulary but missing from reference.md's row"
+        );
+    }
+}

@@ -14,6 +14,7 @@ pub mod edit;
 pub mod explain;
 pub mod hook;
 pub mod introspect;
+pub mod plan;
 pub mod refresh;
 pub mod run;
 pub mod skill;

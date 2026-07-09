@@ -3,7 +3,9 @@
 //! loadout ships agent skills (SKILL.md directories per the cross-agent Agent
 //! Skills format) embedded in the binary, so installer-based users get them
 //! without a repo checkout. The canonical install location is
-//! `~/.agents/skills/<id>/` — read natively by Gemini CLI and opencode — with
+//! `~/.agents/skills/<id>/` — read natively by Gemini CLI, opencode, and
+//! Cursor (`~/.agents/skills/` is one of Cursor's documented user-level skill
+//! locations, alongside `~/.cursor/skills/`; see `LINKED_AGENT_DIRS`) — with
 //! symlinks from `~/.claude/skills/<id>` and `~/.codex/skills/<id>` for agents
 //! that only scan their own dotdir. Symlinks are only created when the agent's
 //! dotdir already exists (no littering for agents the user doesn't have), and
@@ -97,9 +99,25 @@ pub const IMPORT_WORKFLOW: Skill = Skill {
     ],
 };
 
+/// The `loadout-plan-preview` skill: teaches an agent to emit a structured
+/// plan.json and drive `load plan check`/`render`, closing the review loop.
+pub const PLAN_PREVIEW: Skill = Skill {
+    id: "loadout-plan-preview",
+    files: &[
+        SkillFile {
+            relpath: "SKILL.md",
+            content: include_str!("../skills/loadout-plan-preview/SKILL.md"),
+        },
+        SkillFile {
+            relpath: "reference.md",
+            content: include_str!("../skills/loadout-plan-preview/reference.md"),
+        },
+    ],
+};
+
 /// Every skill shipped in this binary.
 pub fn all() -> &'static [Skill] {
-    &[MIGRATE, REMEMBER, IMPORT_WORKFLOW]
+    &[MIGRATE, REMEMBER, IMPORT_WORKFLOW, PLAN_PREVIEW]
 }
 
 /// Look up an embedded skill by id.
@@ -181,6 +199,17 @@ fn on_disk_hash(dir: &Path, skill: &Skill) -> Option<String> {
 
 /// Agent dotdirs that need their own `skills/` entry (symlinked to canonical).
 /// Gemini CLI and opencode read `~/.agents/skills/` natively and need nothing.
+///
+/// Cursor also needs nothing: `cursor-agent` (confirmed 2026.07.01-41b2de7,
+/// both by decompiling its bundled source and per cursor.com/docs/skills)
+/// unconditionally scans `~/.agents/skills/` *and* `~/.cursor/skills/` as
+/// user-level skill locations — no third-party opt-in flag required (that
+/// flag only gates `~/.claude/skills/` and `~/.codex/skills/`). So the
+/// canonical install is already discovered; adding `.cursor` here would only
+/// create a redundant symlink (Cursor's own de-dup logic — which matches on
+/// the path suffix after the dotdir marker — would collapse it back down to
+/// one entry, `.agents` winning since it's enumerated first, but there's no
+/// upside to shipping it).
 const LINKED_AGENT_DIRS: &[&str] = &[".claude", ".codex"];
 
 /// Canonical install directory: `<home>/.agents/skills/<id>`.

@@ -82,6 +82,8 @@ pub enum Command {
     Sync(SyncArgs),
     /// Manage the agent skills loadout ships (installed under `~/.agents/skills`).
     Skill(SkillArgs),
+    /// Preview a development plan: validate plan.json, render plan.html, review.
+    Plan(PlanArgs),
     /// Update loadout to the latest release (installer-based installs only).
     Update(UpdateArgs),
     /// (machine-invoked) Agent lifecycle-hook endpoint: reads the hook payload
@@ -141,6 +143,45 @@ pub enum SkillAction {
     },
     /// Show each shipped skill's install state, links, and remembered decision.
     Status,
+}
+
+/// `plan` options. Bare `load plan` shows status.
+#[derive(Debug, Args)]
+pub struct PlanArgs {
+    /// `check`, `render`, `schema`, `clean`, or status (the default).
+    #[command(subcommand)]
+    pub action: Option<PlanAction>,
+}
+
+/// `plan` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum PlanAction {
+    /// Validate plan.json; machine-readable diagnostics with --json.
+    Check {
+        /// Input file (default .loadout/workflow/artifacts/plan.json).
+        file: Option<PathBuf>,
+        /// Emit machine-readable JSON diagnostics instead of plain text.
+        #[arg(long)]
+        json: bool,
+        /// Downgrade unknown fields to warnings (read newer plans).
+        #[arg(long)]
+        lenient: bool,
+    },
+    /// Render plan.json to a self-contained plan.html and open it.
+    Render {
+        /// Input file (default .loadout/workflow/artifacts/plan.json).
+        file: Option<PathBuf>,
+        /// Output path (default .loadout/generated/plan.html).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Don't open the browser after rendering.
+        #[arg(long)]
+        no_open: bool,
+    },
+    /// Print the plan.json schema reference.
+    Schema,
+    /// Remove the rendered plan.html (and plan-feedback.json if present).
+    Clean,
 }
 
 /// `update` options.

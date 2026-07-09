@@ -144,6 +144,64 @@ The [`loadout-import-workflow`](../skills/loadout-import-workflow/SKILL.md) skil
 imports another repo's command/skill suite into a workflow. Schema in
 [configuration](configuration.md#workflows-implemented).
 
+## Plan previews **(implemented)**
+
+`load plan` turns an agent-authored development plan into a reviewable,
+self-contained HTML page — a separate loop from the fragment/loadout/workflow
+model above, but built the same way: the agent writes a structured document,
+loadout deterministically renders it, nothing is invented by the renderer.
+
+**The model.** An agent (equipped with the embedded
+[`loadout-plan-preview`](../skills/loadout-plan-preview/SKILL.md) skill)
+writes a JSON document under the `loadout.plan/1` format: a `meta` block
+(id, title, goal), a list of `phases`, each holding `tasks` (with `status`,
+`risk`, `estimate`, file touches, acceptance criteria, and `depends_on`
+edges to other tasks), plus top-level `risks` and `open_questions`. The
+schema lives in `src/plan/model.rs`; the full field reference is
+[`skills/loadout-plan-preview/reference.md`](../skills/loadout-plan-preview/reference.md).
+`load plan schema` prints it on demand.
+
+**Two well-known paths.** The agent writes its plan to
+`.loadout/workflow/artifacts/plan.json` — the input. `load plan render`
+validates and renders it to `.loadout/generated/plan.html` — the output, a
+single file with inlined CSS/JS, no CDN, no external fetches, and a
+deterministic dependency graph. Same `plan.json` and the same loadout version
+always produce byte-identical HTML. (`plan.json` is deliberately not a
+declared *workflow* artifact — its filename stem would collide with a
+workflow's own `plan.md` handoff file.)
+
+**The loop.** `load plan check --json` validates before rendering
+(machine-readable paths on every error, so an agent can fix precisely —
+JSON-pointer for structural/validation issues, dot-notation for type
+mismatches from the typed deserializer); `load plan render` opens the page in
+your browser. You comment inline on any task, phase, risk, or open
+question; a "Copy feedback" button assembles every comment into one
+`loadout.plan-feedback/1` document (fenced JSON, with a readable markdown
+mirror underneath) that you paste back to the agent, or that the agent reads
+directly from `.loadout/workflow/artifacts/plan-feedback.json` if you saved it
+there. Ids are stable across revisions — the agent reuses an element's id when
+revising it and mints a new one only for something genuinely new — which is
+what lets a comment's `ref` and a dependency edge keep pointing at the right
+thing after a re-render.
+
+**The feedback contract.** Each comment carries a `ref` (`"task:t-foo"`,
+`"phase:p-core"`, `"risk:r-locking"`, `"question:q-ttl"`, or `"meta:<plan
+id>"`), the free-form `text`, a `quote` of the commented-on element for
+context, and a `blocking` boolean — there is no comment-type taxonomy, just a
+single "Blocks approval" checkbox on the comment box. The feedback document
+also carries the `plan_hash` of the plan it was written against and an
+overall `verdict` (`request_changes` if any comment is `blocking`, `comment`
+otherwise); `load plan check` warns loudly if `plan-feedback.json` targets a
+plan that no longer matches (stale feedback).
+
+`load plan` (no subcommand) prints status — whether a plan exists, whether the
+render is fresh, whether feedback is pending — and `load plan clean` (also
+swept by a plain `load clean`) removes the rendered `plan.html` and any
+`plan-feedback.json`, never the plan itself. `plan` is a named subcommand, so
+it takes precedence over the `load <agent>` shorthand — an agent binary
+literally named `plan` can't be launched as `load plan` and needs `load run
+plan` instead.
+
 ## Providers (native environment discovery) **(implemented)**
 
 loadout owns environment discovery natively (the "agent-env idea", built in — not
