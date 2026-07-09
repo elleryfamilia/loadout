@@ -46,6 +46,24 @@ fn md(text: &Option<String>) -> Markup {
     }
 }
 
+/// Markdown rendered for a phrasing-content position (inside `<summary>`):
+/// the block renderer's output with paragraph tags stripped, so inline
+/// markup (code spans, emphasis, links) survives but no block element lands
+/// where HTML forbids one. Multi-paragraph input flattens to one line —
+/// acceptable for the 1-2 sentence phase summaries this renders.
+fn inline_md(text: &Option<String>) -> Option<Markup> {
+    let t = text.as_ref()?;
+    let inline = crate::markdown::render_markdown(t)
+        .replace("<p>", "")
+        .replace("</p>", " ")
+        .trim()
+        .to_string();
+    if inline.is_empty() {
+        return None;
+    }
+    Some(PreEscaped(inline))
+}
+
 /// A copy of `plan` with every markdown field (`goal_md`, `meta.summary_md`,
 /// `meta.key_points`, phase/task `summary_md`, `mitigation_md`,
 /// `question_md`) replaced by its sanitized HTML rendering, for the JSON
@@ -490,7 +508,7 @@ pub fn render(plan: &Plan) -> String {
             body data-plan-fingerprint=(hash) {
                 header {
                     h1 { (plan.meta.title) }
-                    p.meta data-plan-ref=(format!("meta:{}", plan.meta.id)) {
+                    p.meta {
                         "plan " code { (plan.meta.id) }
                         @if let Some(rev) = plan.meta.revision { " · revision " (rev) }
                         @if let Some(agent) = &plan.meta.agent { " · by " (agent) }
@@ -503,7 +521,11 @@ pub fn render(plan: &Plan) -> String {
                 // outside each individual question/risk card; this one sits
                 // outside the single .plan-summary card).
                 h2 { (icon_prefix(Some("file-text"))) "Summary" }
-                section.plan-summary {
+                // The `meta:` comment anchor lives on the summary card itself
+                // (not the tiny byline above): "comment on the plan as a
+                // whole" reads as commenting on the executive summary, and
+                // the byline gave the button no visible target worth quoting.
+                section.plan-summary data-plan-ref=(format!("meta:{}", plan.meta.id)) {
                     // (a) The executive summary itself — the top of the page,
                     // so a reader who stops here still gets a correct
                     // high-level picture. Never fabricated: absent summary_md
@@ -631,9 +653,17 @@ pub fn render(plan: &Plan) -> String {
                                 (phase.title)
                                 " "
                                 span.phase-meta { (phase_meta_text(phase)) }
+                                // The phase's plain-english description is
+                                // part of the collapsed row — a reader
+                                // scanning closed phases still learns what
+                                // each one is. Inline-rendered (block
+                                // structure stripped) because it sits inside
+                                // <summary>, which is phrasing content.
+                                @if let Some(teaser) = inline_md(&phase.summary_md) {
+                                    span.phase-teaser { (teaser) }
+                                }
                             }
                         }
-                        (md(&phase.summary_md))
                         @if let Some(g) = svg::phase_svg(plan, &phase.id) { (PreEscaped(g)) }
                         @for task in &phase.tasks { (task_card(task)) }
                     }
@@ -740,6 +770,68 @@ mod tests {
         // And the font did actually land: two @font-face blocks (400 + 600).
         assert_eq!(CSS.matches("@font-face").count(), 2);
         assert_eq!(CSS.matches("url(\"data:font/woff2;base64,").count(), 2);
+    }
+
+    #[test]
+    fn summary_card_carries_the_meta_comment_anchor() {
+        let html = render(&plan_from("kitchen-sink.json"));
+        assert!(
+            html.contains("<section class=\"plan-summary\" data-plan-ref=\"meta:auth-refactor\">"),
+            "meta anchor should live on the summary card"
+        );
+        // …and only there: the byline is no longer a comment target.
+        assert_eq!(html.matches("data-plan-ref=\"meta:").count(), 1);
+    }
+
+    #[test]
+    fn phase_summary_is_visible_in_the_collapsed_row() {
+        let html = render(&plan_from("kitchen-sink.json"));
+        // p-core's summary_md renders as a teaser inside <summary> (visible
+        // while collapsed) …
+        let teaser_pos = html
+            .find("<span class=\"phase-teaser\">The trait seam.</span>")
+            .expect("teaser inside the phase heading");
+        assert!(
+            html[teaser_pos..].find("</summary>").is_some(),
+            "teaser must sit inside the <summary> element"
+        );
+        // … not as a block after </summary>, which is hidden while collapsed.
+        assert!(!html.contains("</summary><p>The trait seam.</p>"));
+        // p-backend has no summary_md: exactly one teaser on the page.
+        assert_eq!(html.matches("class=\"phase-teaser\"").count(), 1);
+    }
+
+    #[test]
+    fn inline_md_flattens_paragraphs_and_keeps_inline_markup() {
+        let got = inline_md(&Some("Extract *session* handling.\n\nSecond.".into()))
+            .expect("some")
+            .into_string();
+        assert!(got.contains("<em>session</em>"), "{got}");
+        assert!(!got.contains("<p>"), "{got}");
+        assert!(got.contains("Second."), "{got}");
+        assert!(inline_md(&None).is_none());
+        assert!(inline_md(&Some(String::new())).is_none());
+    }
+
+    /// Regression fixture: the first real plan written against the schema
+    /// (the v0.15.0 learning release, 23 tasks / 7 phases, near-limit
+    /// summaries, dependency edges, risks, open questions).
+    #[test]
+    fn real_learning_plan_fixture_parses_validates_renders() {
+        let raw = std::fs::read_to_string(format!(
+            "{}/tests/fixtures/plan/learning-v0-15.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let parsed = crate::plan::model::parse(&raw, false).unwrap();
+        assert!(parsed.warnings.is_empty());
+        assert!(crate::plan::model::validate(&parsed.plan).is_empty());
+        let html = render(&parsed.plan);
+        assert_eq!(html.matches("id=\"task-").count(), 23, "23 task cards");
+        // Its revision-1 summary is exactly the overlong-summary shape the
+        // advisory exists for; the kitchen sink's is not.
+        assert_eq!(crate::plan::model::advisories(&parsed.plan).len(), 1);
+        assert!(crate::plan::model::advisories(&plan_from("kitchen-sink.json")).is_empty());
     }
 
     #[test]

@@ -298,19 +298,25 @@
          which would otherwise pick up the injected chrome text. */
       const quote = elementQuote(el);
 
+      /* The CTA names the action the element actually invites: an open
+         question wants an answer, everything else wants a comment. Both
+         produce the same feedback-contract comment — only the label (and
+         placeholder) differ. */
+      const kind = ref.split(":")[0];
+      const isQuestion = kind === "question";
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "comment-btn";
       btn.appendChild(commentIcon());
-      btn.appendChild(document.createTextNode("Comment"));
-      btn.setAttribute("aria-label", "Add comment");
+      btn.appendChild(document.createTextNode(isQuestion ? "Answer" : "Comment"));
+      btn.setAttribute("aria-label", isQuestion ? "Answer this question" : "Add comment");
 
       const box = document.createElement("div");
       box.className = "comment-box";
       box.hidden = true;
 
       const textarea = document.createElement("textarea");
-      textarea.placeholder = "Add a comment…";
+      textarea.placeholder = isQuestion ? "Answer…" : "Add a comment…";
       textarea.rows = 3;
 
       const blockingRow = document.createElement("label");

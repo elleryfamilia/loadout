@@ -1,0 +1,575 @@
+{
+  "format": "loadout.plan/1",
+  "meta": {
+    "id": "learning-v0-15",
+    "title": "loadout v0.15.0 — learning (ambient harvest)",
+    "goal_md": "After a one-time `load learn on`, loadout mines the user's own agent-session transcripts for durable cross-project preferences and stages them as candidate fragments in an inbox; the user promotes or dismisses them in the studio. Harvesting runs as one-shot, bounded, logged invocations of an agent CLI the user already has — no daemon, no OS scheduler, no LLM call on any render path.",
+    "summary_md": "This release implements the approved `design-learning.md` (critic + codex gpt-5.5 approved; spec-review amendments folded; all plan-time gates resolved). The observable outcome: `load learn on` prints an honest consent (per-machine ceiling of ≤4 extraction calls/day at defaults, concrete cost estimate), registers session-end hooks for claude (SessionEnd, nested schema) and cursor (stop, flat schema), and from then on a throttled detached worker mines new transcripts past per-machine watermarks, stages candidates into per-machine append-only journals (sync-merge-clean), and surfaces them in a new studio Inbox tab plus one discovery line in run/refresh output. **Plan-time gate results baked in:** gemini hooks FAILED the gate (inert settings entries; gemini ships tier-2 readers-only); claude's interactive marker is the verified transcript `entrypoint` field; SessionEnd fires for `-p` runs too, so hook-named sessions get no exclusion exemption; no Windows dist target ships (spawn path is `#[cfg(unix)]` with graceful no-op). **Global constraints (every task):** run all cargo commands as `env -u CARGO_TARGET_DIR cargo …`; branch `feat/learning` off `origin/main` @ `aa28149`; Conventional Commits with the noreply email, one commit per task; NO new crate dependencies (random bytes come from `/dev/urandom` via std, unix); machine-local state lives under `config::state_dir()` (never syncs), journals under the config dir `inbox/` (sync by design); no new serde keys on `deny_unknown_fields` structs — built-in-only descriptor data uses `#[serde(skip)]` (the `review_commands` precedent); render/launch/hook paths must never block on learning work; TDD — write the failing test first in every task. The ask: review task boundaries, the two medium-risk hook tasks, and the three open questions (none blocking).",
+    "key_points": [
+      "**Foundations first** — `[learn]` config table (global-only, stripped from repo layers), per-machine identity + activation ack + two stamps in the state dir, append-only inbox journals with fold/dedupe/suppression permanence, versioned watermarks with monotonic advance, and an O_EXCL lock whose fencing token gates every later side effect.",
+      "**Readers are deterministic and fail closed per store** — claude (offset-resumed JSONL, `entrypoint` ∈ {cli, claude-desktop} only), codex (`session_meta.originator/source` gate), gemini (rewritten-array store, processed-session set, single-message heuristic). User-authored messages only, redacted before anything leaves the process.",
+      "**One extraction call per tick** — spend stamp written immediately BEFORE the call (crash-loop ceiling holds), scan stamp bounds thrash, ≤20 slices / ≤400KB newest-first with over-cap content dropped-not-deferred, pending-claim anchoring capped at the 50 most-observed, strict JSON validation, claim gate (redact + injection lint + length cap → quarantine).",
+      "**Triggers are clock ticks** — claude SessionEnd + cursor stop hooks and cheap checks at run/refresh/studio/hook entry points all funnel into `learn::maybe_spawn`, which double-spawns one detached, niced, deadline-bounded worker. Gemini hooks are OUT (gate failed — inert settings entries).",
+      "**Hook machinery grows, carefully** — `HookRegistry` gains code-side-only purpose ids (freshness vs learn) and a format discriminator (cursor flat vs claude nested writer); passive bootstrap can never re-add learn hooks after `load learn off`; removal never touches freshness or foreign entries; timestamped backups; `disableAllHooks` respected.",
+      "**Surfaces** — `load learn on|off|status|reset` + `load harvest`; studio Inbox tab (promote via the existing Session stage/apply engine with a pending-dispositions flush mirroring `pending_trust`; dismiss = permanent suppression; quarantine held for edit); doctor learn section + orphaned-hooks flag; one discovery line in run/refresh when candidates are pending.",
+      "**Spend honesty end-to-end** — consent text names the per-machine ceiling, the exact hook files edited, that claim text (not quotes) syncs, and a concrete per-run cost estimate; every run is logged and attributable; 2 consecutive failures pause ambient triggering.",
+      "**Ship gate** — stub-CLI end-to-end integration suite (full cycle, no-op run costs zero calls, crash-after-stamp burns only the tick, recursion guard, reclaim-as-failure), full suite + clippy + fmt green, CHANGELOG task included (the v0.13 gap)."
+    ],
+    "out_of_scope": [
+      "The audit layer (loadout-audit) — deferred to v0.16 per the critic-driven cut",
+      "OS-scheduled triggering (rejected; the worker keeps a trigger-agnostic --ambient entry)",
+      "Gemini/copilot/codex/opencode hook registration (gemini gate failed; others tier-2/deferred)",
+      "cursor and opencode transcript readers",
+      "Windows detach support (no Windows dist target ships; source builds degrade gracefully)",
+      "Journal compaction (rule pre-committed: dispositions preserved forever)",
+      "Similarity-based suppression and prompt-side suppression hints (paraphrase resurfacing accepted for v0.15)",
+      "Auto-promotion, assistant-message mining, cross-person aggregation (teams track)",
+      "RS-3 per-project journal capture (separate brainstorm)"
+    ],
+    "agent": "claude",
+    "created": "2026-07-09",
+    "revision": 1
+  },
+  "phases": [
+    {
+      "id": "p-foundations",
+      "title": "Foundations — pure logic, fully unit-testable",
+      "icon": "wrench",
+      "summary_md": "The stores and primitives everything else writes to or reads from. No triggers, no LLM, no hooks yet. Each task is standalone and lands with its own tests.",
+      "tasks": [
+        {
+          "id": "t-branch-config",
+          "title": "Branch + [learn] config table (global-only, forward-compatible)",
+          "summary_md": "Create `feat/learning` off `origin/main` (`git fetch && git switch -c feat/learning origin/main` — main is `aa28149`). Then add the `[learn]` table mirroring `[sync]`'s five touchpoints in `src/config.rs`.\n\n**Produces:**\n```rust\n#[derive(Debug, Clone, Serialize)]\npub struct LearnConfig {\n    pub enabled: bool,              // default false\n    pub interval: Duration,         // default 6h, parsed from \"6h\" via providers::parse_duration\n    pub scope: LearnScope,          // Adopted (default) | All\n    pub cli: Option<String>,        // pin, e.g. \"claude\"\n    pub model: Option<String>,      // pin, e.g. \"haiku\"\n}\npub enum LearnScope { Adopted, All }\n```\nplus `learn: LearnConfig` on `Config` (src/config.rs:31-68).\n\n**Steps:** (1) failing tests: defaults resolve (disabled, 6h, adopted); `[learn] enabled = true` parses; later layer wins on merge; unknown `[learn]` subkey warns but doesn't fail (forward-compat — RawLearn is `#[serde(default)]`, NOT deny_unknown_fields, matching the settings-struct convention at config.rs:334-341); a REPO-layer `[learn]` is stripped (`strip_global_only`, config.rs:296-330 — add `parsed.learn = None;` beside the `[sync]` strip at :316-319, so a cloned repo can never toggle learning). (2) Implement: `RawLearn` + field on `RawConfig` (:343-372); `\"learn\"` in `KNOWN_TOP_LEVEL` (:405-419) and the sub-table list in `warn_unknown_config_keys` (:438-446); merge block copying `[sync]` (:508-522); finalize (:572-632). (3) `env -u CARGO_TARGET_DIR cargo test config::` green. (4) Commit `feat(learn): add [learn] config table (global-only, forward-compatible)`.",
+          "status": "planned",
+          "files": [
+            { "path": "src/config.rs", "action": "modify", "note": "RawLearn + LearnConfig, 5 touchpoints incl. strip_global_only" }
+          ],
+          "acceptance": [
+            "bare config resolves learn.enabled=false, interval=6h, scope=adopted",
+            "repo-layer [learn] is stripped; global layers merge later-wins",
+            "unknown [learn] subkeys warn, never fail (newer-config forward-compat)"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test config::"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-machine-state",
+          "title": "Machine identity, activation ack, stamps, failure counter",
+          "summary_md": "New module family root. All files live under `config::state_dir()/learn/` (config.rs:727 — never syncs; `LOADOUT_STATE_DIR` override is the test seam).\n\n**Produces (src/learn/state.rs):**\n```rust\npub fn learn_dir() -> Option<PathBuf>;                    // state_dir()/learn\npub fn random_hex(n_bytes: usize) -> String;              // /dev/urandom via std::fs (unix); fallback sha256(pid|nanos|hostname) truncated\npub fn machine_id_at(dir: &Path) -> io::Result<String>;   // read learn/machine-id or mint 16-byte hex once (atomic_write)\npub struct Activation { pub machine_id: String, pub hostname: String, pub activated_at: String }\npub fn read_activation_at(dir: &Path) -> Option<Activation>;   // learn/activation.json\npub fn write_activation_at(dir: &Path, a: &Activation) -> io::Result<()>;\npub fn remove_activation_at(dir: &Path) -> io::Result<()>;\npub fn read_stamp(path: &Path) -> Option<SystemTime>;     // unix-seconds file, update.rs:97 pattern\npub fn write_stamp(path: &Path) -> io::Result<()>;\npub fn is_due(last: Option<SystemTime>, now: SystemTime, interval: Duration) -> bool;  // copy update.rs:116-121 semantics: due when never / elapsed / clock went backwards\npub fn record_failure_at(dir: &Path) -> u32;              // learn/failures.json {consecutive}\npub fn reset_failures_at(dir: &Path);\npub fn paused_at(dir: &Path) -> bool;                     // consecutive >= 2\n```\nStamp files: `learn/scan-stamp` (15-min debounce) and `learn/spend-stamp` (learn.interval). Writes via `writer::atomic_write` (src/writer.rs:116).\n\n**Steps:** (1) failing tests: mint-once idempotence (two calls, same id; file survives); `is_due` never/elapsed/backwards-clock; failure counter reaches paused at 2, reset clears. (2) Implement; register `pub mod learn;` in src/lib.rs with `pub mod state;`. (3) Tests green. (4) Commit `feat(learn): per-machine identity, activation ack, throttle stamps`.",
+          "status": "planned",
+          "depends_on": ["t-branch-config"],
+          "files": [
+            { "path": "src/learn/mod.rs", "action": "create" },
+            { "path": "src/learn/state.rs", "action": "create", "note": "in-module #[cfg(test)] tests, *_at(path) seams" },
+            { "path": "src/lib.rs", "action": "modify", "note": "register learn module" }
+          ],
+          "acceptance": [
+            "machine id minted exactly once, stable across calls, 32 hex chars",
+            "is_due handles never-ran, elapsed, and clock-went-backwards (never stuck)",
+            "2 consecutive failures => paused; reset clears"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::state"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-journal",
+          "title": "Inbox journal store — append, fold, dedupe, suppression permanence",
+          "summary_md": "The design's named first step: every other component writes to or reads from this. Journals live in the CONFIG dir (`global_config_dir()/inbox/journal-<machine-id>.jsonl`) because they sync by design; each machine appends only to its own file, so `load sync` merges are clean by construction. Append discipline copies `src/audit.rs:44-56` (`OpenOptions::append`, one JSON per line, best-effort).\n\n**Produces (src/learn/journal.rs):**\n```rust\npub struct SessionRef { pub agent: String, pub session_id: String, pub ts: String }\npub struct Observed { pub id: String, pub kind: String, pub source: String, pub claim: String,\n    pub session_refs: Vec<SessionRef>, pub produced_by: ProducedBy, pub quarantined: Option<Vec<String>>, pub ts: String }\npub struct ProducedBy { pub cli: String, pub model: String }\npub enum Action { Promote, Dismiss, Unsuppress }\npub struct Disposition { pub id: String, pub action: Action, pub ts: String }\n#[serde(tag = \"type\", rename_all = \"snake_case\")]\npub enum Event { Observed(Observed), Disposition(Disposition) }\npub fn candidate_id(claim: &str) -> String;   // sha256 hex of normalized claim (trim, collapse inner whitespace, lowercase)\npub fn append_events_at(inbox_dir: &Path, machine_id: &str, events: &[Event]) -> io::Result<()>;\npub struct Candidate { pub id: String, pub claim: String, pub kind: String, pub source: String,\n    pub observation_count: usize /* distinct session refs across ALL journals */,\n    pub first_seen: String, pub last_seen: String, pub status: CandidateStatus,\n    pub quarantine_labels: Vec<String>, pub machines: Vec<String> /* journal machine-ids that observed it */ }\npub enum CandidateStatus { Pending, Promoted, Suppressed, Quarantined }\npub struct Fold { pub candidates: BTreeMap<String, Candidate>, pub suppressed: BTreeSet<String> }\npub fn fold_at(inbox_dir: &Path) -> Fold;     // reads ALL journal-*.jsonl, chronological by ts\n```\n\n**Fold rules under test:** dedupe by id across machines (counts accumulate over DISTINCT session refs); Dismiss => Suppressed and STAYS suppressed when later Observed events arrive (permanence — the compaction pre-commitment); Unsuppress restores Pending; Promote => Promoted; a quarantined Observed folds to Quarantined and is never Pending; malformed journal lines are skipped, not fatal; two journals observing the same claim → one candidate listing both machine ids.\n\n**Steps:** (1) failing tests with multi-machine fixture journals written inline via `tempfile`. (2) Implement. (3) Green. (4) Commit `feat(learn): per-machine inbox journals with fold, dedupe, permanent suppression`.",
+          "status": "planned",
+          "depends_on": ["t-branch-config"],
+          "files": [
+            { "path": "src/learn/journal.rs", "action": "create", "note": "pure logic + in-module tests" }
+          ],
+          "acceptance": [
+            "same-claim events from two machine journals fold to one candidate with accumulated distinct-session count",
+            "dismissed candidate never returns to pending on later observations; unsuppress does",
+            "malformed lines tolerated; quarantined candidates never fold to pending"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::journal"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-watermarks",
+          "title": "Versioned watermark store with monotonic advance",
+          "summary_md": "Copy the trust-store pattern exactly (`src/trust.rs` — STORE_VERSION :25, StoreFile :57, newer-version refusal :120, corrupt-is-loud :150/:162, atomic_write :183). File: `state_dir()/learn/watermarks.json`.\n\n**Produces (src/learn/watermarks.rs):**\n```rust\nconst VERSION: u32 = 1;\npub struct FileMark { pub bytes_processed: u64, pub mtime_seen: i64 }\npub struct Watermarks { /* path, WatermarkFile{version, files: BTreeMap<String,FileMark>, gemini_sessions: BTreeSet<String>, baseline: Option<String>}, corrupt: bool */ }\nimpl Watermarks {\n    pub fn load_from(path: &Path) -> Self;            // missing=fresh; parse error OR version>VERSION => corrupt=true (loud, never silently reset)\n    pub fn corrupt(&self) -> bool;\n    pub fn mark(&self, file: &str) -> Option<&FileMark>;\n    pub fn advance(&mut self, file: &str, offset: u64, mtime: i64);   // MONOTONIC: max(current, new) — a fencing bug can never regress into double-harvest\n    pub fn gemini_seen(&self, session_id: &str) -> bool;\n    pub fn gemini_record(&mut self, session_id: &str);\n    pub fn baseline(&self) -> Option<&str>;           // RFC3339 first-enable 14-day cutoff\n    pub fn set_baseline_if_absent(&mut self, ts: &str);\n    pub fn save(&mut self, existing_files: &BTreeSet<String>) -> io::Result<()>;  // refuses while corrupt; prunes entries whose files no longer exist (critic MINOR-4)\n    pub fn reset(path: &Path) -> io::Result<()>;      // for `load learn reset` — delete + fresh baseline next run\n}\n```\n\n**Steps:** (1) failing tests: advance-with-smaller-offset keeps max; version=2 file loads corrupt and save() refuses; prune removes deleted-file entries; baseline set once. (2) Implement. (3) Green. (4) Commit `feat(learn): versioned watermark store, monotonic advance, newer-version refusal`.",
+          "status": "planned",
+          "depends_on": ["t-branch-config"],
+          "files": [
+            { "path": "src/learn/watermarks.rs", "action": "create" }
+          ],
+          "acceptance": [
+            "offsets can only grow; regression attempts are ignored",
+            "a newer-versioned file is refused loudly (corrupt semantics), never misread or silently reset",
+            "save prunes marks for files that no longer exist"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::watermarks"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-lock",
+          "title": "O_EXCL lock with fencing token and stale reclaim",
+          "summary_md": "The codex-review blocker made concrete: the token is minted at acquisition, before any other side effect, and every later side effect re-reads the lock and proceeds only if it still holds its own token.\n\n**Produces (src/learn/lock.rs):**\n```rust\npub struct LockGuard { path: PathBuf, pub token: String }\npub enum Acquire { Held(LockGuard), Reclaimed(LockGuard), Busy }\npub fn acquire_at(dir: &Path, deadline: Duration, now_unix: i64) -> io::Result<Acquire>;\nimpl LockGuard {\n    pub fn still_held(&self) -> bool;   // re-read learn/lock.json; parse; token == self.token\n    pub fn release(self);               // remove file only if still_held\n}\n```\nLock file `learn/lock.json` = `{pid, started_at, token}` created with `OpenOptions::new().write(true).create_new(true)` (O_EXCL). On EEXIST: read the holder; STALE iff pid is dead (`libc::kill(pid, 0)` == -1 with ESRCH, `#[cfg(unix)]`) OR `now - started_at > 2 * deadline`; stale → remove + retry create_new once → `Reclaimed` (the CALLER counts a reclaim as one failure per Decision #3); live → `Busy`. Token = `state::random_hex(16)`.\n\n**Steps:** (1) failing tests: fresh acquire Held; second acquire while held (live pid = our own) Busy; stale-by-age file gets Reclaimed; after an external process overwrites the lock file with a different token, `still_held()` is false and `release()` leaves the foreign lock intact. (2) Implement. (3) Green. (4) Commit `feat(learn): fencing-token lock with dead-pid/age stale reclaim`.",
+          "status": "planned",
+          "depends_on": ["t-machine-state"],
+          "files": [
+            { "path": "src/learn/lock.rs", "action": "create" }
+          ],
+          "acceptance": [
+            "second acquire against a live holder is Busy; against dead-pid or 2×deadline-age is Reclaimed",
+            "still_held() is false the moment the file carries a different token; release never deletes a foreign lock"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::lock"],
+          "estimate": "m"
+        }
+      ]
+    },
+    {
+      "id": "p-capture",
+      "title": "Transcript capture — deterministic, fail-closed readers",
+      "icon": "database",
+      "summary_md": "Per-store readers extract user-authored messages from interactive sessions only, past the watermarks. A store that fails to parse is skipped with a log line — readers fail closed per store, never abort the run. Fixtures are cut from real (sanitized) transcript files.",
+      "tasks": [
+        {
+          "id": "t-reader-claude",
+          "title": "Reader framework + claude reader (entrypoint-gated, offset-resumed)",
+          "summary_md": "**Produces (src/learn/readers/mod.rs):**\n```rust\npub struct SessionSlice { pub agent: &'static str, pub session_id: String, pub cwd: Option<PathBuf>,\n    pub ts: String /* newest message ts */, pub messages: Vec<String> /* user-authored, in order */,\n    pub source_file: PathBuf, pub end_offset: u64 /* byte offset consumed, for watermark advance */ }\npub struct ScanOutcome { pub slices: Vec<SessionSlice>, pub skipped_stores: Vec<String> /* \"claude: <why>\" */ }\npub const QUIESCENCE: Duration = Duration::from_secs(20 * 60);\n```\n**src/learn/readers/claude.rs:**\n```rust\npub fn scan_claude(home: &Path, marks: &Watermarks, now: SystemTime, hooked: &BTreeSet<String>) -> Vec<SessionSlice>\n```\nWalks `home/.claude/projects/*/*.jsonl`. Per file: skip when `mtime` younger than QUIESCENCE unless its session_id ∈ `hooked` (hook-named sessions bypass quiescence but NOT the exclusions below); resume from `marks.mark(path).bytes_processed`; parse lines leniently (bad line → skip line). Include a message line iff `type == \"user\"` AND `userType == \"external\"` AND not `isMeta` AND not `isSidechain`; message content is `message.content` when string, else joins text parts. **Session-level exclusion (verified plan-time):** any line in the file carrying `entrypoint` outside {`cli`, `claude-desktop`} excludes the whole file (`sdk-cli`/`sdk-ts` are programmatic). `cwd` from the first line that has one. `end_offset` = byte offset after the last fully-parsed line.\n\n**Steps:** (1) Build fixtures under `tests/fixtures/learn/claude/`: interactive file (entrypoint cli, 3 user messages + assistant noise), sdk file (entrypoint sdk-cli), sidechain file, file with a malformed line mid-stream, file to test offset resume. Failing unit tests in-module reading fixtures via a `home`-shaped tempdir. (2) Implement. (3) Green. (4) Commit `feat(learn): claude transcript reader (interactive-only, offset-resumed)`.",
+          "status": "planned",
+          "depends_on": ["t-watermarks"],
+          "files": [
+            { "path": "src/learn/readers/mod.rs", "action": "create" },
+            { "path": "src/learn/readers/claude.rs", "action": "create" },
+            { "path": "tests/fixtures/learn/claude/interactive.jsonl", "action": "create", "note": "sanitized real-shape fixtures" }
+          ],
+          "acceptance": [
+            "sdk-cli/sdk-ts sessions and sidechain files are excluded whole; cli and claude-desktop included",
+            "resume from a recorded offset re-reads nothing; malformed mid-file lines skip that line only",
+            "files younger than 20min are skipped unless hook-named"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::readers::claude"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-reader-codex",
+          "title": "codex reader (session_meta-gated)",
+          "summary_md": "**Produces (src/learn/readers/codex.rs):** `pub fn scan_codex(home: &Path, marks: &Watermarks, now: SystemTime) -> Vec<SessionSlice>` over `home/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.\n\nFirst line is `{type: \"session_meta\", payload: {id, cwd, originator, source, cli_version, …}}` (verified on real files). **Include the file only when `originator == \"codex_cli_rs\"` AND `source == \"cli\"`** — exec/programmatic sessions carry different values and are excluded. `cwd` and `session_id` come from the meta payload.\n\n**First implementation step (in-task verification):** the user-message line shape inside rollouts was NOT verified at plan time — before writing fixtures, inspect a real rollout on this machine (`head -40 $(ls -t ~/.codex/sessions/*/*/*/rollout-*.jsonl | head -1)`), identify the user-message record type and its text field, and encode EXACTLY that shape into `tests/fixtures/learn/codex/`. If user text turns out not to be recoverable from rollouts, the reader returns empty and logs `skipped_stores` — fail closed, do not guess.\n\nOffset resume identical to claude (append-only JSONL, `marks` keyed by path). Quiescence identical (no codex hooks in v0.15, so no `hooked` bypass).\n\n**Steps:** (1) verify line shape as above; (2) failing tests on fixtures: interactive included, exec-source excluded, offset resume, malformed line tolerated; (3) implement; (4) green; (5) commit `feat(learn): codex transcript reader (session_meta-gated)`.",
+          "status": "planned",
+          "risk": "medium",
+          "depends_on": ["t-reader-claude"],
+          "files": [
+            { "path": "src/learn/readers/codex.rs", "action": "create" },
+            { "path": "tests/fixtures/learn/codex/interactive.jsonl", "action": "create" }
+          ],
+          "acceptance": [
+            "exec-mode sessions (originator/source ≠ cli values) are excluded whole",
+            "fixtures match the REAL rollout line shape captured from this machine, not an invented one"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::readers::codex"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-reader-gemini",
+          "title": "gemini reader (rewritten-array store, session-set watermarks)",
+          "summary_md": "**Produces (src/learn/readers/gemini.rs):** `pub fn scan_gemini(home: &Path, marks: &Watermarks, now: SystemTime, work_dir_hash: &str) -> Vec<SessionSlice>` over `home/.gemini/tmp/<project-hash>/logs.json`.\n\n`logs.json` is a rewritten ARRAY of `{sessionId, messageId, type: \"user\", message, timestamp}` (verified) — no byte offsets possible, so eligibility is the processed-`sessionId` set (`marks.gemini_seen/record`). Group entries by `sessionId`; a session is eligible when its newest timestamp is older than QUIESCENCE and it isn't already processed. **Programmatic exclusion (fallback heuristic per Decision #6):** skip sessions with exactly one user message — `-p` one-shots look exactly like that; gemini has no verified marker. **cwd guard:** the `<project-hash>` dir whose hash equals `work_dir_hash` (the worker's own work dir) is dropped entirely — this covers gemini's missing no-persist flag.\n\n**In-task verification step:** confirm the project-hash formula by hashing a known repo path (sha256 of the absolute cwd string is the expected formula) and comparing against an actual `~/.gemini/tmp/` dir name for a repo with known gemini use; encode the confirmed formula as `pub fn gemini_project_hash(path: &Path) -> String`. If the formula doesn't match, scope=adopted simply can't map gemini sessions to repos — then gemini sessions are only included under scope=all, and the reader documents that (fail closed, log line).\n\n**Steps:** (1) verification above; (2) failing tests: multi-session file folds correctly, single-message session excluded, processed set skips, work-dir hash dropped; (3) implement; (4) green; (5) commit `feat(learn): gemini reader (session-set watermarks, single-message heuristic)`.",
+          "status": "planned",
+          "depends_on": ["t-reader-claude"],
+          "files": [
+            { "path": "src/learn/readers/gemini.rs", "action": "create" },
+            { "path": "tests/fixtures/learn/gemini/logs.json", "action": "create" }
+          ],
+          "acceptance": [
+            "single-user-message sessions are excluded (programmatic heuristic)",
+            "processed sessionIds never re-harvest; the worker's own project-hash dir is always dropped"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::readers::gemini"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-slices",
+          "title": "Scope filter, caps, redaction, sentinel — slice assembly",
+          "summary_md": "Turns raw reader output into the bounded, redacted extraction input.\n\n**Produces (src/learn/slices.rs):**\n```rust\npub fn repo_is_adopted(cwd: &Path) -> bool;   // context::repo_base_for(cwd) then: .loadout/local.toml has a [binding] OR .loadout/generated/ is non-empty\npub struct Caps { pub max_sessions: usize /* 20 */, pub max_bytes: usize /* 400_000 */, pub age_cutoff_days: i64 /* 14, vs watermarks.baseline */ }\npub struct Assembled { pub slices: Vec<SessionSlice>, pub dropped_over_cap: usize, pub dropped_scope: usize, pub dropped_sentinel: usize }\npub fn assemble(mut slices: Vec<SessionSlice>, caps: &Caps, scope: LearnScope, baseline: Option<&str>, work_dir: &Path) -> Assembled;\n```\nOrder of operations, each under test: (1) drop sessions whose cwd matches `work_dir` (recursion guard layer 3); (2) drop sessions containing `extract::SENTINEL` in any message (layer 4); (3) scope filter — `Adopted` keeps only `repo_is_adopted(cwd)` (gemini sessions with no recoverable cwd are kept only under `All`); (4) drop sessions older than the baseline cutoff; (5) `redact_secrets` (src/redact.rs:52) over EVERY message before size accounting; (6) sort newest-first by ts and truncate to caps — **over-cap content is dropped, not deferred** (amendment #3): the caller still advances watermarks past everything scanned; `dropped_over_cap` is reported so the run log can say what was cut (no silent caps).\n\n**Steps:** (1) failing tests incl. a fixture message carrying a fake AWS key that must arrive `***REDACTED***`; (2) implement; (3) green; (4) commit `feat(learn): slice assembly — scope, caps, redaction, sentinel guard`.",
+          "status": "planned",
+          "depends_on": ["t-reader-codex", "t-reader-gemini"],
+          "files": [
+            { "path": "src/learn/slices.rs", "action": "create" }
+          ],
+          "acceptance": [
+            "caps enforce ≤20 sessions and ≤400KB, newest-first, with dropped counts reported",
+            "secrets are redacted before anything is size-counted or returned",
+            "adopted-scope keeps only sessions in adopted repos; sentinel and work-dir sessions always dropped"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::slices"],
+          "estimate": "m"
+        }
+      ]
+    },
+    {
+      "id": "p-extraction",
+      "title": "Extraction — prompt, claim gate, agent-CLI runner",
+      "icon": "flask-conical",
+      "summary_md": "The one LLM touchpoint, fenced on all sides: deterministic prompt build, strict output validation, deterministic defenses on every claim before it can sync or re-enter a prompt.",
+      "tasks": [
+        {
+          "id": "t-prompt",
+          "title": "Extraction prompt + strict output validation + pending-claim anchoring",
+          "summary_md": "**Produces (src/learn/extract.rs):**\n```rust\npub const SENTINEL: &str = \"loadout-harvest-marker-v1\";   // embedded in every prompt; readers drop sessions containing it\npub struct PendingClaim { pub id: String, pub claim: String, pub observation_count: usize }\npub fn build_prompt(fragments: &[(String, String)] /* id, description */, pending: &[PendingClaim], slices: &[SessionSlice]) -> String;\n#[derive(Deserialize)] #[serde(deny_unknown_fields)]\npub struct ExtractionOut { pub candidates: Vec<CandidateOut> }\n#[derive(Deserialize)] #[serde(deny_unknown_fields)]\npub struct CandidateOut { pub claim: String, pub kind: String, pub evidence: Vec<EvidenceOut> }\n#[derive(Deserialize)] #[serde(deny_unknown_fields)]\npub struct EvidenceOut { pub session_ref: String, pub quote: String }\npub fn parse_output(text: &str) -> anyhow::Result<ExtractionOut>;   // strict serde; any deviation is Err — the worker logs a failed run, advances nothing\npub fn output_json_schema() -> serde_json::Value;                   // for codex --output-schema\n```\nPrompt contents, in order: instructions (extract durable CROSS-PROJECT preferences/corrections; ignore project-specific and factual notes; STRICT JSON only); current fragment ids+descriptions (exact-duplicate avoidance + \"refines fragment X\" phrasing); **pending claims as an inert fenced JSON block labelled DATA, never prose instructions** — capped at the **50 most-observed** (amendment #2) — with the instruction: if re-observed, reuse the claim text VERBATIM and add the new session ref; then the redacted slices grouped by session with their session_ref labels; SENTINEL on its own line.\n\n**Steps:** (1) failing tests: anchoring cap picks the 50 most-observed of 60 pending; identical re-observed claim text yields the same `journal::candidate_id`; prompt contains fragment ids, sentinel, and the pending block as fenced JSON; `parse_output` rejects extra fields, missing fields, and non-JSON with Err. (2) Implement. (3) Green. (4) Commit `feat(learn): extraction prompt with anchored pending claims + strict output parse`.",
+          "status": "planned",
+          "depends_on": ["t-journal", "t-slices"],
+          "files": [
+            { "path": "src/learn/extract.rs", "action": "create" }
+          ],
+          "acceptance": [
+            "pending-claim anchoring is capped at the 50 most-observed",
+            "malformed or extra-field output is an Err, never partially accepted",
+            "re-observed verbatim claims produce identical candidate ids"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::extract"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-claim-gate",
+          "title": "Claim gate — redact + injection lint + caps → quarantine",
+          "summary_md": "Claims sync and re-enter future prompts, so they get the same deterministic defenses as rendered guidance (codex finding 6).\n\n**Produces (src/learn/gate.rs):**\n```rust\npub enum Gated { Clean(String) /* redacted claim */, Quarantined { claim: String, labels: Vec<&'static str> } }\npub fn gate_claim(claim: &str) -> Gated;      // redact::redact_secrets_report (src/redact.rs:58) then lint::find_injection (src/lint.rs:115); non-empty labels => Quarantined; then 500-char cap (truncate Clean, keep Quarantined whole for display)\npub fn gate_quote(quote: &str) -> String;     // redact + hard-truncate to 200 chars; caller caps at 5 quotes per candidate\n```\nQuarantined claims are still written to the journal (as `Observed` with `quarantined: Some(labels)`) so the studio can show \"held by injection lint\" with the matched pattern — but they are NEVER anchored into future prompts (enforced here: the worker builds `PendingClaim`s only from `Gated::Clean` candidates) and are promotable only after the user edits them (studio task).\n\n**Steps:** (1) failing tests: one input per injection-lint class from the src/lint.rs corpus quarantines with the right label; a claim embedding a GitHub token comes out Clean with `***REDACTED***`; 600-char clean claim truncates to 500; clean text passes through. (2) Implement. (3) Green. (4) Commit `feat(learn): deterministic claim gate with quarantine`.",
+          "status": "planned",
+          "depends_on": ["t-branch-config"],
+          "files": [
+            { "path": "src/learn/gate.rs", "action": "create" }
+          ],
+          "acceptance": [
+            "every injection-lint class quarantines with its human label; quarantined claims are never anchored",
+            "secrets in claims and quotes are redacted before any write"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::gate"],
+          "estimate": "s"
+        },
+        {
+          "id": "t-agent-cli",
+          "title": "One-shot agent-CLI selection and bounded invocation",
+          "summary_md": "**Produces (src/learn/agent_cli.rs):**\n```rust\npub struct CliChoice { pub cli_id: &'static str /* claude|codex|gemini */, pub program: String, pub model: String }\npub fn select(learn: &LearnConfig) -> Option<CliChoice>;   // learn.cli pin else probe order claude→codex→gemini via providers::probe_cli (src/providers/mod.rs:671, 3s-bounded)\npub fn invoke(choice: &CliChoice, prompt: &str, work_dir: &Path, deadline: Duration) -> anyhow::Result<InvokeOut>;\npub struct InvokeOut { pub text: String /* unwrapped model output */, pub usage: Option<String> /* raw usage blob when the CLI reports one */ }\n```\nHygiene argv (spellings verified plan-time on installed binaries):\n- claude: `-p --bare --no-session-persistence --output-format json --model <model>` + tool restriction — **pin down at implementation** whether `--disallowed-tools \"*\"` or `--allowedTools \"\"` actually blocks all tools (run the real binary once with a trivial prompt); `--bare` is doc-verified to skip ALL hooks. Unwrap: parse stdout JSON, take `.result`.\n- codex: `exec -s read-only --ephemeral --output-schema <work_dir>/schema.json -m <model>` (write `extract::output_json_schema()` to that file first). Unwrap: verify against the stub AND one real run — codex's final-message location in `--json` output is pinned here.\n- gemini: `-p --approval-mode plan -o json -m <model>`. Unwrap: parse stdout JSON `.response` (verify at implementation).\nPrompt is passed on **stdin** (avoids argv limits). Invocation: `Command` with `cwd=work_dir`, env `LOADOUT_LEARN_WORKER=1`, run under `providers::output_with_timeout` (src/providers/mod.rs:530 — process-group + deadline-bounded pipe drain). Default models: claude `haiku`, gemini a flash-class id, codex its configured default — exact strings pinned at implementation against each CLI's model list (do NOT trust memory for model ids).\n\n**Steps:** (1) failing tests using the `agent_stub` pattern (tests/cli.rs:873): stub `claude`/`codex`/`gemini` scripts that dump argv+env to a file and emit canned wrapped JSON; assert flags, env guard, stdin prompt delivery, unwrap per CLI; timeout kill via a sleeping stub. (2) Implement. (3) Green. (4) Commit `feat(learn): one-shot agent CLI runner with hygiene flags`.",
+          "status": "planned",
+          "depends_on": ["t-branch-config"],
+          "files": [
+            { "path": "src/learn/agent_cli.rs", "action": "create" }
+          ],
+          "acceptance": [
+            "probe order claude→codex→gemini with learn.cli override; missing CLIs skipped",
+            "every invocation carries LOADOUT_LEARN_WORKER=1, the hygiene flags, and the deadline bound",
+            "per-CLI output unwrapping proven against stubs (and one real-binary spot check for claude)"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::agent_cli"],
+          "estimate": "m"
+        }
+      ]
+    },
+    {
+      "id": "p-worker",
+      "title": "Worker + triggers",
+      "icon": "zap",
+      "summary_md": "The 8-step worker with the fencing token gating every side effect, the trigger fast path, the detached double-spawn, and the entry-point wiring.",
+      "tasks": [
+        {
+          "id": "t-worker",
+          "title": "Harvest worker orchestration + `load harvest`",
+          "icon": "zap",
+          "summary_md": "**Produces (src/learn/worker.rs):** `pub fn run_harvest(cfg: &Config, manual: bool) -> anyhow::Result<RunOutcome>` implementing the design's 8 steps; `src/commands/harvest.rs` `run(rt, args)` wrapping it; cli.rs `Command::Harvest(HarvestArgs)` with hidden `--ambient` flag (`#[command(hide = true)]` stays visible as `load harvest` for manual runs; `--ambient` marks throttled ambient runs in the log).\n\nStep order with fencing — EVERY numbered side effect first checks `guard.still_held()` and aborts (logged, counted as failure) if not:\n1. `lock::acquire_at` (Reclaimed ⇒ `state::record_failure_at` immediately, then continue); Busy ⇒ exit quietly.\n2. write scan stamp.\n3. read watermarks (corrupt ⇒ loud warn naming `load learn reset`, abort as failure); scan all three readers; `slices::assemble`. Empty ⇒ append a no-op log entry, release, exit — **spend stamp untouched** (two-stamp semantics).\n4-5. (inside assemble: extraction + redaction already applied).\n6. write SPEND stamp, then ONE `agent_cli::invoke`. Manual runs (`load harvest`) skip the interval check upstream but still write the spend stamp here (a manual run resets the tick — cheapest honest semantics).\n7. `extract::parse_output`; malformed ⇒ failed run: log, do NOT advance watermarks, do NOT write events (the spend stamp already burned the tick — by design). Valid ⇒ `gate::gate_claim` each; drop exact-duplicates of existing fragment descriptions; fold into `journal::Event`s (reusing anchored ids); quotes through `gate_quote` (≤5×200 chars) into `state_dir/learn/evidence/<id>.json`.\n8. advance watermarks past EVERYTHING scanned (drop-don't-defer) + prune; append run log entry to `state_dir/learn/log.jsonl` `{ts, trigger, cli, model, sessions, dropped_over_cap, candidates, quarantined, duration_ms, outcome, usage}`; on success `reset_failures_at`; release lock.\nInternal wall-clock deadline 5min checked between steps; the CLI call additionally bounded by `output_with_timeout`. Work dir: `state_dir/learn/work/` (created; cwd for the CLI call; schema.json written here).\n\n**Steps:** (1) failing tests with stub CLI: full-cycle writes journal+evidence+log+marks; empty scan makes ZERO CLI invocations and leaves the spend stamp untouched; malformed stub output ⇒ failure logged, watermarks unmoved, spend stamp written; a guard whose lock file was overwritten aborts before the CLI spawn (token fence). (2) Implement + wire cli.rs/main.rs/commands/mod.rs. (3) Green. (4) Commit `feat(learn): fenced harvest worker + load harvest`.",
+          "status": "planned",
+          "risk": "high",
+          "depends_on": ["t-lock", "t-slices", "t-prompt", "t-claim-gate", "t-agent-cli"],
+          "files": [
+            { "path": "src/learn/worker.rs", "action": "create" },
+            { "path": "src/commands/harvest.rs", "action": "create" },
+            { "path": "src/cli.rs", "action": "modify", "note": "Command::Harvest" },
+            { "path": "src/main.rs", "action": "modify" },
+            { "path": "src/commands/mod.rs", "action": "modify" }
+          ],
+          "acceptance": [
+            "empty scan: zero CLI calls, spend stamp untouched, no-op logged",
+            "spend stamp always precedes the CLI call; malformed output burns the tick and nothing else",
+            "a fenced-out worker (foreign token) makes no spend and no writes",
+            "every run appends one attributable log entry"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::worker"],
+          "estimate": "l"
+        },
+        {
+          "id": "t-fastpath",
+          "title": "Trigger fast path + detached double-spawn",
+          "summary_md": "**Produces (src/learn/trigger.rs):**\n```rust\npub enum Trigger { Run, Refresh, Studio, HookServe, SessionEnd { agent: String } }\npub fn maybe_spawn(cfg: &Config, trigger: Trigger);   // never blocks, never errors outward\n```\nGuards in order (each a cheap early return; residual idle cost = one config field + two stat()s): `cfg.learn.enabled` (config is already loaded at every site, read AFTER the flow's auto-pull); activation ack present; `LOADOUT_LEARN != \"off\"`; `LOADOUT_LEARN_WORKER` unset; not `paused_at`; scan stamp due (15min); spend stamp due (`learn.interval`) OR an eligibility hint exists (`state_dir/learn/eligible/` non-empty — written by session-end hooks). Then detached double-spawn (unix): intermediate `current_exe() harvest --ambient` child that itself spawns the real worker and exits; parent waits ONLY on the intermediate (ms). Worker child: `.process_group(0)` (the src/providers/mod.rs:543 precedent), stdio to `state_dir/learn/worker.log` (append), `nice` via `libc::nice(10)` in a `pre_exec` hook. `#[cfg(not(unix))]`: no-op (graceful — no Windows dist target ships).\n\nEligibility hints: `pub fn write_eligibility_hint(agent: &str, session_id: &str)` creates `state_dir/learn/eligible/<agent>-<session_id>`; the worker consumes (reads into the readers' `hooked` set, then deletes) at step 3.\n\n**Steps:** (1) failing tests (env isolation via LOADOUT_STATE_DIR/LOADOUT_CONFIG_DIR tempdirs): each guard short-circuits — disabled config, missing ack, LOADOUT_LEARN=off, LOADOUT_LEARN_WORKER=1, fresh scan stamp, fresh spend stamp without hint; hint bypasses the spend-stamp guard but not the scan-stamp debounce. Spawn tested with the binary pointed at a stub via test seam `fn spawn_worker(exe: &Path)` injected. (2) Implement. (3) Green. (4) Commit `feat(learn): trigger fast path + detached worker spawn`.",
+          "status": "planned",
+          "depends_on": ["t-worker"],
+          "files": [
+            { "path": "src/learn/trigger.rs", "action": "create" }
+          ],
+          "acceptance": [
+            "all seven guards short-circuit in order; idle cost is a config read plus stamp stats",
+            "trigger latency is milliseconds (waits only on the intermediate); worker is reparented and group-isolated",
+            "non-unix builds compile to a graceful no-op"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test learn::trigger"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-entrypoints",
+          "title": "Entry-point wiring + discovery lines",
+          "summary_md": "Wire `maybe_spawn` into the four entry points and add the two user-visible lines.\n\n**Wiring:** `src/commands/run.rs` — after `print_workflow_step` (:261), before `launch()` (:299): `learn::trigger::maybe_spawn(&prep.config, Trigger::Run)` (MUST complete its ms-wait before the `exec()` at :301 replaces the process — the double-spawn guarantees the worker survives). `src/commands/refresh.rs` — after `apply_for_agents` (:61). `src/studio/server.rs` — in `serve` after `bootstrap_hook_registrations` (:1785). `src/commands/hook.rs` — at the end of `serve` (still stdout-silent). All four sites run AFTER their flow's `sync_before_render`, so a synced disable lands before the check (Decision #4).\n\n**Discovery lines:**\n1. `load run` step line via `apply::step` (src/commands/apply.rs:110), emitted only when `journal::fold_at` has pending candidates: `✦ learn   3 staged suggestions await review — load studio`. Fold is a small file read; guard it behind `learn.enabled` so disabled users pay nothing.\n2. Snapshot line in the rendered header (`src/render/header.rs:59` block): one line, only when N>0: `loadout: 3 staged suggestions await review — load studio`. CONSTRAINT: the header is composed with the context hash as an input, so this line must not feed the hash — assert in a test that two renders differing only in pending-count produce the SAME `context sha` in the header.\n3. Refresh summary line: when `state_dir/learn/log.jsonl` has an ambient run newer than a `state_dir/learn/last-notified` stamp, refresh prints `learning: harvested 3 sessions via claude (haiku) — 2 new candidates` (then bumps the stamp).\n\n**Steps:** (1) failing integration tests (tests/cli.rs Fixture): seeded journal ⇒ run/refresh show the line; empty ⇒ absent; hash-stability test for the header. (2) Implement. (3) Green. (4) Commit `feat(learn): entry-point triggers + discovery lines`.",
+          "status": "planned",
+          "depends_on": ["t-fastpath", "t-journal"],
+          "files": [
+            { "path": "src/commands/run.rs", "action": "modify" },
+            { "path": "src/commands/refresh.rs", "action": "modify" },
+            { "path": "src/studio/server.rs", "action": "modify" },
+            { "path": "src/commands/hook.rs", "action": "modify" },
+            { "path": "src/render/header.rs", "action": "modify" },
+            { "path": "tests/cli.rs", "action": "test" }
+          ],
+          "acceptance": [
+            "all four entry points trigger; none can block or fail its host flow",
+            "discovery lines appear only when N>0; the header line never changes the recorded context sha",
+            "refresh summarizes new ambient runs exactly once"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test --test cli learn"],
+          "estimate": "m"
+        }
+      ]
+    },
+    {
+      "id": "p-hooks",
+      "title": "Hook registration — claude nested + cursor stop",
+      "icon": "terminal",
+      "summary_md": "HookRegistry grows a code-side list with purpose ids so the passive bootstrap can never re-add learn hooks after `load learn off`, and removal never touches freshness or foreign entries. Gemini is OUT (gate failed).",
+      "tasks": [
+        {
+          "id": "t-hook-registry",
+          "title": "HookRegistry: purpose ids, format discriminator, learn gating",
+          "summary_md": "**Modify src/adapters/mod.rs.** All new descriptor data is code-side only — `#[serde(skip)]` with defaults, following the `review_commands` precedent (:130), so NO new config-schema keys exist for a newer synced config to brick an older binary with (the v0.13 lesson).\n\n```rust\n#[derive(..., Default)] pub enum HookPurpose { #[default] Freshness, Learn }\n#[derive(..., Default)] pub enum HookFormat { #[default] Flat, ClaudeNested }\n// on HookRegistry (:170):  #[serde(skip)] pub purpose: HookPurpose,  #[serde(skip)] pub format: HookFormat\n// on AgentDescriptor (:43): #[serde(skip)] pub learn_hooks: Vec<HookRegistry>\n```\nBuilt-ins: claude descriptor (:227) gets `learn_hooks = [HookRegistry { hooks_file: \".claude/settings.json\", event: \"SessionEnd\", subcommand: \"hook claude --event session-end\", auto_adopt: false, purpose: Learn, format: ClaudeNested }]`; cursor (:319) appends `{ hooks_file: \".cursor/hooks.json\", event: \"stop\", subcommand: \"hook cursor --event session-end\", auto_adopt: false, purpose: Learn, format: Flat }` alongside its existing freshness entry.\n\n`bootstrap_hook_registrations` (:1114) gains a `learn_active: bool` parameter (callers pass `cfg.learn.enabled && activation-present`): freshness hooks register as today; learn_hooks register ONLY when learn_active — an ordinary refresh can never re-add them after `load learn off` (codex finding 5). New `pub fn remove_learn_hooks(config, dry_run) -> Vec<String>` strips ONLY entries whose command ends with a learn subcommand suffix — the existing `is_ours` ends_with matching (:1237) already distinguishes `… hook cursor` from `… hook cursor --event session-end`, add a test proving freshness registration can never repoint a learn entry and vice versa. Update all 4 bootstrap call sites (refresh.rs:31, run.rs:180, sync.rs:45, studio/server.rs:1785).\n\n**Steps:** (1) failing tests in `hook_registry_tests` (:1376): bootstrap with learn_active=false registers zero learn entries even when files exist; =true registers both dialect entries; remove_learn_hooks leaves the cursor freshness entry and foreign (claude-mem-style) entries byte-identical. (2) Implement. (3) Green. (4) Commit `feat(learn): hook purpose ids + learn-gated registration`.",
+          "status": "planned",
+          "risk": "medium",
+          "depends_on": ["t-branch-config"],
+          "files": [
+            { "path": "src/adapters/mod.rs", "action": "modify" },
+            { "path": "src/commands/refresh.rs", "action": "modify", "note": "bootstrap call site" },
+            { "path": "src/commands/run.rs", "action": "modify", "note": "bootstrap call site" },
+            { "path": "src/commands/sync.rs", "action": "modify", "note": "bootstrap call site" },
+            { "path": "src/studio/server.rs", "action": "modify", "note": "bootstrap call site" }
+          ],
+          "acceptance": [
+            "no new serde-visible config keys (all additions #[serde(skip)])",
+            "refresh bootstrap can never re-add learn hooks while learning is off",
+            "learn removal leaves freshness hooks and foreign entries untouched"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test adapters::"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-claude-hooks-writer",
+          "title": "Claude nested settings.json hook writer",
+          "summary_md": "**Create src/adapters/hooks_claude.rs** (registered from adapters/mod.rs; `apply_hook_registry` (:1140) dispatches on `HookFormat`). Target shape (doc-verified):\n```json\n{ \"hooks\": { \"SessionEnd\": [ { \"hooks\": [ { \"type\": \"command\", \"command\": \"\\\"/path/to/load\\\" hook claude --event session-end\", \"timeout\": 10 } ] } ] } }\n```\nNo matcher (fires for all end reasons). `timeout: 10` — SessionEnd's default is 600s; ours only runs the fast path + ms spawn.\n\n```rust\npub fn upsert_claude_hook(existing: &str, event: &str, subcommand: &str, command: &str) -> anyhow::Result<Option<String>>;\npub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Option<String>>;\n```\nSemantics mirror `upsert_hook_command` (:1204): identify ours by the `\" <subcommand>\"` command suffix; repoint a moved binary in place; `Ok(None)` when already current (no churn). **Semantic preservation, not byte preservation** (codex finding 7): serde_json re-serialization must keep every foreign key/value; loadout-created empty containers (`hooks.SessionEnd` array, matcher group, `hooks` object) are removed on deregistration when we emptied them; the shared one-time `.loadout-bak` backup flow (:1176) applies before first edit of a pre-existing file. **Respect `disableAllHooks: true`** (top-level key, doc-verified): register nothing, return a note string the caller surfaces (\"claude hooks disabled by disableAllHooks — learning will rely on entry-point triggers\").\n\n**Steps:** (1) failing round-trip tests: upsert into an empty file, into a settings.json dense with foreign keys (assert every foreign key survives byte-for-byte at the VALUE level), repoint moved binary, idempotent second upsert = None, remove cleans empty containers but leaves a foreign SessionEnd sibling, disableAllHooks short-circuits. (2) Implement + dispatch in `apply_hook_registry`. (3) Green. (4) Commit `feat(learn): claude nested hooks writer with semantic preservation`.",
+          "status": "planned",
+          "risk": "medium",
+          "depends_on": ["t-hook-registry"],
+          "files": [
+            { "path": "src/adapters/hooks_claude.rs", "action": "create" },
+            { "path": "src/adapters/mod.rs", "action": "modify", "note": "HookFormat dispatch in apply_hook_registry" }
+          ],
+          "acceptance": [
+            "foreign keys and sibling hook entries survive every upsert/remove round-trip",
+            "deregistration removes loadout-created empty containers, backup written before first edit",
+            "disableAllHooks means register nothing, with a user-visible note"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test adapters::hooks_claude"],
+          "estimate": "m"
+        },
+        {
+          "id": "t-hook-serve-event",
+          "title": "`load hook <agent> --event session-end` serve path",
+          "summary_md": "**Modify src/cli.rs `HookArgs` (:113-120):** add `#[arg(long)] pub event: Option<String>`. **Modify src/commands/hook.rs:** when `event == Some(\"session-end\")`, `serve` takes a different branch that keeps EVERY existing invariant (quiet warnings :58, stdin bounded 1MB :61, zero stdout, always exit 0): parse the payload leniently; for claude read `session_id` (payload also carries `transcript_path`, `cwd`, `reason` — doc-verified; `reason` is NOT used for exclusion, the reader's entrypoint filter is authoritative because SessionEnd fires for `-p` runs too); write the eligibility hint via `trigger::write_eligibility_hint(agent, session_id)`; call `maybe_spawn(cfg, Trigger::SessionEnd { agent })`; exit 0. No refresh work on this path.\n\n**Cursor stop payload — in-task verification:** the brainstorm verified cursor has a session-end-class `stop` hook, but its payload fields were not re-verified at plan time. First step: check Cursor's hooks documentation for the `stop` event's payload (field for a conversation/session id). If a usable id exists, hint with it; if not, write a generic hint (`cursor-tick-<now>`) — the worker treats any hint as \"a session just ended somewhere\", scan-with-quiescence still applies to cursor since we ship no cursor reader in v0.15 (the hint's value for cursor is purely waking the claude/codex/gemini scan). If the docs show no `stop` event at all, drop the cursor learn hook from t-hook-registry's built-ins (tier-2 like gemini) and note it — do not guess.\n\n**Steps:** (1) failing integration tests (tests/cli.rs): `load hook claude --event session-end` with a canned payload writes the hint file, prints NOTHING to stdout, exits 0; malformed/empty payload still exits 0; without `--event` the existing freshness behavior is unchanged (regression). (2) Implement. (3) Green. (4) Commit `feat(learn): session-end hook serve path`.",
+          "status": "planned",
+          "depends_on": ["t-fastpath", "t-hook-registry"],
+          "files": [
+            { "path": "src/cli.rs", "action": "modify" },
+            { "path": "src/commands/hook.rs", "action": "modify" },
+            { "path": "tests/cli.rs", "action": "test" }
+          ],
+          "acceptance": [
+            "serve invariants hold: stdout-silent, exit 0 always, bounded stdin",
+            "claude payload marks its session eligible; freshness path is regression-free",
+            "cursor stop payload verified against docs or the hook is dropped to tier-2 — no guessing"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test --test cli hook"],
+          "estimate": "m"
+        }
+      ]
+    },
+    {
+      "id": "p-surfaces",
+      "title": "Surfaces — CLI, studio Inbox, doctor",
+      "icon": "layout-dashboard",
+      "summary_md": "Everything the user sees: consent and lifecycle commands, the review UI, and diagnostics.",
+      "tasks": [
+        {
+          "id": "t-learn-cmd",
+          "title": "`load learn on|off|status|reset` with honest consent",
+          "summary_md": "**Create src/commands/learn.rs; modify cli.rs/main.rs/commands/mod.rs.** `LearnArgs { action: Option<LearnAction> }`, `enum LearnAction { On { #[arg(long)] yes: bool }, Off, Status, Reset }`; bare `load learn` = status (the plan.rs:62 pattern).\n\n**`on`:** print the consent block, then y/N stdin confirm (`--yes` skips; non-TTY without --yes aborts with a hint). Consent text MUST name, verbatim: what runs (`load harvest --ambient`, visible in ps), when (after agent sessions end and at loadout's own commands, at most once per 6h), the ceiling (\"at most 1 extraction call per 6h tick — ≤4/day at defaults, per machine you enable; plus any `load harvest` you run yourself\"), which files get edited (`~/.claude/settings.json`, `~/.cursor/hooks.json` — with one-time backups), the sync disclosure (\"claim text distilled from your sessions is stored in your synced loadout config; verbatim quotes never leave this machine\"), and the cost line — compute at implementation from the caps against CURRENT haiku-class API pricing (~100k input tokens worst case; verify pricing, do not trust memory; expected shape: \"typically ~1-3¢, up to ~10-15¢ per run on a metered API key; $0 marginal on a subscription-backed CLI; pin `learn.cli` if that matters\"). Then: set `enabled = true` in the GLOBAL config.toml via toml_edit (comment-preserving — the binding-writer precedent, NOT plain toml); mint machine id + write activation ack; register learn hooks (bootstrap with learn_active=true) listing each file touched; offer an immediate first run (y/N ⇒ `worker::run_harvest(manual)` foreground with its outcome printed).\n**`off`:** set `enabled = false` (toml_edit), attempt a bounded sync auto-push when `sync::is_synced` (warn-don't-fail: \"disable syncs to other machines at their next launch\"), remove activation ack, `remove_learn_hooks` locally, print each file cleaned.\n**`status`:** enabled/activated (machine id + hostname), CLI+model that would be selected, last run from log.jsonl, next eligibility (both stamps), paused state with clearing action, hooks registered per agent, journal counts (pending/suppressed/quarantined).\n**`reset`:** `Watermarks::reset` + `reset_failures_at`; journals and evidence untouched; prints what re-baselining means (14-day cutoff forward).\n\n**Steps:** (1) failing integration tests (Fixture, isolated HOME/CONFIG/STATE): `learn on --yes` writes enabled=true preserving config comments, mints id, writes ack, registers hooks in both dotfiles; `learn off` reverses all of it and flips the flag; `status` names paused state after seeded failures; `reset` clears watermarks only. (2) Implement. (3) Green. (4) Commit `feat(learn): load learn lifecycle commands with honest consent`.",
+          "status": "planned",
+          "depends_on": ["t-worker", "t-claude-hooks-writer", "t-hook-registry"],
+          "files": [
+            { "path": "src/commands/learn.rs", "action": "create" },
+            { "path": "src/cli.rs", "action": "modify" },
+            { "path": "src/main.rs", "action": "modify" },
+            { "path": "src/commands/mod.rs", "action": "modify" },
+            { "path": "tests/cli.rs", "action": "test" }
+          ],
+          "acceptance": [
+            "consent names the per-machine ceiling, both hook files, the claim-sync disclosure, and a concrete cost estimate",
+            "on: config flag + ack + hooks, comments preserved; off: full local reversal + synced disable with push attempt",
+            "status and reset behave as designed (reset never touches journals)"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test --test cli learn"],
+          "estimate": "l"
+        },
+        {
+          "id": "t-studio-inbox",
+          "title": "Studio Inbox tab — review, promote, dismiss, history",
+          "icon": "layout-dashboard",
+          "summary_md": "Third top-level nav destination: **Loadouts | Library | Inbox** (with a pending-count badge when N>0). New module `src/studio/inbox.rs` for handlers+views (server.rs/views.rs are huge; only wiring edits go there).\n\n**Routes (add to `route`'s match, server.rs:138; mutating routes are POST so they inherit the Origin/Referer guards):** `GET /tab/inbox` (candidate list; folds journals + machine-local evidence store OUTSIDE the state mutex, per the snapshot-then-render rule); `GET /inbox/<id>/promote` (modal: claim text editable — REQUIRED edit for quarantined; radio new-fragment vs merge-into-existing (fragment picker); profile multi-select); `POST /inbox/<id>/promote`; `POST /inbox/<id>/dismiss`; `POST /inbox/<id>/unsuppress`; `GET /inbox/history` (run-log panel folding `state_dir/learn/log.jsonl`: ts, trigger, cli/model, sessions, candidates, duration, outcome, usage).\n\n**Promote plumbing:** stage the config edit through the existing `edit::Session` engine (`StagedOp::CreateFragment`/`EditFragment` + profile ref updates via existing ops — reuse `fragment_from_form`), and mirror the `pending_trust` precedent with `session.pending_dispositions: Vec<journal::Disposition>` flushed to the journal in `Session::apply()` — the disposition lands iff the config write lands. Dismiss/unsuppress append their disposition immediately (no config change involved). Editing a claim before promote changes its candidate id — the promote handler appends the disposition for the ORIGINAL id (that's what suppression/promotion must key on).\n\n**Views:** candidate cards — claim, source badge, observation count, machines, evidence quotes (from the local evidence store; \"evidence recorded on <host>\" when only remote machines observed it), quarantine banner naming the matched lint pattern; suppressions list with un-suppress; empty states. Modal errors via `Resp::html_retarget` (the workflow-editor pattern).\n\n**Steps:** (1) failing router unit tests via `state_for`/`req` (server.rs:2149/2179) with seeded tempdir journals: list renders candidates + badge count; promote stages a fragment op AND flushes the disposition on apply (assert config.toml + journal); dismiss folds to suppressed; quarantined candidate's promote form demands an edit; history renders seeded log lines. (2) Implement (+ minimal CSS in studio.css). (3) Green incl. `cargo test --test studio`. (4) Commit `feat(learn): studio inbox — review, promote, dismiss, history`.",
+          "status": "planned",
+          "risk": "medium",
+          "depends_on": ["t-journal", "t-worker"],
+          "files": [
+            { "path": "src/studio/inbox.rs", "action": "create" },
+            { "path": "src/studio/server.rs", "action": "modify", "note": "routes + tab" },
+            { "path": "src/studio/views.rs", "action": "modify", "note": "tab_bar + shell badge" },
+            { "path": "src/studio/edit.rs", "action": "modify", "note": "pending_dispositions flush on apply" },
+            { "path": "src/studio/assets/studio.css", "action": "modify" },
+            { "path": "tests/studio.rs", "action": "test" }
+          ],
+          "acceptance": [
+            "promote writes config through Session.apply and the disposition lands iff the write lands",
+            "dismissed candidates fold to suppressed and disappear from pending; unsuppress restores",
+            "quarantined claims are promotable only after user edit; evidence locality is honest per machine"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test studio", "env -u CARGO_TARGET_DIR cargo test --test studio"],
+          "estimate": "l"
+        },
+        {
+          "id": "t-doctor",
+          "title": "Doctor learn section + refresh pause warning",
+          "summary_md": "**Modify src/commands/doctor.rs** — new printed section `Learning` (the :38-169 section pattern) with a `check_learn(cfg) -> Vec<Finding>` living in doctor.rs (it reads state dir + $HOME hook files, which the checks.rs purity contract forbids). Findings: enabled-but-not-activated here (\"run `load learn on` on this machine\"); activated-but-disabled / hooks-registered-but-disabled orphan (\"run `load learn off` here to clean up\" — Decision #4); hooks well-formed per agent (parse both dotfiles, locate our entries by suffix, flag malformed JSON); last run + outcome + next eligibility from log/stamps; paused-after-failures with the clearing action; corrupt watermarks (loud, names `load learn reset`); no-trigger-in-14-days nudge when enabled. Doctor NEVER triggers a harvest.\n\n**Modify src/commands/refresh.rs** — alongside the `checks::refresh_subset` warnings (:68-72), a direct cheap check: when learning is enabled+activated and `paused_at`, print `learning paused after repeated failures — see load learn status` (stderr `warn_user!`).\n\n**Steps:** (1) failing tests: fixture state dirs produce each finding (enabled-no-ack, orphaned hooks, paused, corrupt marks, stale 14-day); refresh pause warning appears/absent. Doctor findings tested at the `check_learn` fn level with injected paths (follow `check_hook_registry`'s testing style, doctor.rs:354-411). (2) Implement. (3) Green. (4) Commit `feat(learn): doctor learning section + refresh pause warning`.",
+          "status": "planned",
+          "depends_on": ["t-learn-cmd"],
+          "files": [
+            { "path": "src/commands/doctor.rs", "action": "modify" },
+            { "path": "src/commands/refresh.rs", "action": "modify" }
+          ],
+          "acceptance": [
+            "every design-named finding has a check and a clearing action in its message",
+            "orphaned learn hooks are flagged; doctor never spawns a worker"
+          ],
+          "validation": ["env -u CARGO_TARGET_DIR cargo test doctor"],
+          "estimate": "m"
+        }
+      ]
+    },
+    {
+      "id": "p-ship",
+      "title": "Hardening + ship",
+      "icon": "rocket",
+      "summary_md": "End-to-end proof with a stub CLI, then the release paperwork the v0.13 retro flagged.",
+      "tasks": [
+        {
+          "id": "t-e2e",
+          "title": "End-to-end integration suite (stub agent CLI)",
+          "summary_md": "**Create tests/learn.rs** using the `Fixture` pattern (tests/cli.rs:13 — copy the struct or extract a shared helper module if trivial) + the `agent_stub` fake-binary pattern (:873). Stub `claude` script: dumps argv+env to a file, increments a call-count file, emits canned wrapped JSON (`{\"result\": \"{\\\"candidates\\\": […]}\"}`), honors `--output-format json`.\n\nScenarios (each its own #[test], fully isolated HOME/CONFIG/STATE):\n1. **Full cycle:** fake `~/.claude/projects/<proj>/session.jsonl` (interactive shape, old mtime) ⇒ `load learn on --yes` ⇒ `load harvest` ⇒ assert journal events + evidence file + log entry + advanced watermark + candidate visible in `load learn status`.\n2. **No-new-content:** immediate second `load harvest` ⇒ stub call-count unchanged, no-op logged.\n3. **Throttle:** ambient path (`load harvest --ambient`) with fresh spend stamp ⇒ zero calls; stale stamp ⇒ one call.\n4. **Crash-after-stamp:** stub exits 1 after being called ⇒ failure logged, watermark unmoved, spend stamp written (tick burnt), second consecutive failure ⇒ status reports paused and ambient refuses.\n5. **Recursion guard:** stub invokes `load hook claude --event session-end` itself ⇒ no second worker (LOADOUT_LEARN_WORKER env + lock Busy path both asserted via call-count).\n6. **Reclaim:** pre-seed a stale lock file ⇒ run succeeds, reclaim counted as one failure in failures.json, logged.\n7. **Kill switch:** `LOADOUT_LEARN=off` ⇒ ambient no-op; `load learn off` ⇒ hooks gone from both dotfiles, enabled=false.\n8. **PATH-not-alias:** selection uses PATH lookup (stub dir prepended) — a shell alias can't shadow it (the dogfood note: `claude` is aliased to `rosita run claude` on the dev machine).\n\n**Gate:** `env -u CARGO_TARGET_DIR cargo test` (ALL suites), `env -u CARGO_TARGET_DIR cargo clippy --all-targets` clean, `cargo fmt --check` clean. Fix fallout. Commit `test(learn): end-to-end harvest suite with stub agent CLI`.",
+          "status": "planned",
+          "risk": "medium",
+          "depends_on": ["t-entrypoints", "t-hook-serve-event", "t-learn-cmd", "t-studio-inbox", "t-doctor"],
+          "files": [
+            { "path": "tests/learn.rs", "action": "create" },
+            { "path": "tests/fixtures/learn/e2e/", "action": "create", "note": "transcript + stub fixtures" }
+          ],
+          "acceptance": [
+            "all eight scenarios pass in isolation and under `cargo test` full-suite",
+            "clippy --all-targets and fmt --check are clean"
+          ],
+          "validation": [
+            "env -u CARGO_TARGET_DIR cargo test",
+            "env -u CARGO_TARGET_DIR cargo clippy --all-targets",
+            "cargo fmt --check"
+          ],
+          "estimate": "l"
+        },
+        {
+          "id": "t-changelog",
+          "title": "CHANGELOG + README learning section",
+          "summary_md": "The v0.13 retro gap, made a task this time. **CHANGELOG.md:** add the `0.15.0` section (match the existing sections' voice and structure — check how 0.13.0/0.14.0 were written, and RELEASING.md for whether the header carries a date at release time): the learning feature (one-time opt-in, session-end hooks for claude/cursor, throttled ≤4-calls/day-per-machine worker, per-machine inbox journals, studio Inbox tab, `load learn`/`load harvest`, doctor section), the honest-spend guarantees, and the explicit non-goals (gemini hooks inert — tier-2; audit layer → v0.16). **README.md:** a short problem-first \"Learning\" section in the existing feature-list style (opt-in, mines YOUR sessions with YOUR agent CLI, everything staged for explicit promote — own-your-markdown intact); note the studio screenshot regeneration is deferred to the release step (the docs/branding pipeline exists). Version bump itself happens in the release commit per RELEASING.md, not here.\n\n**Steps:** (1) write both; (2) `load plan`-style sanity: read them back for voice; (3) commit `docs: changelog + README section for learning (v0.15.0)`.",
+          "status": "planned",
+          "depends_on": ["t-e2e"],
+          "files": [
+            { "path": "CHANGELOG.md", "action": "modify" },
+            { "path": "README.md", "action": "modify" }
+          ],
+          "acceptance": [
+            "CHANGELOG 0.15.0 section exists and matches house style; README explains the feature problem-first"
+          ],
+          "validation": ["git diff --stat CHANGELOG.md README.md"],
+          "estimate": "s"
+        }
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "id": "r-transcript-drift",
+      "title": "Transcript store formats are undocumented internals (readers/*.rs)",
+      "severity": "high",
+      "mitigation_md": "The highest ongoing maintenance surface, accepted in the design. Mitigations: per-store fail-closed readers (a parse failure skips that store with a log line, never aborts the run); fixtures cut from REAL files on this machine at implementation time (t-reader-codex explicitly re-verifies the rollout message shape before coding); formats re-verified each release."
+    },
+    {
+      "id": "r-lock-fencing",
+      "title": "Suspend/resume interleavings around the spend stamp (learn/lock.rs, learn/worker.rs)",
+      "severity": "medium",
+      "mitigation_md": "Token minted at acquisition; EVERY side effect (both stamps, the CLI spawn, journal/evidence/watermark/log writes) re-checks `still_held()` first; watermark advance is additionally monotonic so even a fencing bug cannot double-harvest. t-worker's tests include a fenced-out-before-spawn scenario."
+    },
+    {
+      "id": "r-cursor-stop",
+      "title": "Cursor `stop` hook payload unverified at plan time (t-hook-serve-event)",
+      "severity": "medium",
+      "mitigation_md": "The brainstorm verified the surface exists; the payload shape didn't get re-verified. t-hook-serve-event verifies against Cursor's docs before wiring; a missing session id degrades to a generic wake hint; a missing event entirely drops cursor to tier-2 (like gemini) with entry-point triggers covering its users. No guessing."
+    },
+    {
+      "id": "r-overlay-churn",
+      "title": "Snapshot discovery line could churn the rendered header (src/render/header.rs)",
+      "severity": "medium",
+      "mitigation_md": "The pending-count line must not feed the context hash. The header already varies (host, timestamp) without affecting the hash, so the line rides the same channel; t-entrypoints has an explicit test that two renders differing only in pending-count produce identical `context sha` values."
+    },
+    {
+      "id": "r-claude-tool-flag",
+      "title": "Claude empty-toolset flag semantics unverified (learn/agent_cli.rs)",
+      "severity": "low",
+      "mitigation_md": "`--allowed-tools`/`--disallowed-tools` spellings are verified; whether `--disallowed-tools \"*\"` or `--allowedTools \"\"` blocks all tools is pinned in t-agent-cli with one real-binary run. Failure mode is mild anyway: `-p --bare` with a read-only prompt and a 5-minute deadline."
+    },
+    {
+      "id": "r-metered-spend",
+      "title": "Metered-API spend surprises (t-learn-cmd consent, t-worker stamps)",
+      "severity": "low",
+      "mitigation_md": "Stamp-before-spend ordering caps crash-loop cost at 1 call per 6h per machine; consent names CLI, model, ceiling, and a concrete per-run cost estimate computed against current pricing at implementation; per-run usage logged when the CLI reports it; 2 consecutive failures pause ambient triggering."
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "q-manual-throttle",
+      "question_md": "`load harvest` (manual) bypasses the 6h interval check but still writes the spend stamp when it makes its call — i.e. a manual run resets the ambient tick. That matches the consent wording (\"plus any `load harvest` runs you type\") and is the cheapest honest semantics. Confirm, or should manual runs leave the ambient tick untouched?",
+      "blocking": false
+    },
+    {
+      "id": "q-first-run-ux",
+      "question_md": "At `load learn on`, the offered first run executes FOREGROUND with the run's outcome printed (recommended — the user just consented and wants to see something happen), rather than detached like ambient runs. OK?",
+      "blocking": false
+    },
+    {
+      "id": "q-model-defaults",
+      "question_md": "Default cheap models when `learn.model` is unset: claude → the CLI's `haiku` alias; gemini → a flash-class id; codex → its configured default. Exact strings get pinned in t-agent-cli against each CLI's live model list (not memory). Any preference to hard-pin specific ids instead?",
+      "blocking": false
+    }
+  ]
+}

@@ -7,33 +7,36 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::plan::model::{Phase, Plan, RiskLevel, Status};
 
 /// Fixed geometry + text budget for one graph's nodes. Task graphs and the
-/// phase graph each get their own: the phase graph draws fewer, wider boxes
-/// with longer titles, since phase titles matter more than the 28-char
-/// task-title budget once each box represents a whole phase.
+/// phase graph each get their own: the phase graph draws fewer, wider boxes,
+/// so its lines carry more characters. Labels wrap to at most two lines
+/// (see `wrap_title`); nodes are sized for two lines, and every node also
+/// carries an SVG `<title>` with the full untruncated text, so a clipped
+/// label is recoverable on hover.
 struct GraphStyle {
     node_w: i64,
     node_h: i64,
     gap: i64,
     /// `rx`/`ry` corner radius on the node `<rect>`.
     corner_radius: i64,
-    /// Max chars kept from a title before appending `…`.
-    title_max_chars: usize,
+    /// Max chars per label line (two lines max; the second line gets `…`
+    /// only when the title still overflows both).
+    line_max_chars: usize,
 }
 
 const TASK_STYLE: GraphStyle = GraphStyle {
     node_w: 200,
-    node_h: 40,
+    node_h: 48,
     gap: 32,
     corner_radius: 6,
-    title_max_chars: 28,
+    line_max_chars: 26,
 };
 
 const PHASE_STYLE: GraphStyle = GraphStyle {
     node_w: 240,
-    node_h: 44,
+    node_h: 52,
     gap: 32,
     corner_radius: 8,
-    title_max_chars: 40,
+    line_max_chars: 32,
 };
 
 struct Node {
@@ -309,6 +312,9 @@ fn render_graph(
             node.href_prefix,
             esc(&node.id)
         ));
+        // Full title as a native tooltip — hovering any part of the node
+        // (rect or label) recovers whatever the two-line budget clipped.
+        out.push_str(&format!("<title>{}</title>", esc(&node.title)));
         out.push_str(&format!(
             "<rect class=\"{}\" x=\"{x}\" y=\"{y}\" width=\"{}\" height=\"{}\" rx=\"{}\"/>",
             esc(&class),
@@ -318,10 +324,18 @@ fn render_graph(
         ));
         let tx = x + style.node_w / 2;
         let ty = y + style.node_h / 2;
-        out.push_str(&format!(
-            "<text x=\"{tx}\" y=\"{ty}\">{}</text>",
-            esc(&truncate_title(&node.title, style.title_max_chars))
-        ));
+        let lines = wrap_title(&node.title, style.line_max_chars);
+        match lines.as_slice() {
+            [only] => out.push_str(&format!("<text x=\"{tx}\" y=\"{ty}\">{}</text>", esc(only))),
+            [first, second, ..] => out.push_str(&format!(
+                "<text x=\"{tx}\" y=\"{ty}\">\
+                 <tspan x=\"{tx}\" dy=\"-7\">{}</tspan>\
+                 <tspan x=\"{tx}\" dy=\"14\">{}</tspan></text>",
+                esc(first),
+                esc(second)
+            )),
+            [] => {}
+        }
         out.push_str("</a>");
     }
 
@@ -346,16 +360,52 @@ fn edge_path(from: (i64, i64), to: (i64, i64), style: &GraphStyle) -> String {
     )
 }
 
-/// Truncate `s` to at most `max_chars` characters, appending `…` when
-/// truncated. Counted in chars (not bytes) so multibyte titles never split
-/// mid-codepoint.
-fn truncate_title(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
-        return s.to_string();
+/// Greedy word-boundary wrap of `s` onto at most two lines of `max_chars`
+/// each. Only when the title overflows even the second line does that line
+/// get truncated with `…` (a single word longer than a whole line is clipped
+/// the same way). Counted in chars (not bytes) so multibyte titles never
+/// split mid-codepoint.
+fn wrap_title(s: &str, max_chars: usize) -> Vec<String> {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut i = 0;
+    let mut clipped_word = false;
+    while i < words.len() && lines.len() < 2 {
+        let mut line = String::new();
+        let mut len = 0usize;
+        while i < words.len() {
+            let wlen = words[i].chars().count();
+            let sep = usize::from(len > 0);
+            if len + sep + wlen > max_chars {
+                break;
+            }
+            if sep == 1 {
+                line.push(' ');
+            }
+            line.push_str(words[i]);
+            len += sep + wlen;
+            i += 1;
+        }
+        if line.is_empty() {
+            // A single word longer than a whole line: clip it in place.
+            line = words[i].chars().take(max_chars.saturating_sub(1)).collect();
+            line.push('…');
+            clipped_word = true;
+            i += 1;
+        }
+        lines.push(line);
     }
-    let mut truncated: String = s.chars().take(max_chars).collect();
-    truncated.push('…');
-    truncated
+    if clipped_word || i < words.len() {
+        let last = lines.last_mut().expect("looped at least once");
+        if !last.ends_with('…') {
+            while last.chars().count() > max_chars.saturating_sub(1) {
+                last.pop();
+            }
+            *last = last.trim_end().to_string();
+            last.push('…');
+        }
+    }
+    lines
 }
 
 /// Escape the five XML-special characters. `&` first so entity references
@@ -418,6 +468,42 @@ mod tests {
         p.phases[0].tasks[1].title = "<script>alert(1)</script>".into();
         let svg = phase_svg(&p, "p-core").unwrap();
         assert!(!svg.contains("<script>alert"));
+    }
+
+    #[test]
+    fn wrap_title_wraps_words_and_ellipsizes_only_on_overflow() {
+        assert_eq!(wrap_title("short", 26), vec!["short"]);
+        // Fits exactly in two lines: no ellipsis anywhere.
+        assert_eq!(
+            wrap_title("Versioned watermark store with monotonic advance", 26),
+            vec!["Versioned watermark store", "with monotonic advance"]
+        );
+        // Overflows two lines: second line ellipsized, budget respected.
+        let lines = wrap_title(
+            "a very long title that cannot possibly fit in two lines of twenty six chars",
+            26,
+        );
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].ends_with('…'), "{lines:?}");
+        assert!(lines.iter().all(|l| l.chars().count() <= 26), "{lines:?}");
+        // A single word longer than a whole line clips in place.
+        assert_eq!(
+            wrap_title("supercalifragilisticexpialidocious", 10),
+            vec!["supercali…"]
+        );
+    }
+
+    #[test]
+    fn nodes_carry_full_title_tooltips_and_wrapped_labels() {
+        let p = kitchen();
+        let svg = phase_svg(&p, "p-core").unwrap();
+        // Full untruncated title recoverable on hover.
+        assert!(
+            svg.contains("<title>Introduce SessionStore trait</title>"),
+            "{svg}"
+        );
+        // That 28-char title wraps onto two tspans at the 26-char budget.
+        assert!(svg.contains("<tspan"), "{svg}");
     }
 
     #[test]

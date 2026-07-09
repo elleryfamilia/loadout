@@ -130,6 +130,22 @@ header p:not(.meta),
   max-width: 72ch;
 }
 
+/* c-1 of the first dogfood feedback: on wide viewports the summary card read
+   as a half-width column of text in a full-width box. Let the key-point
+   bullets flow into two columns — the card uses its width while each column
+   keeps a readable measure. The exec prose above stays at 72ch on purpose:
+   a wall of full-width prose is harder to read, not easier. */
+@media (min-width: 1100px) {
+  .summary-keypoints {
+    max-width: none;
+    columns: 2;
+    column-gap: 3rem;
+  }
+  .summary-keypoints li {
+    break-inside: avoid;
+  }
+}
+
 /* Section/phase-heading icons (the Summary/Risks/Phases section headings,
    the questions section heading, each phase row's own heading, and the
    dependency-graph disclosure): sized to
@@ -231,6 +247,21 @@ details.phase > :not(summary):not(.task) {
 }
 
 .phase-meta { color: var(--muted); font-weight: 400; font-size: 0.85em; letter-spacing: normal; }
+
+/* The phase's one-line description, visible in the COLLAPSED row (c-3 of the
+   first dogfood feedback): a reader scanning closed phases learns what each
+   one is without expanding. Block display breaks it onto its own line under
+   the title inside the flexed <summary>; a step quieter than the title. */
+.phase-teaser {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+  letter-spacing: normal;
+  line-height: 1.4;
+  max-width: 72ch;
+}
 
 /* Summary strip — the first thing a reviewer reads, so it gets its own
    card: a plain counts line, an optional risk line (tinted when any risk is
