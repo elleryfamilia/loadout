@@ -332,7 +332,7 @@ details.phase > :not(summary):not(.task) {
   margin: 0 0 1rem;
 }
 
-.summary-exec p { margin: 0 0 0.5rem; }
+.summary-exec p { margin: 0 0 0.75rem; }
 .summary-exec p:last-child { margin-bottom: 0; }
 
 .summary-missing {

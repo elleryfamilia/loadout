@@ -2759,7 +2759,24 @@ fn plan_check_advises_on_overlong_summary() {
         .assert()
         .success()
         .stdout(predicate::str::contains("warning[long_summary]"))
+        .stdout(predicate::str::contains("warning[wall_of_text]"))
         .stdout(predicate::str::contains("plan.json is valid"));
+
+    // Paragraph breaks clear the wall-of-text advisory even when the text
+    // stays long enough to trip the single-paragraph check on its own.
+    let paragraphs = format!("{}\\n\\n{}", "x".repeat(400), "y".repeat(400));
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        &format!(
+            r#"{{ "format": "loadout.plan/1",
+                 "meta": {{ "id": "demo", "title": "D", "summary_md": "{paragraphs}" }} }}"#
+        ),
+    );
+    f.cmd()
+        .args(["plan", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("warning[wall_of_text]").not());
 }
 
 #[test]

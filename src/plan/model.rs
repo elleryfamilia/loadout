@@ -633,6 +633,19 @@ pub fn advisories(plan: &Plan) -> Vec<Issue> {
             );
             out.push(issue);
         }
+        if n > 600 && !s.contains("\n\n") {
+            let mut issue = Issue::new(
+                "/meta/summary_md",
+                "wall_of_text",
+                format!("executive summary is {n} chars in a single paragraph"),
+            );
+            issue.hint = Some(
+                "break it into 2-4 short paragraphs (blank lines between them) — \
+                 one block of prose renders as a wall of text"
+                    .into(),
+            );
+            out.push(issue);
+        }
     }
     out
 }

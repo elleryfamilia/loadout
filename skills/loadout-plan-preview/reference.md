@@ -126,7 +126,9 @@ their time. Write for both readers at once:
 - **`summary_md`** — BLUF (bottom line up front), 4-6 sentences covering: the
   problem, the observable outcome once this ships, the approach, and the ask
   (what you need from the reviewer right now — e.g. "resolve the 2 blocking
-  questions below").
+  questions below"). Split it into 2-4 **short paragraphs** (blank lines), one
+  idea each — a single block of prose renders as a wall of text, and `check`
+  warns on it (`wall_of_text`).
 - **`key_points`** — 4-8 bullets, one per major workstream or decision. Lead
   each bullet with a bold clause naming the workstream, then one sentence of
   detail, e.g. `"**Redis backend** lands behind a trait boundary shipping

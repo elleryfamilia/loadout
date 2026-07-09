@@ -879,9 +879,9 @@ mod tests {
         assert!(crate::plan::model::validate(&parsed.plan).is_empty());
         let html = render(&parsed.plan);
         assert_eq!(html.matches("id=\"task-").count(), 23, "23 task cards");
-        // Its revision-1 summary is exactly the overlong-summary shape the
-        // advisory exists for; the kitchen sink's is not.
-        assert_eq!(crate::plan::model::advisories(&parsed.plan).len(), 1);
+        // Its revision-1 summary is exactly the shape the advisories exist
+        // for — overlong AND a single paragraph; the kitchen sink's is not.
+        assert_eq!(crate::plan::model::advisories(&parsed.plan).len(), 2);
         assert!(crate::plan::model::advisories(&plan_from("kitchen-sink.json")).is_empty());
     }
 
