@@ -724,3 +724,8 @@ pre {
   cursor: pointer;
   font-weight: 600;
 }
+
+.feedback-bar-copy:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

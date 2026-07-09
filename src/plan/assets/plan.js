@@ -40,8 +40,14 @@
       }
       const json = JSON.stringify(doc, null, 2);
       const markdown = lines.join("\n");
-      return { json: json, markdown: markdown,
-               combined: "```json\n" + json + "\n```\n\n" + markdown };
+      /* Human-readable mirror first, canonical JSON after: the person
+         pasting reads the top; the agent needs the fenced block (stable
+         refs, plan_hash, blocking flags) and is told not to lose it. */
+      const combined = markdown
+        + "\n---\n\n"
+        + "Machine-readable block — paste everything, leave this intact:\n\n"
+        + "```json\n" + json + "\n```\n";
+      return { json: json, markdown: markdown, combined: combined };
     },
   };
   window.loadoutPlan = core;
@@ -65,7 +71,8 @@
       if (parsed.verdict !== "request_changes") throw new Error("verdict");
       if (parsed.comments[0].blocking !== true) throw new Error("blocking");
       if (parsed.plan_hash !== fp) throw new Error("hash");
-      if (fb.combined.indexOf("```json") !== 0) throw new Error("combined shape");
+      if (fb.combined.indexOf("## Plan feedback") !== 0) throw new Error("combined starts with mirror");
+      if (fb.combined.indexOf("```json") === -1) throw new Error("combined carries the JSON block");
     });
     check("refs exist in dom", function () {
       if (!document.querySelector('[data-plan-ref="task:t-session-store"]'))
@@ -277,6 +284,9 @@
 
     function renderCount() {
       count.textContent = comments.length + (comments.length === 1 ? " comment" : " comments");
+      /* Nothing to copy until something has been added. */
+      copyBtn.disabled = comments.length === 0;
+      copyBtn.title = comments.length === 0 ? "Add a comment or answer first" : "";
     }
     renderCount();
 

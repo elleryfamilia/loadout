@@ -647,6 +647,21 @@ pub fn advisories(plan: &Plan) -> Vec<Issue> {
             out.push(issue);
         }
     }
+    if let Some(g) = &plan.meta.goal_md {
+        let n = g.chars().count();
+        if n > 300 {
+            let mut issue = Issue::new(
+                "/meta/goal_md",
+                "long_goal",
+                format!(
+                    "goal_md is {n} chars — it's the one-sentence subtitle, not a second summary"
+                ),
+            );
+            issue.hint =
+                Some("say what this builds in one or two sentences; approach, status, and the ask belong in summary_md".into());
+            out.push(issue);
+        }
+    }
     out
 }
 

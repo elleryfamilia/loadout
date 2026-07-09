@@ -725,6 +725,11 @@ pre {
   cursor: pointer;
   font-weight: 600;
 }
+
+.feedback-bar-copy:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 </style></head><body data-plan-fingerprint="sha256:699871414238a39a2db87e400affe5dfdc397fbf6bbcde124e0b394ab04812cf"><header><p class="meta">plan <code>auth-refactor</code> · revision 2 · by claude · 2026-07-07</p><h1>Auth refactor</h1><p>Extract <em>session</em> handling.</p>
 </header><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" />
@@ -810,8 +815,14 @@ pre {
       }
       const json = JSON.stringify(doc, null, 2);
       const markdown = lines.join("\n");
-      return { json: json, markdown: markdown,
-               combined: "```json\n" + json + "\n```\n\n" + markdown };
+      /* Human-readable mirror first, canonical JSON after: the person
+         pasting reads the top; the agent needs the fenced block (stable
+         refs, plan_hash, blocking flags) and is told not to lose it. */
+      const combined = markdown
+        + "\n---\n\n"
+        + "Machine-readable block — paste everything, leave this intact:\n\n"
+        + "```json\n" + json + "\n```\n";
+      return { json: json, markdown: markdown, combined: combined };
     },
   };
   window.loadoutPlan = core;
@@ -835,7 +846,8 @@ pre {
       if (parsed.verdict !== "request_changes") throw new Error("verdict");
       if (parsed.comments[0].blocking !== true) throw new Error("blocking");
       if (parsed.plan_hash !== fp) throw new Error("hash");
-      if (fb.combined.indexOf("```json") !== 0) throw new Error("combined shape");
+      if (fb.combined.indexOf("## Plan feedback") !== 0) throw new Error("combined starts with mirror");
+      if (fb.combined.indexOf("```json") === -1) throw new Error("combined carries the JSON block");
     });
     check("refs exist in dom", function () {
       if (!document.querySelector('[data-plan-ref="task:t-session-store"]'))
@@ -1047,6 +1059,9 @@ pre {
 
     function renderCount() {
       count.textContent = comments.length + (comments.length === 1 ? " comment" : " comments");
+      /* Nothing to copy until something has been added. */
+      copyBtn.disabled = comments.length === 0;
+      copyBtn.title = comments.length === 0 ? "Add a comment or answer first" : "";
     }
     renderCount();
 

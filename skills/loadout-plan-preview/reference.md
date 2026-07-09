@@ -106,7 +106,7 @@ phases and optionally on notable tasks; omit rather than repeat.
 |-------|------|----------|-------|
 | `id` | string | yes | id rule; the plan's own id — used in feedback's `plan_id` |
 | `title` | string | yes | |
-| `goal_md` | string | no | markdown |
+| `goal_md` | string | no | markdown; **one or two sentences** — the subtitle under the title saying what this builds. NOT a second executive summary: approach, status, and the ask live in `summary_md`; `check` warns (`long_goal`) past 300 chars |
 | `summary_md` | string | no | markdown; the executive summary — see the recipe below (4-6 sentences; `check` warns past 1,500 chars) |
 | `key_points` | array\<string\> | no (default `[]`) | markdown bullet items, ≤25 items |
 | `out_of_scope` | array\<string\> | no (default `[]`) | plain-text bullet items (no markdown), ≤25 items |
