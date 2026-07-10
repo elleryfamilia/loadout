@@ -31,6 +31,21 @@ pub(crate) fn feedback_path(repo_base: &Path) -> PathBuf {
     artifacts_dir(repo_base).join("plan-feedback.json")
 }
 
+/// Resolve a user-supplied path against the repo base loadout is operating
+/// on (`--cwd`, or the detected repo root), not the process's real OS
+/// working directory. `--cwd` never chdirs the process, and every other plan
+/// artifact (plan.json, plan.html, plan-feedback.json) is already
+/// repo-base-anchored, so a relative FILE/`--out` argument should be too —
+/// otherwise it silently resolves against wherever the binary happens to
+/// have been launched from. Absolute paths pass through untouched.
+pub(crate) fn resolve_relative(repo_base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        repo_base.join(path)
+    }
+}
+
 /// Ensure the exact-file gitignore entries. Only inside a git repo; a
 /// non-repo directory has nothing to protect against `git add`.
 pub(crate) fn ensure_plan_gitignore(prep: &Prepared, writer: &AtomicWriter) -> crate::Result<()> {
@@ -138,7 +153,7 @@ fn load_checked(
     lenient: bool,
 ) -> crate::Result<(model::Plan, Vec<model::Issue>)> {
     let path = file
-        .map(Path::to_path_buf)
+        .map(|f| resolve_relative(&prep.repo_base, f))
         .unwrap_or_else(|| plan_json_path(&prep.repo_base));
     let input = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
@@ -273,7 +288,7 @@ fn render(
     warn_stale_feedback(prep, &plan);
     let html = crate::plan::render::render(&plan);
     let path = out
-        .map(Path::to_path_buf)
+        .map(|o| resolve_relative(&prep.repo_base, o))
         .unwrap_or_else(|| plan_html_path(&prep.repo_base));
     let written = AtomicWriter::new(rt.dry_run).write(&path, &html)?;
     println!(
