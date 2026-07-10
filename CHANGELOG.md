@@ -12,6 +12,12 @@ version and date (see [RELEASING.md](RELEASING.md)).
 
 ### Added
 
+- **Studio Recents tab**: plan previews rendered by `load plan render` are
+  recorded in a per-machine registry (`~/.local/state/loadout/recents.json`)
+  and listed in a new always-visible Recents tab — repo, age, task counts,
+  staleness badge, per-row remove, and a list-only Clear. Clicking an entry
+  opens the render in a new browser tab, served by studio under an
+  origin-isolating `Content-Security-Policy: sandbox` response header.
 - **Every workflow's plan stage now produces the visual plan preview.** The
   generated plan-slot command (`/loadout:plan`, whatever the workflow names
   the stage) tells the agent to also emit `plan.json`, validate it with
@@ -21,6 +27,8 @@ version and date (see [RELEASING.md](RELEASING.md)).
   `loadout-plan-preview` skill, and silently disappeared in sessions where
   the skill didn't surface. The always-on workflow section adds a one-line
   offer covering plans written outside the workflow commands.
+- The plan page's Copy-feedback button now surfaces a manual-copy panel when
+  every clipboard path is blocked, so the paste-back loop never dead-ends.
 
 ## 0.14.1 — 2026-07-09
 

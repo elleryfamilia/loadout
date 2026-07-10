@@ -436,6 +436,51 @@ fn studio_auto_exits_after_idle_timeout() {
     );
 }
 
+#[test]
+fn recents_artifact_is_served_with_sandbox_csp_over_tcp() {
+    let (mut child, dir, port, token) = spawn_studio();
+
+    let artifact = dir.path().join("demo-plan.html");
+    std::fs::write(
+        &artifact,
+        "<!-- loadout:generated context=sha256:demo -->\n<!doctype html><html><body>tcp-sandbox-demo</body></html>",
+    )
+    .unwrap();
+    let mut store =
+        loadout::recents::RecentsStore::load_from(&dir.path().join("state/recents.json"));
+    let entry = loadout::recents::Entry {
+        kind: "plan".into(),
+        path: artifact.clone(),
+        repo: dir.path().to_path_buf(),
+        title: "Demo".into(),
+        hash: "sha256:demo".into(),
+        rendered_at: "2026-07-09T00:00:00Z".into(),
+        detail: std::collections::BTreeMap::new(),
+        extra: std::collections::BTreeMap::new(),
+    };
+    let id = entry.id();
+    assert!(matches!(
+        store.record(entry),
+        loadout::recents::RecordOutcome::Recorded
+    ));
+
+    let resp = http(
+        port,
+        &format!(
+            "GET /artifacts/{id} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    let lower = resp.to_ascii_lowercase();
+    assert!(
+        lower.contains("content-security-policy: sandbox allow-scripts"),
+        "CSP header must survive the real TCP path: {resp}"
+    );
+    assert!(resp.contains("tcp-sandbox-demo"));
+
+    let _ = child.kill();
+}
+
 fn head(resp: &str) -> String {
     resp.lines().take(3).collect::<Vec<_>>().join("\n")
 }
