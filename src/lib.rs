@@ -41,6 +41,7 @@ pub mod pack;
 pub mod plan;
 pub mod profile;
 pub mod providers;
+pub mod recents;
 pub mod redact;
 pub mod render;
 pub mod report;
