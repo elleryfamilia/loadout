@@ -1463,11 +1463,14 @@ fn artifact_page(status: u16, title: &str, msg: &str) -> Resp {
     }
 }
 
-/// Skip leading ASCII whitespace (space/tab/CR/LF). Used to align the
-/// byte-level marker gate below with the canonical parser in
-/// `render::header::extract_context_hash`, which tolerates the same
-/// leading whitespace via `str::trim_start` per line — a marker gate must
-/// not be stricter than the parser that later reads the same file.
+/// Skip leading ASCII whitespace (space/tab/CR/LF) — deliberately ASCII-only,
+/// NOT `str::trim_start` parity: the canonical parser
+/// (`render::header::extract_context_hash`) trims Unicode whitespace per
+/// line, so this byte-level gate is strictly tighter. That direction is safe
+/// (the gate may refuse an exotic file the parser would read, never serve
+/// one it wouldn't), and real loadout-generated files start the marker at
+/// byte 0 anyway. (Savio PR #23 finding: the previous comment claimed
+/// trim_start parity it didn't have.)
 fn skip_ascii_whitespace(bytes: &[u8]) -> &[u8] {
     let mut i = 0;
     while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {

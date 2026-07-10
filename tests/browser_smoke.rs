@@ -103,22 +103,39 @@ fn viewer_selftest_passes_when_served_with_sandbox_csp() {
         }
     });
 
-    let out = Command::new(&chrome)
-        .args([
-            "--headless=new",
-            "--disable-gpu",
-            "--no-sandbox",
-            "--virtual-time-budget=5000",
-            "--dump-dom",
-        ])
-        .arg(format!("http://127.0.0.1:{port}/plan.html#selftest"))
-        .output()
-        .expect("chrome runs");
-    let dom = String::from_utf8_lossy(&out.stdout);
+    // Launch-level hardening for shared CI runners: an EMPTY dump means
+    // Chrome never rendered anything (launch hiccup, virtual time racing a
+    // real socket) — retry those. A NON-empty dump is the page's actual
+    // verdict and is asserted immediately, never retried (retrying a real
+    // FAIL would mask it). stderr rides along in the panic so a CI failure
+    // names its cause instead of dumping an empty tail. (No explicit
+    // --user-data-dir: macOS Chromium hangs headless=new with one.)
+    let mut dom = String::new();
+    let mut stderr = String::new();
+    for attempt in 0..3 {
+        let out = Command::new(&chrome)
+            .args([
+                "--headless=new",
+                "--disable-gpu",
+                "--no-sandbox",
+                "--virtual-time-budget=10000",
+                "--dump-dom",
+            ])
+            .arg(format!("http://127.0.0.1:{port}/plan.html#selftest"))
+            .output()
+            .expect("chrome runs");
+        dom = String::from_utf8_lossy(&out.stdout).into_owned();
+        stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        if !dom.trim().is_empty() {
+            break;
+        }
+        eprintln!("attempt {attempt}: empty DOM dump from chrome; stderr:\n{stderr}");
+    }
     assert!(
         dom.contains("id=\"selftest-result\">LOADOUT_SELFTEST_PASS"),
-        "sandboxed selftest failed; DOM tail:\n{}",
-        char_boundary_tail(&dom, 2000)
+        "sandboxed selftest failed; DOM tail:\n{}\nchrome stderr tail:\n{}",
+        char_boundary_tail(&dom, 2000),
+        char_boundary_tail(&stderr, 2000)
     );
     // The served-context probes actually ran (they are gated off file://).
     assert!(
