@@ -111,6 +111,15 @@ fn clean(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
             );
         }
     }
+    // Drop the recents entry unconditionally on a non-dry-run clean: whether
+    // the file was removed, skipped as not-ours, or already absent, the
+    // entry about it is dead. Best-effort.
+    if !rt.dry_run {
+        let mut store = crate::recents::RecentsStore::load_default();
+        if let Err(e) = store.remove_path(&plan_html_path(&prep.repo_base)) {
+            crate::vlog!("could not update recents: {e}");
+        }
+    }
     Ok(())
 }
 
@@ -301,7 +310,59 @@ fn render(
         crate::studio::server::open_browser(&file_url(&path));
         println!("opened in your browser (pass --no-open to skip)");
     }
+    // Record in the per-machine recents registry — canonical renders only
+    // (default input AND default output): a --out/FILE render pairs a
+    // non-canonical plan or scratch path with no clean verb or staleness
+    // story, and would sit as a permanent dead row (no-prune rule).
+    if !rt.dry_run && file.is_none() && out.is_none() {
+        record_render(&prep.repo_base, &plan, &path);
+    }
     Ok(())
+}
+
+/// Best-effort recents recording. A registry failure must never fail the
+/// render; messaging keys off the outcome so we never advertise an entry
+/// that wasn't written.
+fn record_render(repo_base: &Path, plan: &model::Plan, html_path: &Path) {
+    use crate::recents::{clamp_title, Entry, RecentsStore, RecordOutcome};
+    let mut detail = std::collections::BTreeMap::new();
+    detail.insert(
+        "plan_id".to_string(),
+        serde_json::Value::from(plan.meta.id.clone()),
+    );
+    detail.insert(
+        "phases".to_string(),
+        serde_json::Value::from(plan.phases.len()),
+    );
+    detail.insert(
+        "tasks".to_string(),
+        serde_json::Value::from(plan.phases.iter().map(|p| p.tasks.len()).sum::<usize>()),
+    );
+    let entry = Entry {
+        kind: "plan".to_string(),
+        path: html_path.to_path_buf(), // record() absolutizes
+        repo: std::path::absolute(repo_base).unwrap_or_else(|_| repo_base.to_path_buf()),
+        title: clamp_title(&plan.meta.title),
+        hash: model::plan_hash(plan),
+        rendered_at: super::now_rfc3339(),
+        detail,
+        extra: std::collections::BTreeMap::new(),
+    };
+    let mut store = RecentsStore::load_default();
+    match store.record(entry) {
+        RecordOutcome::Recorded => {
+            println!("(also available under Recents in `load studio`)");
+        }
+        RecordOutcome::ReadOnlyNewer => crate::warn_user!(
+            "recents state was written by a newer loadout — this render won't appear in studio Recents until you upgrade"
+        ),
+        RecordOutcome::NoStateDir => {
+            crate::vlog!("no state dir; skipping recents record");
+        }
+        RecordOutcome::Failed(e) => {
+            crate::vlog!("could not record recents entry: {e}");
+        }
+    }
 }
 
 /// Build a `file://` URL for `path`: absolutize it first (so a relative
