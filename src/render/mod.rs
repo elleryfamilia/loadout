@@ -174,7 +174,7 @@ pub fn overlay_fingerprint(
 /// of the context, so without this a wording change would never reach
 /// already-rendered overlays — the hash-skip would keep them forever.
 /// Bumping re-renders every overlay exactly once.
-const HEADER_VERSION: u32 = 2;
+const HEADER_VERSION: u32 = 3;
 
 /// Render an overlay for `req`.
 pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
