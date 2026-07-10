@@ -8,7 +8,7 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased
+## 0.15.0 — 2026-07-10
 
 ### Added
 
@@ -29,6 +29,21 @@ version and date (see [RELEASING.md](RELEASING.md)).
   offer covering plans written outside the workflow commands.
 - The plan page's Copy-feedback button now surfaces a manual-copy panel when
   every clipboard path is blocked, so the paste-back loop never dead-ends.
+- The plan page carries a slim brand strip — the loadout mark, **Loadout**,
+  and a muted "Viewer" — naming the surface in every serving context.
+
+### Fixed
+
+- Relative `FILE` and `--out` arguments to `load plan check`/`render` resolved
+  against the process working directory instead of the invocation directory —
+  under `--cwd`, a relative `--out` silently wrote into whatever directory the
+  process happened to run from. They now anchor to the invocation directory
+  (the explicit `--cwd` value, else the shell's cwd).
+
+### Changed
+
+- Generated overlays re-render once on the first refresh after upgrading (a
+  header-version bump), deploying the reworded `## Workflow` section.
 
 ## 0.14.1 — 2026-07-09
 
