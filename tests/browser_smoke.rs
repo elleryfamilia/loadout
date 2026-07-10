@@ -103,13 +103,16 @@ fn viewer_selftest_passes_when_served_with_sandbox_csp() {
         }
     });
 
-    // Launch-level hardening for shared CI runners: an EMPTY dump means
-    // Chrome never rendered anything (launch hiccup, virtual time racing a
-    // real socket) — retry those. A NON-empty dump is the page's actual
-    // verdict and is asserted immediately, never retried (retrying a real
-    // FAIL would mask it). stderr rides along in the panic so a CI failure
-    // names its cause instead of dumping an empty tail. (No explicit
-    // --user-data-dir: macOS Chromium hangs headless=new with one.)
+    // Real-time --timeout, NOT --virtual-time-budget: virtual time races a
+    // real TCP navigation on some Chrome builds — CI's google-chrome
+    // deterministically dumped an EMPTY dom for this http:// load while the
+    // file:// test (virtual time, instant commit) passed in the same job.
+    // The async selftest marker lands ~1.5s after load; 8s is headroom.
+    // An empty dump still retries (launch hiccups); a NON-empty dump is the
+    // page's actual verdict and is asserted immediately, never retried
+    // (retrying a real FAIL would mask it). stderr rides along in the panic
+    // so a CI failure names its cause. (No explicit --user-data-dir: macOS
+    // Chromium hangs headless=new with one.)
     let mut dom = String::new();
     let mut stderr = String::new();
     for attempt in 0..3 {
@@ -118,7 +121,7 @@ fn viewer_selftest_passes_when_served_with_sandbox_csp() {
                 "--headless=new",
                 "--disable-gpu",
                 "--no-sandbox",
-                "--virtual-time-budget=10000",
+                "--timeout=8000",
                 "--dump-dom",
             ])
             .arg(format!("http://127.0.0.1:{port}/plan.html#selftest"))
