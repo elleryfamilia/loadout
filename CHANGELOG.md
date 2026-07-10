@@ -8,6 +8,15 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.15.1 — 2026-07-10
+
+### Changed
+
+- **Recents rows carry a kind chip.** Each entry now labels itself with its
+  artifact kind as text ("plan" today) next to the icon — the registry has
+  carried a `kind` field since 0.15.0, and future kinds (design docs, …)
+  label themselves automatically with no UI changes.
+
 ## 0.15.0 — 2026-07-10
 
 ### Added
