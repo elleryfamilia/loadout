@@ -40,6 +40,9 @@ pub struct StudioState {
     /// `workflows`). Tracked so Apply re-renders the tab in place instead of
     /// always bouncing back to Profiles.
     pub active_tab: String,
+    /// Where the per-machine recents registry lives (None: no state dir).
+    /// Injected so route() tests point it at a fixture tempdir.
+    pub recents_path: Option<PathBuf>,
 }
 
 impl StudioState {

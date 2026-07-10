@@ -2662,6 +2662,26 @@ pub fn error_page(msg: &str) -> String {
     html! { (DOCTYPE) html { head { title { "Loadout studio — error" } } body { pre class="error" { (msg) } } } }.into_string()
 }
 
+/// Plain full page for artifact-route misses (missing file, marker refusal).
+/// Self-contained: no /assets links, so it renders even if styling changes.
+pub fn artifact_message(title: &str, msg: &str) -> String {
+    html! {
+        (DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="utf-8";
+                title { (title) " — Loadout studio" }
+                style { (PreEscaped("body{font-family:system-ui,sans-serif;max-width:38rem;margin:4rem auto;padding:0 1rem;color:#333}h1{font-size:1.3rem}code{background:#eee;padding:.1em .3em;border-radius:4px}")) }
+            }
+            body {
+                h1 { (title) }
+                p { (msg) }
+            }
+        }
+    }
+    .into_string()
+}
+
 // --- shared bits -------------------------------------------------------------
 
 fn atom_dot(a: &AtomDot) -> Markup {

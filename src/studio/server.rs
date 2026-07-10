@@ -160,6 +160,14 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/packs") => handle_packs(state),
         ("GET", "/skills/card") => handle_skill_card(),
         ("POST", "/skills/install") => handle_skill_install(),
+        ("GET", "/tab/recents") => handle_recents(state),
+        ("POST", "/recents/clear") => handle_recents_clear(state),
+        ("GET", p) if p.starts_with("/artifacts/") => {
+            handle_artifact(state, p.strip_prefix("/artifacts/").unwrap_or(""))
+        }
+        ("DELETE", p) if p.starts_with("/recents/") => {
+            handle_recents_remove(state, p.strip_prefix("/recents/").unwrap_or(""))
+        }
         ("GET", "/onboarding/welcome") => handle_onboarding_welcome(state),
         ("POST", "/onboarding/quickstart") => handle_quickstart(state),
         ("GET", "/profiles/new") => handle_profile_new(state),
@@ -1289,6 +1297,137 @@ fn skill_action_at(home: &Path, store: &Path, path: &str, method: &str) -> Resp 
     }
 }
 
+// --- Recents ------------------------------------------------------------
+
+fn handle_recents(state: &Arc<Mutex<StudioState>>) -> Resp {
+    state.lock().unwrap().active_tab = "recents".to_string();
+    Resp::html(String::new())
+}
+fn handle_recents_clear(state: &Arc<Mutex<StudioState>>) -> Resp {
+    handle_recents(state)
+}
+fn handle_recents_remove(state: &Arc<Mutex<StudioState>>, _id: &str) -> Resp {
+    handle_recents(state)
+}
+
+/// Serve cap: refuse (not truncate) anything larger.
+const MAX_SERVE_BYTES: usize = 25 * 1024 * 1024;
+
+/// Load the recents store from the state's injected path. Loaded fresh per
+/// request — a render done in another terminal appears with no cache dance.
+fn recents_store(state: &Arc<Mutex<StudioState>>) -> crate::recents::RecentsStore {
+    let path = state.lock().unwrap().recents_path.clone();
+    crate::recents::RecentsStore::load_opt(path)
+}
+
+enum ArtifactRead {
+    Ok(Vec<u8>),
+    Missing,
+    Oversized,
+}
+
+/// Capped read (CAP+1 probe): never metadata-then-read (TOCTOU), never serve
+/// a truncated document.
+fn read_artifact_capped(path: &std::path::Path) -> ArtifactRead {
+    use std::io::Read as _;
+    let f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return ArtifactRead::Missing,
+    };
+    let mut buf = Vec::new();
+    match f.take(MAX_SERVE_BYTES as u64 + 1).read_to_end(&mut buf) {
+        Ok(_) if buf.len() > MAX_SERVE_BYTES => ArtifactRead::Oversized,
+        Ok(_) => ArtifactRead::Ok(buf),
+        Err(_) => ArtifactRead::Missing,
+    }
+}
+
+/// A plain studio-origin message page (our own markup — safe to serve
+/// unsandboxed; never used for artifact bytes).
+fn artifact_page(status: u16, title: &str, msg: &str) -> Resp {
+    Resp {
+        status,
+        headers: vec![
+            ("content-type".into(), "text/html; charset=utf-8".into()),
+            ("cache-control".into(), "no-store".into()),
+        ],
+        body: views::artifact_message(title, msg).into_bytes(),
+    }
+}
+
+/// Serve one registered artifact. SECURITY SPINE — the id indexes the
+/// registry and the registry yields the path: no request-derived paths,
+/// ever. The marker gate restricts serving to loadout-generated files (any
+/// kind, not just plans); the sandbox CSP header (see
+/// [`crate::recents::SERVE_CSP`]) gives the document an opaque origin.
+/// Artifact bytes must NEVER be inlined into a studio-origin response
+/// (no htmx swap, no srcdoc, no blob:) and `allow-same-origin` must never
+/// be added — either would run hostile artifact JS in studio's origin.
+fn handle_artifact(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
+    let store = recents_store(state);
+    let Some(entry) = store.find(id) else {
+        return Resp::not_found();
+    };
+    if !entry.path.is_absolute() {
+        return artifact_page(
+            404,
+            "not served",
+            "this entry's path is not absolute — refusing to serve it",
+        );
+    }
+    // Resolve symlinks BEFORE the extension check so a link at a recorded
+    // .html path can't widen the gate; canonicalize only succeeds when the
+    // target exists, so a failure is the missing-file case.
+    let Ok(resolved) = std::fs::canonicalize(&entry.path) else {
+        return artifact_page(
+            404,
+            "artifact file is missing",
+            &format!(
+                "unmounted volume? The entry is kept. For plans: run `load plan render` in {} to re-create it.",
+                entry.repo.display()
+            ),
+        );
+    };
+    if resolved.extension().and_then(|e| e.to_str()) != Some("html") {
+        return artifact_page(
+            404,
+            "not served",
+            "this entry does not resolve to an .html file — refusing to serve it",
+        );
+    }
+    let bytes = match read_artifact_capped(&resolved) {
+        ArtifactRead::Missing => {
+            return artifact_page(
+                404,
+                "artifact file is missing",
+                &format!(
+                    "unmounted volume? The entry is kept. For plans: run `load plan render` in {} to re-create it.",
+                    entry.repo.display()
+                ),
+            )
+        }
+        ArtifactRead::Oversized => {
+            return artifact_page(413, "artifact too large", "this file exceeds the 25 MB serving cap — open it directly from disk instead")
+        }
+        ArtifactRead::Ok(b) => b,
+    };
+    if !bytes.starts_with(crate::render::header::GENERATED_MARKER.as_bytes()) {
+        return artifact_page(
+            404,
+            "not a loadout artifact",
+            "the file at this entry's path is not loadout-generated — refusing to serve it",
+        );
+    }
+    Resp {
+        status: 200,
+        headers: crate::recents::serve_header_pairs()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        body: bytes,
+    }
+}
+
 /// `GET /onboarding/welcome` — (re)show the first-launch welcome on demand (the
 /// "?" tour button). Arms the guided flow so applying a pack from here runs the
 /// review → you're-set beats, just like a fresh config.
@@ -1829,6 +1968,7 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
         port,
         onboarding_active: false,
         active_tab: "profiles".to_string(),
+        recents_path: config::state_dir().map(|d| d.join(crate::recents::STORE_FILE)),
     }));
 
     // `0`/`0s` disables the idle shutdown; anything else is the inactivity window.
@@ -2167,7 +2307,40 @@ mod tests {
             port: 7777,
             onboarding_active: false,
             active_tab: "profiles".into(),
+            recents_path: Some(repo.join("state").join("recents.json")),
         }))
+    }
+
+    /// Seed one recents entry + a marker-bearing artifact file inside the
+    /// fixture repo; returns the entry's route id.
+    fn seed_recents(repo: &std::path::Path, title: &str, artifact_rel: &str, hash: &str) -> String {
+        let artifact = repo.join(artifact_rel);
+        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::fs::write(
+            &artifact,
+            format!(
+                "<!-- loadout:generated context={hash} -->\n<!doctype html><html><body>artifact-body-demo</body></html>"
+            ),
+        )
+        .unwrap();
+        let entry = crate::recents::Entry {
+            kind: "plan".into(),
+            path: artifact.clone(),
+            repo: repo.to_path_buf(),
+            title: title.into(),
+            hash: hash.into(),
+            rendered_at: "2026-07-09T00:00:00Z".into(),
+            detail: std::collections::BTreeMap::new(),
+            extra: std::collections::BTreeMap::new(),
+        };
+        let id = entry.id();
+        let mut store =
+            crate::recents::RecentsStore::load_from(&repo.join("state").join("recents.json"));
+        assert!(matches!(
+            store.record(entry),
+            crate::recents::RecordOutcome::Recorded
+        ));
+        id
     }
 
     /// The global `config.toml` the fixture authors into — where caps/profiles
@@ -2246,6 +2419,104 @@ mod tests {
         // destinations Loadouts | Library.
         assert!(body.contains("Loadouts"));
         assert!(body.contains("Library"));
+    }
+
+    #[test]
+    fn artifact_route_serves_marker_file_with_sandbox_csp() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        let r = route(
+            &st,
+            &req("GET", &format!("/artifacts/{id}"), "", &[HOST, COOKIE], ""),
+        );
+        assert_eq!(r.status, 200);
+        for (k, v) in crate::recents::serve_header_pairs() {
+            assert!(
+                r.headers.iter().any(|(hk, hv)| hk == k && hv == v),
+                "missing header {k}: {v}"
+            );
+        }
+        assert!(String::from_utf8(r.body)
+            .unwrap()
+            .contains("artifact-body-demo"));
+    }
+
+    #[test]
+    fn artifact_route_requires_the_session_cookie() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        let r = route(
+            &st,
+            &req("GET", &format!("/artifacts/{id}"), "", &[HOST], ""),
+        );
+        assert_eq!(r.status, 403);
+    }
+
+    #[test]
+    fn artifact_route_unknown_id_is_404_and_ids_cannot_carry_paths() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        let r = route(
+            &st,
+            &req(
+                "GET",
+                "/artifacts/ffffffffffffffff",
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 404);
+        // Traversal-shaped ids just fail the registry lookup — no path is
+        // ever derived from the request.
+        let r = route(
+            &st,
+            &req("GET", "/artifacts/../etc/passwd", "", &[HOST, COOKIE], ""),
+        );
+        assert_eq!(r.status, 404);
+    }
+
+    #[test]
+    fn artifact_route_missing_file_is_friendly_404_and_entry_is_kept() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        std::fs::remove_file(d.path().join("gen/demo.html")).unwrap();
+        let r = route(
+            &st,
+            &req("GET", &format!("/artifacts/{id}"), "", &[HOST, COOKIE], ""),
+        );
+        assert_eq!(r.status, 404);
+        assert!(String::from_utf8(r.body)
+            .unwrap()
+            .contains("unmounted volume"));
+        // The unmounted-volume rule: a failed read never prunes the entry.
+        let store =
+            crate::recents::RecentsStore::load_from(&d.path().join("state").join("recents.json"));
+        assert_eq!(store.entries().len(), 1);
+    }
+
+    #[test]
+    fn artifact_route_refuses_marker_stripped_files() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        std::fs::write(
+            d.path().join("gen/demo.html"),
+            "<!doctype html><p>swapped</p>",
+        )
+        .unwrap();
+        let r = route(
+            &st,
+            &req("GET", &format!("/artifacts/{id}"), "", &[HOST, COOKIE], ""),
+        );
+        assert_eq!(r.status, 404);
+        assert!(String::from_utf8(r.body)
+            .unwrap()
+            .contains("not loadout-generated"));
     }
 
     #[test]
