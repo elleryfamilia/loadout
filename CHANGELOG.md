@@ -8,6 +8,20 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Added
+
+- **Every workflow's plan stage now produces the visual plan preview.** The
+  generated plan-slot command (`/loadout:plan`, whatever the workflow names
+  the stage) tells the agent to also emit `plan.json`, validate it with
+  `load plan check`, and open the review page with `load plan render` —
+  including the sibling-file recipe when `plan.json` already holds a
+  different pending plan. Previously this flow lived only in the
+  `loadout-plan-preview` skill, and silently disappeared in sessions where
+  the skill didn't surface. The always-on workflow section adds a one-line
+  offer covering plans written outside the workflow commands.
+
 ## 0.14.1 — 2026-07-09
 
 Follow-ups from the first real-world use of the plan preview (a 23-task plan
