@@ -19,6 +19,13 @@ const JS: &str = include_str!("assets/plan.js");
 const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; \
                     img-src data:; font-src data:";
 
+/// The loadout brand mark for the viewer's brand strip — the same glyph as
+/// studio's topbar `brand_mark` (src/studio/views.rs), duplicated because this
+/// page must stay fully self-contained. Inline SVG: nothing fetched,
+/// `currentColor` follows the theme. Static compile-time markup — the page's
+/// never-PreEscape-dynamic-values rule is not in play.
+const VIEWER_MARK: &str = r##"<svg class="viewer-brand-mark" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.04 7.43a4 4 0 0 1 7.92 0 .5.5 0 1 1-.99.14 3 3 0 0 0-5.94 0 .5.5 0 1 1-.99-.14"/><path fill-rule="evenodd" d="M4 9.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5zm1 .5v3h6v-3h-1v.5a.5.5 0 0 1-1 0V10z"/><path d="M6 2.341V2a2 2 0 1 1 4 0v.341c2.33.824 4 3.047 4 5.659v1.191l1.17.585a1.5 1.5 0 0 1 .83 1.342V13.5a1.5 1.5 0 0 1-1.5 1.5h-1c-.456.607-1.182 1-2 1h-7a2.5 2.5 0 0 1-2-1h-1A1.5 1.5 0 0 1 0 13.5v-2.382a1.5 1.5 0 0 1 .83-1.342L2 9.191V8a6 6 0 0 1 4-5.659M7 2v.083a6 6 0 0 1 2 0V2a1 1 0 0 0-2 0M3 13.5A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5V8A5 5 0 0 0 3 8zm-1-3.19-.724.362a.5.5 0 0 0-.276.447V13.5a.5.5 0 0 0 .5.5H2zm12 0V14h.5a.5.5 0 0 0 .5-.5v-2.382a.5.5 0 0 0-.276-.447L14 10.309Z"/></svg>"##;
+
 /// Escape the canonical JSON for a `<script type="application/json">` island:
 /// `<`, `>`, `&`, U+2028, U+2029 become JSON unicode escapes, so the island
 /// can never contain `</script>` or `<!--` yet parses back identically
@@ -535,6 +542,20 @@ pub fn render(plan: &Plan) -> String {
                 style { (PreEscaped(CSS)) }
             }
             body data-plan-fingerprint=(hash) {
+                // Brand strip: names the surface in every serving context —
+                // file:// auto-open and studio's sandboxed /artifacts route
+                // alike. Static, non-interactive markup only (no links: the
+                // sandbox blocks top-level navigation, and there's nothing to
+                // link to in the file:// context anyway).
+                // Brand first, surface second (same hierarchy as studio's
+                // topbar): "Loadout" is the product, "Viewer" is a room in
+                // it — never "X by Loadout", which reads as a separate
+                // product with a vendor.
+                div.viewer-brand {
+                    (PreEscaped(VIEWER_MARK))
+                    span.viewer-brand-name { "Loadout" }
+                    span.viewer-brand-surface { "Viewer" }
+                }
                 header {
                     // Eyebrow above the title: the metadata a reader wants
                     // placed before the name, not after it.
@@ -826,9 +847,19 @@ mod tests {
     #[test]
     fn top_of_page_structure() {
         let html = render(&plan_from("kitchen-sink.json"));
+        // The brand strip ("Viewer" by Loadout) is the first thing on the
+        // page, above the eyebrow — it names the surface in both serving
+        // contexts and is static markup only (no links, nothing fetched).
+        let brand_pos = html
+            .find("<div class=\"viewer-brand\">")
+            .expect("brand strip");
+        assert!(html.contains("viewer-brand-mark"), "brand mark svg");
+        assert!(html.contains(">Loadout</span>"), "brand name");
+        assert!(html.contains(">Viewer</span>"), "surface label");
         // Eyebrow (byline + created) renders above the h1.
         let meta_pos = html.find("<p class=\"meta\">").expect("byline eyebrow");
         let h1_pos = html.find("<h1>").expect("title");
+        assert!(brand_pos < meta_pos, "brand strip above the eyebrow");
         assert!(meta_pos < h1_pos, "eyebrow above the title");
         assert!(html.contains(" · 2026-07-07"), "created date in eyebrow");
         // Exec prose and the at-a-glance rail share the summary grid; the

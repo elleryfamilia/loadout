@@ -757,7 +757,23 @@ pre {
 #manual-copy { position: fixed; right: 1rem; bottom: 1rem; z-index: 60; max-width: 26rem; padding: .75rem; border: 1px solid rgba(127,127,127,.4); border-radius: 8px; background: Canvas; color: CanvasText; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
 #manual-copy p { margin: 0 0 .5rem; font-size: .85em; }
 #manual-copy textarea { width: 100%; height: 9rem; font: inherit; font-size: .8em; }
-</style></head><body data-plan-fingerprint="sha256:699871414238a39a2db87e400affe5dfdc397fbf6bbcde124e0b394ab04812cf"><header><p class="meta">plan <code>auth-refactor</code> · revision 2 · by claude · 2026-07-07</p><h1>Auth refactor</h1><p>Extract <em>session</em> handling.</p>
+
+/* Brand strip -- brand first, surface second ("Loadout" then "Viewer") at
+   the top of the page. Static markup only, identical over file:// and
+   studio's sandboxed /artifacts route. */
+.viewer-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0 0 1.4rem;
+  padding-bottom: 0.7rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.viewer-brand-mark { width: 17px; height: 17px; flex: none; }
+.viewer-brand-name { font-weight: 650; letter-spacing: 0.01em; }
+.viewer-brand-surface { color: var(--muted); }
+</style></head><body data-plan-fingerprint="sha256:699871414238a39a2db87e400affe5dfdc397fbf6bbcde124e0b394ab04812cf"><div class="viewer-brand"><svg class="viewer-brand-mark" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.04 7.43a4 4 0 0 1 7.92 0 .5.5 0 1 1-.99.14 3 3 0 0 0-5.94 0 .5.5 0 1 1-.99-.14"/><path fill-rule="evenodd" d="M4 9.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5zm1 .5v3h6v-3h-1v.5a.5.5 0 0 1-1 0V10z"/><path d="M6 2.341V2a2 2 0 1 1 4 0v.341c2.33.824 4 3.047 4 5.659v1.191l1.17.585a1.5 1.5 0 0 1 .83 1.342V13.5a1.5 1.5 0 0 1-1.5 1.5h-1c-.456.607-1.182 1-2 1h-7a2.5 2.5 0 0 1-2-1h-1A1.5 1.5 0 0 1 0 13.5v-2.382a1.5 1.5 0 0 1 .83-1.342L2 9.191V8a6 6 0 0 1 4-5.659M7 2v.083a6 6 0 0 1 2 0V2a1 1 0 0 0-2 0M3 13.5A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5V8A5 5 0 0 0 3 8zm-1-3.19-.724.362a.5.5 0 0 0-.276.447V13.5a.5.5 0 0 0 .5.5H2zm12 0V14h.5a.5.5 0 0 0 .5-.5v-2.382a.5.5 0 0 0-.276-.447L14 10.309Z"/></svg><span class="viewer-brand-name">Loadout</span><span class="viewer-brand-surface">Viewer</span></div><header><p class="meta">plan <code>auth-refactor</code> · revision 2 · by claude · 2026-07-07</p><h1>Auth refactor</h1><p>Extract <em>session</em> handling.</p>
 </header><h2><svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
   <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" />
   <path d="M14 2v5a1 1 0 0 0 1 1h5" />
