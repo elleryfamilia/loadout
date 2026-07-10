@@ -132,6 +132,7 @@ fn icon(name: &str) -> Markup {
         "lock" => {
             r#"<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>"#
         }
+        "clock" => r#"<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>"#,
         // Built-in target *brand* logos are filled silhouettes, not line art —
         // see `brand_logo` / `brand_svg`, which use a different SVG treatment.
         _ => "",
@@ -390,6 +391,7 @@ fn tab_bar(active: &str) -> Markup {
         nav class="tabs" {
             button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
             button class=(cls("library")) data-tab="library" hx-get="/tab/library" hx-target="#main" { (icon("book")) "Library" }
+            button class=(cls("recents")) data-tab="recents" hx-get="/tab/recents" hx-target="#main" { (icon("clock")) "Recents" }
         }
     }
 }
@@ -1351,6 +1353,83 @@ pub fn workflows_result(view: &WorkflowsView, flash: &str) -> String {
     html! {
         (workflows_tab(view, Some(flash)))
         (staged_refresh())
+    }
+    .into_string()
+}
+
+// --- Recents tab ---------------------------------------------------------
+
+/// One Recents row, fully prepared by the server (no fs access in the view).
+pub struct RecentRow {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub repo_name: String,
+    pub repo_full: String,
+    pub age: String,
+    pub detail: String,
+    pub badge: RecentBadge,
+    pub available: bool,
+}
+
+/// Freshness of a row's artifact vs its source (plans: plan.json hash).
+pub enum RecentBadge {
+    Fresh,
+    Stale,
+    None,
+}
+
+/// The Recents tab body. `readonly` = the store was written by a newer
+/// loadout: render the notice and no destructive controls (they would
+/// silently no-op).
+pub fn recents_tab_fragment(rows: &[RecentRow], readonly: bool) -> String {
+    html! {
+        div class="recents" {
+            div class="recents-head" {
+                h2 { "Recents" }
+                @if !rows.is_empty() && !readonly {
+                    button class="btn btn-ghost btn-sm" hx-post="/recents/clear" hx-target="#main"
+                        hx-confirm="Clear the recents list? Rendered files are not deleted." {
+                        (icon("trash")) "Clear"
+                    }
+                }
+            }
+            @if readonly {
+                p class="muted" { "Recents state was written by a newer loadout — upgrade to manage it." }
+            }
+            @if rows.is_empty() && !readonly {
+                p class="muted" { "Nothing recent yet — render a plan with " code { "load plan render" } " and it shows up here." }
+            }
+            @if !rows.is_empty() {
+                ul class="recents-list" {
+                    @for r in rows {
+                        li class=(if r.available { "recent-row" } else { "recent-row recent-unavailable" }) {
+                            span class="recent-kind" { (icon(if r.kind == "plan" { "layers" } else { "file" })) }
+                            @if r.available {
+                                a class="recent-title" href={ "/artifacts/" (r.id) } target="_blank" rel="noopener" { (r.title) }
+                            } @else {
+                                span class="recent-title" title="unavailable (unmounted volume?)" { (r.title) }
+                            }
+                            span class="recent-repo muted" title=(r.repo_full) { (r.repo_name) }
+                            @if !r.detail.is_empty() { span class="recent-detail muted" { (r.detail) } }
+                            span class="recent-age muted" { (r.age) }
+                            @match r.badge {
+                                RecentBadge::Stale => span class="recent-badge stale" title="the plan changed since this render — re-run load plan render" { "stale" },
+                                RecentBadge::Fresh => {},
+                                RecentBadge::None => {},
+                            }
+                            @if !r.available {
+                                span class="recent-badge missing" { "missing" }
+                            }
+                            @if !readonly {
+                                button class="icon-btn recent-remove" title="Remove from recents"
+                                    hx-delete={ "/recents/" (r.id) } hx-target="#main" { (icon("x")) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     .into_string()
 }
@@ -2660,6 +2739,26 @@ pub fn error_fragment(msg: &str) -> String {
 /// A minimal full-page error (when the shell itself can't be assembled).
 pub fn error_page(msg: &str) -> String {
     html! { (DOCTYPE) html { head { title { "Loadout studio — error" } } body { pre class="error" { (msg) } } } }.into_string()
+}
+
+/// Plain full page for artifact-route misses (missing file, marker refusal).
+/// Self-contained: no /assets links, so it renders even if styling changes.
+pub fn artifact_message(title: &str, msg: &str) -> String {
+    html! {
+        (DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="utf-8";
+                title { (title) " — Loadout studio" }
+                style { (PreEscaped("body{font-family:system-ui,sans-serif;max-width:38rem;margin:4rem auto;padding:0 1rem;color:#333}h1{font-size:1.3rem}code{background:#eee;padding:.1em .3em;border-radius:4px}")) }
+            }
+            body {
+                h1 { (title) }
+                p { (msg) }
+            }
+        }
+    }
+    .into_string()
 }
 
 // --- shared bits -------------------------------------------------------------

@@ -902,3 +902,16 @@ pre.error { color: var(--error-fg); padding: 16px; font-family: var(--mono); whi
   .profile-rail, .editor-preview-col { position: static; max-height: none; overflow: visible; }
   .pack-grid { grid-template-columns: 1fr; }
 }
+
+/* --- Recents tab -------------------------------------------------------- */
+.recents-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .75rem; }
+.recents-list { list-style: none; margin: 0; padding: 0; }
+.recent-row { display: flex; align-items: center; gap: .6rem; padding: .5rem .25rem; border-bottom: 1px solid var(--border); }
+.recent-title { font-weight: 600; }
+.recent-unavailable { opacity: .55; }
+.recent-repo, .recent-detail, .recent-age { font-size: .85em; }
+.recent-age { margin-left: auto; }
+.recent-badge { font-size: .75em; padding: .1em .5em; border-radius: 999px; border: 1px solid var(--border); }
+.recent-badge.stale { color: var(--warn, #b45309); border-color: currentColor; }
+.recent-badge.missing { color: var(--muted, #888); }
+.recent-remove { flex: none; }

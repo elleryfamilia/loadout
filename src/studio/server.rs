@@ -160,6 +160,14 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/packs") => handle_packs(state),
         ("GET", "/skills/card") => handle_skill_card(),
         ("POST", "/skills/install") => handle_skill_install(),
+        ("GET", "/tab/recents") => handle_recents(state),
+        ("POST", "/recents/clear") => handle_recents_clear(state),
+        ("GET", p) if p.starts_with("/artifacts/") => {
+            handle_artifact(state, p.strip_prefix("/artifacts/").unwrap_or(""))
+        }
+        ("DELETE", p) if p.starts_with("/recents/") => {
+            handle_recents_remove(state, p.strip_prefix("/recents/").unwrap_or(""))
+        }
         ("GET", "/onboarding/welcome") => handle_onboarding_welcome(state),
         ("POST", "/onboarding/quickstart") => handle_quickstart(state),
         ("GET", "/profiles/new") => handle_profile_new(state),
@@ -1289,6 +1297,263 @@ fn skill_action_at(home: &Path, store: &Path, path: &str, method: &str) -> Resp 
     }
 }
 
+// --- Recents ------------------------------------------------------------
+
+/// The Recents destination. The store is read fresh per request, so renders
+/// done in another terminal appear on the next click with no cache dance.
+fn handle_recents(state: &Arc<Mutex<StudioState>>) -> Resp {
+    state.lock().unwrap().active_tab = "recents".to_string();
+    let store = recents_store(state);
+    Resp::html(views::recents_tab_fragment(
+        &recent_rows(&store),
+        store.is_readonly(),
+    ))
+}
+
+fn handle_recents_clear(state: &Arc<Mutex<StudioState>>) -> Resp {
+    let mut store = recents_store(state);
+    if let Err(e) = store.clear() {
+        return Resp::html(views::error_fragment(&format!(
+            "could not clear recents: {e}"
+        )));
+    }
+    handle_recents(state)
+}
+
+fn handle_recents_remove(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
+    let mut store = recents_store(state);
+    if let Err(e) = store.remove_id(id) {
+        return Resp::html(views::error_fragment(&format!(
+            "could not remove entry: {e}"
+        )));
+    }
+    handle_recents(state)
+}
+
+/// Build display rows. All fs reads happen here (store snapshot already
+/// taken; no state mutex is held). Reads fail fast (ENOENT) on unmounted
+/// volumes and NEVER write back — listing must not prune.
+fn recent_rows(store: &crate::recents::RecentsStore) -> Vec<views::RecentRow> {
+    let now = crate::commands::now_utc();
+    store
+        .entries()
+        .into_iter()
+        .map(|e| {
+            let available = artifact_available(&e.path);
+            let badge = if !available {
+                views::RecentBadge::None
+            } else if e.kind == "plan" {
+                plan_badge(e)
+            } else {
+                views::RecentBadge::None
+            };
+            views::RecentRow {
+                id: e.id(),
+                kind: e.kind.clone(),
+                title: e.title.clone(),
+                repo_name: e
+                    .repo
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| e.repo.display().to_string()),
+                repo_full: e.repo.display().to_string(),
+                age: crate::recents::age_label(&e.rendered_at, now),
+                detail: detail_line(e),
+                badge,
+                available,
+            }
+        })
+        .collect()
+}
+
+/// Cap on the probe read below — the marker sits within the first line of
+/// any loadout-generated file, so a giant single-line (no-newline) file must
+/// not be slurped in full just to answer "is this available".
+const AVAILABILITY_PROBE_CAP: u64 = 4096;
+
+/// Cheap availability probe: first line present and marker-bearing.
+fn artifact_available(path: &std::path::Path) -> bool {
+    use std::io::BufRead as _;
+    let Ok(f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut line = String::new();
+    std::io::BufReader::new(f.take(AVAILABILITY_PROBE_CAP))
+        .read_line(&mut line)
+        .is_ok()
+        && line
+            .trim_start()
+            .starts_with(crate::render::header::GENERATED_MARKER)
+}
+
+/// Plan-kind staleness: compare the recorded hash to the repo's CURRENT
+/// plan.json (same semantic as `load plan status`). Absent/invalid
+/// plan.json → no badge.
+fn plan_badge(entry: &crate::recents::Entry) -> views::RecentBadge {
+    let pj = crate::commands::plan::plan_json_path(&entry.repo);
+    let Ok(raw) = std::fs::read_to_string(&pj) else {
+        return views::RecentBadge::None;
+    };
+    match crate::plan::model::parse(&raw, true) {
+        Ok(p) if crate::plan::model::validate(&p.plan).is_empty() => {
+            if crate::plan::model::plan_hash(&p.plan) == entry.hash {
+                views::RecentBadge::Fresh
+            } else {
+                views::RecentBadge::Stale
+            }
+        }
+        _ => views::RecentBadge::None,
+    }
+}
+
+/// Kind-specific display line from the entry's `detail` map ("4 phases ·
+/// 15 tasks" for plans); unknown kinds render nothing extra.
+fn detail_line(entry: &crate::recents::Entry) -> String {
+    let (Some(phases), Some(tasks)) = (
+        entry.detail.get("phases").and_then(|v| v.as_u64()),
+        entry.detail.get("tasks").and_then(|v| v.as_u64()),
+    ) else {
+        return String::new();
+    };
+    format!("{phases} phases · {tasks} tasks")
+}
+
+/// Serve cap: refuse (not truncate) anything larger.
+const MAX_SERVE_BYTES: usize = 25 * 1024 * 1024;
+
+/// Load the recents store from the state's injected path. Loaded fresh per
+/// request — a render done in another terminal appears with no cache dance.
+fn recents_store(state: &Arc<Mutex<StudioState>>) -> crate::recents::RecentsStore {
+    let path = state.lock().unwrap().recents_path.clone();
+    crate::recents::RecentsStore::load_opt(path)
+}
+
+enum ArtifactRead {
+    Ok(Vec<u8>),
+    Missing,
+    Oversized,
+}
+
+/// Capped read (CAP+1 probe): never metadata-then-read (TOCTOU), never serve
+/// a truncated document.
+fn read_artifact_capped(path: &std::path::Path) -> ArtifactRead {
+    use std::io::Read as _;
+    let f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return ArtifactRead::Missing,
+    };
+    let mut buf = Vec::new();
+    match f.take(MAX_SERVE_BYTES as u64 + 1).read_to_end(&mut buf) {
+        Ok(_) if buf.len() > MAX_SERVE_BYTES => ArtifactRead::Oversized,
+        Ok(_) => ArtifactRead::Ok(buf),
+        Err(_) => ArtifactRead::Missing,
+    }
+}
+
+/// A plain studio-origin message page (our own markup — safe to serve
+/// unsandboxed; never used for artifact bytes).
+fn artifact_page(status: u16, title: &str, msg: &str) -> Resp {
+    Resp {
+        status,
+        headers: vec![
+            ("content-type".into(), "text/html; charset=utf-8".into()),
+            ("cache-control".into(), "no-store".into()),
+        ],
+        body: views::artifact_message(title, msg).into_bytes(),
+    }
+}
+
+/// Skip leading ASCII whitespace (space/tab/CR/LF) — deliberately ASCII-only,
+/// NOT `str::trim_start` parity: the canonical parser
+/// (`render::header::extract_context_hash`) trims Unicode whitespace per
+/// line, so this byte-level gate is strictly tighter. That direction is safe
+/// (the gate may refuse an exotic file the parser would read, never serve
+/// one it wouldn't), and real loadout-generated files start the marker at
+/// byte 0 anyway. (Savio PR #23 finding: the previous comment claimed
+/// trim_start parity it didn't have.)
+fn skip_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let mut i = 0;
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+        i += 1;
+    }
+    &bytes[i..]
+}
+
+/// Serve one registered artifact. SECURITY SPINE — the id indexes the
+/// registry and the registry yields the path: no request-derived paths,
+/// ever. The marker gate restricts serving to loadout-generated files (any
+/// kind, not just plans); the sandbox CSP header (see
+/// [`crate::recents::SERVE_CSP`]) gives the document an opaque origin.
+/// Artifact bytes must NEVER be inlined into a studio-origin response
+/// (no htmx swap, no srcdoc, no blob:) and `allow-same-origin` must never
+/// be added — either would run hostile artifact JS in studio's origin.
+fn handle_artifact(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
+    let store = recents_store(state);
+    let Some(entry) = store.find(id) else {
+        return Resp::not_found();
+    };
+    if !entry.path.is_absolute() {
+        return artifact_page(
+            404,
+            "not served",
+            "this entry's path is not absolute — refusing to serve it",
+        );
+    }
+    // Resolve symlinks BEFORE the extension check so a link at a recorded
+    // .html path can't widen the gate; canonicalize only succeeds when the
+    // target exists, so a failure is the missing-file case.
+    let Ok(resolved) = std::fs::canonicalize(&entry.path) else {
+        return artifact_page(
+            404,
+            "artifact file is missing",
+            &format!(
+                "unmounted volume? The entry is kept. For plans: run `load plan render` in {} to re-create it.",
+                entry.repo.display()
+            ),
+        );
+    };
+    if resolved.extension().and_then(|e| e.to_str()) != Some("html") {
+        return artifact_page(
+            404,
+            "not served",
+            "this entry does not resolve to an .html file — refusing to serve it",
+        );
+    }
+    let bytes = match read_artifact_capped(&resolved) {
+        ArtifactRead::Missing => {
+            return artifact_page(
+                404,
+                "artifact file is missing",
+                &format!(
+                    "unmounted volume? The entry is kept. For plans: run `load plan render` in {} to re-create it.",
+                    entry.repo.display()
+                ),
+            )
+        }
+        ArtifactRead::Oversized => {
+            return artifact_page(413, "artifact too large", "this file exceeds the 25 MB serving cap — open it directly from disk instead")
+        }
+        ArtifactRead::Ok(b) => b,
+    };
+    if !skip_ascii_whitespace(&bytes)
+        .starts_with(crate::render::header::GENERATED_MARKER.as_bytes())
+    {
+        return artifact_page(
+            404,
+            "not a loadout artifact",
+            "the file at this entry's path is not loadout-generated — refusing to serve it",
+        );
+    }
+    Resp {
+        status: 200,
+        headers: crate::recents::serve_header_pairs()
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        body: bytes,
+    }
+}
+
 /// `GET /onboarding/welcome` — (re)show the first-launch welcome on demand (the
 /// "?" tour button). Arms the guided flow so applying a pack from here runs the
 /// review → you're-set beats, just like a fresh config.
@@ -1829,6 +2094,7 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
         port,
         onboarding_active: false,
         active_tab: "profiles".to_string(),
+        recents_path: config::state_dir().map(|d| d.join(crate::recents::STORE_FILE)),
     }));
 
     // `0`/`0s` disables the idle shutdown; anything else is the inactivity window.
@@ -2167,7 +2433,51 @@ mod tests {
             port: 7777,
             onboarding_active: false,
             active_tab: "profiles".into(),
+            recents_path: Some(repo.join("state").join("recents.json")),
         }))
+    }
+
+    /// Seed one recents entry + a marker-bearing artifact file inside the
+    /// fixture repo; returns the entry's route id. The `detail` map matches
+    /// the production shape `record_render` writes in
+    /// `commands::plan::record_render` (`plan_id` string, `phases`/`tasks`
+    /// as `usize`-derived `serde_json::Value`s) so tests exercise the same
+    /// rendering path real entries go through, not a hand-shaped stand-in.
+    fn seed_recents(repo: &std::path::Path, title: &str, artifact_rel: &str, hash: &str) -> String {
+        let artifact = repo.join(artifact_rel);
+        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::fs::write(
+            &artifact,
+            format!(
+                "<!-- loadout:generated context={hash} -->\n<!doctype html><html><body>artifact-body-demo</body></html>"
+            ),
+        )
+        .unwrap();
+        let mut detail = std::collections::BTreeMap::new();
+        detail.insert(
+            "plan_id".to_string(),
+            serde_json::Value::from("demo".to_string()),
+        );
+        detail.insert("phases".to_string(), serde_json::Value::from(4usize));
+        detail.insert("tasks".to_string(), serde_json::Value::from(15usize));
+        let entry = crate::recents::Entry {
+            kind: "plan".into(),
+            path: artifact.clone(),
+            repo: repo.to_path_buf(),
+            title: title.into(),
+            hash: hash.into(),
+            rendered_at: "2026-07-09T00:00:00Z".into(),
+            detail,
+            extra: std::collections::BTreeMap::new(),
+        };
+        let id = entry.id();
+        let mut store =
+            crate::recents::RecentsStore::load_from(&repo.join("state").join("recents.json"));
+        assert!(matches!(
+            store.record(entry),
+            crate::recents::RecordOutcome::Recorded
+        ));
+        id
     }
 
     /// The global `config.toml` the fixture authors into — where caps/profiles
@@ -2246,6 +2556,254 @@ mod tests {
         // destinations Loadouts | Library.
         assert!(body.contains("Loadouts"));
         assert!(body.contains("Library"));
+        assert!(body.contains("Recents"));
+    }
+
+    #[test]
+    fn shell_nav_always_shows_recents() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Recents"));
+        assert!(body.contains("data-tab=\"recents\""));
+    }
+
+    #[test]
+    fn recents_tab_renders_instructive_empty_state() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Nothing recent yet"));
+        assert!(body.contains("load plan render"));
+        // No destructive controls on an empty list.
+        assert!(!body.contains("/recents/clear"));
+    }
+
+    #[test]
+    fn recents_tab_lists_rows_with_link_badge_and_controls() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        // A stale plan: the repo's plan.json hashes differently than the entry.
+        std::fs::create_dir_all(d.path().join(".loadout/workflow/artifacts")).unwrap();
+        std::fs::write(
+            d.path().join(".loadout/workflow/artifacts/plan.json"),
+            r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+                 "phases": [ { "id": "p1", "title": "P", "tasks": [
+                   { "id": "t-a", "title": "A" } ] } ] }"#,
+        )
+        .unwrap();
+        let id = seed_recents(d.path(), "Demo plan", "gen/demo.html", "sha256:old");
+        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Demo plan"));
+        assert!(body.contains(&format!("/artifacts/{id}")));
+        assert!(body.contains("target=\"_blank\""));
+        assert!(body.contains("rel=\"noopener\""));
+        assert!(
+            body.contains("stale"),
+            "hash mismatch must badge stale: {body}"
+        );
+        assert!(
+            body.contains("4 phases · 15 tasks"),
+            "detail line from the seeded entry's detail map: {body}"
+        );
+        assert!(body.contains(&format!("/recents/{id}")), "per-row remove");
+        assert!(body.contains("/recents/clear"));
+        assert!(body.contains("Rendered files are not deleted."));
+    }
+
+    #[test]
+    fn recents_tab_greys_unavailable_rows_instead_of_pruning() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let _id = seed_recents(d.path(), "Gone plan", "gen/demo.html", "sha256:demo");
+        std::fs::remove_file(d.path().join("gen/demo.html")).unwrap();
+        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Gone plan"));
+        assert!(body.contains("recent-unavailable"));
+        assert!(
+            !body.contains("/artifacts/"),
+            "no link on an unavailable row"
+        );
+        let store =
+            crate::recents::RecentsStore::load_from(&d.path().join("state").join("recents.json"));
+        assert_eq!(store.entries().len(), 1, "listing must never prune");
+    }
+
+    #[test]
+    fn recents_clear_requires_origin_and_empties_the_list() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        // No Origin → 403 (state-changing guard).
+        let r = route(&st, &req("POST", "/recents/clear", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 403);
+        let r = route(
+            &st,
+            &req("POST", "/recents/clear", "", &[HOST, COOKIE, ORIGIN], ""),
+        );
+        assert_eq!(r.status, 200);
+        assert!(String::from_utf8(r.body)
+            .unwrap()
+            .contains("Nothing recent yet"));
+        let store =
+            crate::recents::RecentsStore::load_from(&d.path().join("state").join("recents.json"));
+        assert!(store.is_empty());
+        // Artifact file untouched: clear is list-only.
+        assert!(d.path().join("gen/demo.html").exists());
+    }
+
+    #[test]
+    fn recents_delete_removes_one_row() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id_a = seed_recents(d.path(), "Plan A", "gen/a.html", "sha256:a");
+        let id_b = seed_recents(d.path(), "Plan B", "gen/b.html", "sha256:b");
+        // No Origin → 403 (state-changing guard); the row survives.
+        let r = route(
+            &st,
+            &req(
+                "DELETE",
+                &format!("/recents/{id_a}"),
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 403);
+        let r = route(
+            &st,
+            &req(
+                "DELETE",
+                &format!("/recents/{id_a}"),
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(!body.contains("Plan A"));
+        assert!(body.contains("Plan B"));
+        let _ = id_b;
+    }
+
+    #[test]
+    fn recents_readonly_store_shows_notice_and_hides_controls() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        std::fs::create_dir_all(d.path().join("state")).unwrap();
+        std::fs::write(
+            d.path().join("state/recents.json"),
+            r#"{"version":999,"entries":[]}"#,
+        )
+        .unwrap();
+        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("newer loadout"));
+        assert!(!body.contains("/recents/clear"));
+    }
+
+    #[test]
+    fn artifact_route_serves_marker_file_with_sandbox_csp() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        let r = route(
+            &st,
+            &req("GET", &format!("/artifacts/{id}"), "", &[HOST, COOKIE], ""),
+        );
+        assert_eq!(r.status, 200);
+        for (k, v) in crate::recents::serve_header_pairs() {
+            assert!(
+                r.headers.iter().any(|(hk, hv)| hk == k && hv == v),
+                "missing header {k}: {v}"
+            );
+        }
+        assert!(String::from_utf8(r.body)
+            .unwrap()
+            .contains("artifact-body-demo"));
+    }
+
+    #[test]
+    fn artifact_route_requires_the_session_cookie() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        let r = route(
+            &st,
+            &req("GET", &format!("/artifacts/{id}"), "", &[HOST], ""),
+        );
+        assert_eq!(r.status, 403);
+    }
+
+    #[test]
+    fn artifact_route_unknown_id_is_404_and_ids_cannot_carry_paths() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        let r = route(
+            &st,
+            &req(
+                "GET",
+                "/artifacts/ffffffffffffffff",
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 404);
+        // Traversal-shaped ids just fail the registry lookup — no path is
+        // ever derived from the request.
+        let r = route(
+            &st,
+            &req("GET", "/artifacts/../etc/passwd", "", &[HOST, COOKIE], ""),
+        );
+        assert_eq!(r.status, 404);
+    }
+
+    #[test]
+    fn artifact_route_missing_file_is_friendly_404_and_entry_is_kept() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        std::fs::remove_file(d.path().join("gen/demo.html")).unwrap();
+        let r = route(
+            &st,
+            &req("GET", &format!("/artifacts/{id}"), "", &[HOST, COOKIE], ""),
+        );
+        assert_eq!(r.status, 404);
+        assert!(String::from_utf8(r.body)
+            .unwrap()
+            .contains("unmounted volume"));
+        // The unmounted-volume rule: a failed read never prunes the entry.
+        let store =
+            crate::recents::RecentsStore::load_from(&d.path().join("state").join("recents.json"));
+        assert_eq!(store.entries().len(), 1);
+    }
+
+    #[test]
+    fn artifact_route_refuses_marker_stripped_files() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        std::fs::write(
+            d.path().join("gen/demo.html"),
+            "<!doctype html><p>swapped</p>",
+        )
+        .unwrap();
+        let r = route(
+            &st,
+            &req("GET", &format!("/artifacts/{id}"), "", &[HOST, COOKIE], ""),
+        );
+        assert_eq!(r.status, 404);
+        assert!(String::from_utf8(r.body)
+            .unwrap()
+            .contains("not loadout-generated"));
     }
 
     #[test]

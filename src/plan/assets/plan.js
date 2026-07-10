@@ -54,9 +54,18 @@
 
   function selftest() {
     const results = [];
+    const pending = [];
     function check(name, fn) {
       try { fn(); results.push("PASS " + name); }
       catch (e) { results.push("FAIL " + name + ": " + e.message); }
+    }
+    function checkAsync(name, promise) {
+      pending.push(Promise.resolve(promise).then(
+        function (ok) { results.push((ok ? "PASS " : "FAIL ") + name); },
+        function (e) {
+          results.push("FAIL " + name + ": " + (e && e.message ? e.message : String(e)));
+        }
+      ));
     }
     check("island parses", function () {
       const plan = core.parseIsland(document.getElementById("plan-data").textContent);
@@ -78,12 +87,49 @@
       if (!document.querySelector('[data-plan-ref="task:t-session-store"]'))
         throw new Error("missing data-plan-ref");
     });
-    const failed = results.some(r => r.indexOf("FAIL") === 0);
-    const marker = document.createElement("pre");
-    marker.id = "selftest-result";
-    marker.textContent =
-      (failed ? "LOADOUT_SELFTEST_FAIL" : "LOADOUT_SELFTEST_PASS") + "\n" + results.join("\n");
-    document.body.appendChild(marker);
+    check("storage guarded", function () {
+      /* Under an opaque origin localStorage ACCESS throws; the guards must
+         swallow that and hand back an empty array, not break the page. */
+      const drafts = loadDrafts("selftest-plan", "selftest-fp");
+      if (!Array.isArray(drafts)) throw new Error("loadDrafts must return an array");
+    });
+    if (location.protocol !== "file:" || window.parent !== window) {
+      /* Non-plain-file contexts only — a real http(s) serving, or the CI
+         harness that frames this page in a sandboxed iframe to give it the
+         same opaque origin the studio's sandbox-CSP header does. Prove the
+         CSP wall is live and the copy flow terminates in a handled state
+         (clipboard success OR the manual fallback rendered) — never a
+         silent dead-end. */
+      checkAsync("fetch blocked by CSP", new Promise(function (resolve) {
+        try {
+          fetch("/selftest-probe").then(function () { resolve(false); }, function () { resolve(true); });
+        } catch (e) { resolve(true); }
+      }));
+      checkAsync("copy terminates handled", new Promise(function (resolve) {
+        let succeeded = false;
+        copyToClipboard("selftest-probe", function () { succeeded = true; resolve(true); });
+        setTimeout(function () {
+          if (!succeeded) resolve(!!document.getElementById("manual-copy"));
+        }, 800);
+      }));
+    }
+    function finish() {
+      const failed = results.some(r => r.indexOf("FAIL") === 0);
+      const marker = document.createElement("pre");
+      marker.id = "selftest-result";
+      marker.textContent =
+        (failed ? "LOADOUT_SELFTEST_FAIL" : "LOADOUT_SELFTEST_PASS") + "\n" + results.join("\n");
+      document.body.appendChild(marker);
+      /* When framed (the CI harness), relay the verdict to the parent:
+         a sandboxed iframe's DOM is invisible to --dump-dom (it only
+         serializes the top document), but postMessage crosses the opaque-
+         origin boundary by design. No-op in every top-level context. */
+      if (window.parent !== window) {
+        try { window.parent.postMessage("LOADOUT_SELFTEST_RELAY\n" + marker.textContent, "*"); }
+        catch (e) { /* relay is test-harness sugar, never load-bearing */ }
+      }
+    }
+    Promise.all(pending).then(finish, finish);
   }
 
   /* ---- DOM layer -------------------------------------------------- */
@@ -228,13 +274,43 @@
       let copied = false;
       try { copied = document.execCommand("copy"); } catch (e) { /* ignore */ }
       document.body.removeChild(ta);
-      if (copied) done();
+      if (copied) done(); else showManualCopy(text);
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(done, fallback);
     } else {
       fallback();
     }
+  }
+
+  /* Terminal fallback: when BOTH clipboard paths fail (e.g. an opaque-origin
+     sandboxed document with no clipboard permission), surface the payload for
+     a manual Cmd/Ctrl-C — the paste-back loop must never dead-end silently. */
+  function showManualCopy(text) {
+    let panel = document.getElementById("manual-copy");
+    if (panel) {
+      panel.querySelector("textarea").value = text;
+    } else {
+      panel = document.createElement("div");
+      panel.id = "manual-copy";
+      const hint = document.createElement("p");
+      hint.textContent =
+        "Automatic copy is blocked here — select the text below and copy it manually.";
+      const ta = document.createElement("textarea");
+      ta.setAttribute("readonly", "");
+      ta.value = text;
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "Close";
+      close.addEventListener("click", function () { panel.remove(); });
+      panel.appendChild(hint);
+      panel.appendChild(ta);
+      panel.appendChild(close);
+      document.body.appendChild(panel);
+    }
+    const ta = panel.querySelector("textarea");
+    ta.focus();
+    ta.select();
   }
 
   function init() {
@@ -528,7 +604,11 @@
   }
 
   function run() {
-    if (location.hash === "#selftest") selftest(); else init();
+    /* The window.name trigger exists for the CI harness, which embeds this
+       page via a sandboxed iframe's srcdoc (an about:srcdoc document has no
+       URL fragment to carry #selftest). Inert otherwise: the selftest only
+       appends a result marker. */
+    if (location.hash === "#selftest" || window.name === "loadout-selftest") selftest(); else init();
   }
   if (document.readyState !== "loading") {
     run();

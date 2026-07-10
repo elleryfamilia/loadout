@@ -123,6 +123,16 @@ impl Fixture {
     fn read_global(&self, rel: &str) -> String {
         fs::read_to_string(self.global.path().join("empty").join(rel)).unwrap()
     }
+
+    /// Read a file from the isolated per-machine state dir (LOADOUT_STATE_DIR).
+    fn read_state(&self, rel: &str) -> String {
+        fs::read_to_string(self.global.path().join("state").join(rel)).unwrap()
+    }
+
+    /// Whether a path exists under the isolated state dir.
+    fn state_exists(&self, rel: &str) -> bool {
+        self.global.path().join("state").join(rel).exists()
+    }
 }
 
 #[test]
@@ -2851,6 +2861,136 @@ fn plan_clean_removes_only_marked_html() {
         .success()
         .stdout(predicate::str::contains("not loadout-generated"));
     assert!(f.exists(".loadout/generated/plan.html"));
+}
+
+const RECENTS_PLAN: &str = r#"{ "format": "loadout.plan/1",
+     "meta": { "id": "demo", "title": "Demo plan" },
+     "phases": [ { "id": "p1", "title": "P", "tasks": [
+       { "id": "t-a", "title": "A" } ] } ] }"#;
+
+#[test]
+fn plan_render_records_a_recents_entry_and_advertises_it() {
+    let f = Fixture::new();
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "(also available under Recents in `load studio`)",
+        ));
+    let raw = f.read_state("recents.json");
+    assert!(raw.contains("\"kind\": \"plan\""), "{raw}");
+    assert!(raw.contains("Demo plan"), "{raw}");
+    assert!(raw.contains("plan.html"), "{raw}");
+    // Render again: still exactly one entry (upsert by path), still first.
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+    let raw = f.read_state("recents.json");
+    assert_eq!(raw.matches("\"kind\": \"plan\"").count(), 1, "{raw}");
+}
+
+#[test]
+fn plan_render_dry_run_out_and_file_variants_record_nothing() {
+    let f = Fixture::new();
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    f.write("alt-plan.json", RECENTS_PLAN);
+    f.cmd()
+        .args(["--dry-run", "plan", "render", "--no-open"])
+        .assert()
+        .success();
+    assert!(!f.state_exists("recents.json"), "dry-run must not record");
+    f.cmd()
+        .args(["plan", "render", "--no-open", "--out", "scratch.html"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recents").not());
+    assert!(!f.state_exists("recents.json"), "--out must not record");
+    // A relative --out resolves against --cwd (the fixture repo), not the
+    // test binary's real process cwd — regression coverage for the
+    // repo-base-anchoring fix in resolve_relative().
+    assert!(
+        f.exists("scratch.html"),
+        "relative --out must land inside the --cwd repo, not the process cwd"
+    );
+    f.cmd()
+        .args(["plan", "render", "--no-open", "alt-plan.json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recents").not());
+    assert!(
+        !f.state_exists("recents.json"),
+        "FILE input must not record"
+    );
+}
+
+/// A relative `--out` must anchor to the directory loadout was invoked
+/// from, not the detected repo root — the universal CLI convention (from
+/// `repo/docs/`, `--out preview.html` lands in `docs/`, not the repo root).
+/// This drives the real binary with no `--cwd` flag at all, so the
+/// invocation directory is the process's real OS working directory,
+/// exercised via `Command::current_dir`. The fixture is `git_init`-ed so
+/// repo-root detection climbs from `docs/` back up to the fixture root,
+/// where the default `plan.json` input lives — proving the repo-base
+/// anchor still finds the input while the output anchor tracks `--cwd`
+/// instead.
+#[test]
+fn plan_render_relative_out_anchors_to_invocation_dir_not_repo_root() {
+    let f = Fixture::new();
+    f.git_init();
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    let docs_dir = f.repo_path().join("docs");
+    fs::create_dir_all(&docs_dir).unwrap();
+
+    let mut c = Command::cargo_bin("load").unwrap();
+    c.env("LOADOUT_CONFIG_DIR", f.global.path().join("empty"));
+    c.env("HOME", f.global.path().join("home"));
+    c.env("LOADOUT_STATE_DIR", f.global.path().join("state"));
+    c.current_dir(&docs_dir);
+    c.args(["plan", "render", "--no-open", "--out", "preview.html"]);
+    c.assert().success();
+
+    assert!(
+        docs_dir.join("preview.html").exists(),
+        "relative --out must land in the invocation dir (docs/), not the repo root"
+    );
+    assert!(
+        !f.exists("preview.html"),
+        "relative --out must not land at the repo root"
+    );
+}
+
+#[test]
+fn plan_clean_removes_the_recents_entry() {
+    let f = Fixture::new();
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+    assert!(f.read_state("recents.json").contains("plan.html"));
+    f.cmd().args(["plan", "clean"]).assert().success();
+    let raw = f.read_state("recents.json");
+    assert!(!raw.contains("plan.html"), "entry must be gone: {raw}");
+}
+
+#[test]
+fn plan_render_warns_on_newer_recents_store_and_does_not_advertise() {
+    let f = Fixture::new();
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    fs::create_dir_all(f.global.path().join("state")).unwrap();
+    let newer = r#"{"version":999,"entries":[]}"#;
+    fs::write(f.global.path().join("state/recents.json"), newer).unwrap();
+    f.cmd()
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recents").not())
+        .stderr(predicate::str::contains("newer loadout"));
+    // Bytes preserved.
+    assert_eq!(f.read_state("recents.json"), newer);
 }
 
 /// An unreadable (but present) plan.html must surface as a hard error, not

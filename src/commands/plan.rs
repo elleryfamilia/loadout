@@ -31,6 +31,24 @@ pub(crate) fn feedback_path(repo_base: &Path) -> PathBuf {
     artifacts_dir(repo_base).join("plan-feedback.json")
 }
 
+/// Resolve a user-supplied path against the directory loadout was invoked
+/// from (`Runtime.cwd` — the explicit `--cwd` value, else the process's real
+/// OS working directory), matching the universal CLI convention that a
+/// relative path resolves against the invocation directory. This is
+/// deliberately NOT the repo base: from `repo/docs/`, a relative `--out
+/// preview.html` must land in `docs/`, not silently jump to the repo root.
+/// Every other plan artifact (plan.json, plan.html, plan-feedback.json) is
+/// its own separate, always-repo-base-anchored path — those are internal
+/// canonical locations, not user-supplied ones. Absolute paths pass through
+/// untouched.
+pub(crate) fn resolve_relative(cwd: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
 /// Ensure the exact-file gitignore entries. Only inside a git repo; a
 /// non-repo directory has nothing to protect against `git add`.
 pub(crate) fn ensure_plan_gitignore(prep: &Prepared, writer: &AtomicWriter) -> crate::Result<()> {
@@ -60,12 +78,12 @@ pub fn run(rt: &Runtime, args: &PlanArgs) -> crate::Result<()> {
     let writer = AtomicWriter::new(rt.dry_run);
     ensure_plan_gitignore(&prep, &writer)?;
     match args.action.as_ref() {
-        None => status(&prep),
+        None => status(&prep, rt),
         Some(PlanAction::Check {
             file,
             json,
             lenient,
-        }) => check(&prep, file.as_deref(), *json, *lenient),
+        }) => check(&prep, rt, file.as_deref(), *json, *lenient),
         Some(PlanAction::Render { file, out, no_open }) => {
             render(&prep, rt, file.as_deref(), out.as_deref(), *no_open)
         }
@@ -94,6 +112,15 @@ fn clean(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
                 if rt.dry_run { "would rm" } else { "removed" },
                 p.display()
             );
+        }
+    }
+    // Drop the recents entry unconditionally on a non-dry-run clean: whether
+    // the file was removed, skipped as not-ours, or already absent, the
+    // entry about it is dead. Best-effort.
+    if !rt.dry_run {
+        let mut store = crate::recents::RecentsStore::load_default();
+        if let Err(e) = store.remove_path(&plan_html_path(&prep.repo_base)) {
+            crate::vlog!("could not update recents: {e}");
         }
     }
     Ok(())
@@ -133,12 +160,13 @@ pub(crate) fn clean_artifacts(repo_base: &Path, dry_run: bool) -> crate::Result<
 /// Load + parse + validate; returns the plan or prints diagnostics and errs.
 fn load_checked(
     prep: &Prepared,
+    cwd: &Path,
     file: Option<&Path>,
     json: bool,
     lenient: bool,
 ) -> crate::Result<(model::Plan, Vec<model::Issue>)> {
     let path = file
-        .map(Path::to_path_buf)
+        .map(|f| resolve_relative(cwd, f))
         .unwrap_or_else(|| plan_json_path(&prep.repo_base));
     let input = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
@@ -175,8 +203,14 @@ fn report_issues(json: bool, errors: &[model::Issue], warnings: &[model::Issue])
     }
 }
 
-fn check(prep: &Prepared, file: Option<&Path>, json: bool, lenient: bool) -> crate::Result<()> {
-    let (plan, mut warnings) = load_checked(prep, file, json, lenient)?;
+fn check(
+    prep: &Prepared,
+    rt: &Runtime,
+    file: Option<&Path>,
+    json: bool,
+    lenient: bool,
+) -> crate::Result<()> {
+    let (plan, mut warnings) = load_checked(prep, &rt.cwd, file, json, lenient)?;
     warnings.extend(model::advisories(&plan));
     warn_stale_feedback(prep, &plan);
     if json {
@@ -225,7 +259,7 @@ fn warn_stale_feedback(prep: &Prepared, plan: &model::Plan) {
     }
 }
 
-fn status(prep: &Prepared) -> crate::Result<()> {
+fn status(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
     let json = plan_json_path(&prep.repo_base);
     if !json.exists() {
         println!(
@@ -234,7 +268,7 @@ fn status(prep: &Prepared) -> crate::Result<()> {
         );
         return Ok(());
     }
-    match load_checked(prep, None, false, true) {
+    match load_checked(prep, &rt.cwd, None, false, true) {
         Ok((plan, _)) => {
             let hash = model::plan_hash(&plan);
             println!(
@@ -266,14 +300,14 @@ fn render(
     out: Option<&Path>,
     no_open: bool,
 ) -> crate::Result<()> {
-    let (plan, warnings) = load_checked(prep, file, false, false)?;
+    let (plan, warnings) = load_checked(prep, &rt.cwd, file, false, false)?;
     for w in &warnings {
         println!("warning[{}] {}: {}", w.code, w.path, w.message);
     }
     warn_stale_feedback(prep, &plan);
     let html = crate::plan::render::render(&plan);
     let path = out
-        .map(Path::to_path_buf)
+        .map(|o| resolve_relative(&rt.cwd, o))
         .unwrap_or_else(|| plan_html_path(&prep.repo_base));
     let written = AtomicWriter::new(rt.dry_run).write(&path, &html)?;
     println!(
@@ -286,7 +320,59 @@ fn render(
         crate::studio::server::open_browser(&file_url(&path));
         println!("opened in your browser (pass --no-open to skip)");
     }
+    // Record in the per-machine recents registry — canonical renders only
+    // (default input AND default output): a --out/FILE render pairs a
+    // non-canonical plan or scratch path with no clean verb or staleness
+    // story, and would sit as a permanent dead row (no-prune rule).
+    if !rt.dry_run && file.is_none() && out.is_none() {
+        record_render(&prep.repo_base, &plan, &path);
+    }
     Ok(())
+}
+
+/// Best-effort recents recording. A registry failure must never fail the
+/// render; messaging keys off the outcome so we never advertise an entry
+/// that wasn't written.
+fn record_render(repo_base: &Path, plan: &model::Plan, html_path: &Path) {
+    use crate::recents::{clamp_title, Entry, RecentsStore, RecordOutcome};
+    let mut detail = std::collections::BTreeMap::new();
+    detail.insert(
+        "plan_id".to_string(),
+        serde_json::Value::from(plan.meta.id.clone()),
+    );
+    detail.insert(
+        "phases".to_string(),
+        serde_json::Value::from(plan.phases.len()),
+    );
+    detail.insert(
+        "tasks".to_string(),
+        serde_json::Value::from(plan.phases.iter().map(|p| p.tasks.len()).sum::<usize>()),
+    );
+    let entry = Entry {
+        kind: "plan".to_string(),
+        path: html_path.to_path_buf(), // record() absolutizes
+        repo: std::path::absolute(repo_base).unwrap_or_else(|_| repo_base.to_path_buf()),
+        title: clamp_title(&plan.meta.title),
+        hash: model::plan_hash(plan),
+        rendered_at: super::now_rfc3339(),
+        detail,
+        extra: std::collections::BTreeMap::new(),
+    };
+    let mut store = RecentsStore::load_default();
+    match store.record(entry) {
+        RecordOutcome::Recorded => {
+            println!("(also available under Recents in `load studio`)");
+        }
+        RecordOutcome::ReadOnlyNewer => crate::warn_user!(
+            "recents state was written by a newer loadout — this render won't appear in studio Recents until you upgrade"
+        ),
+        RecordOutcome::NoStateDir => {
+            crate::vlog!("no state dir; skipping recents record");
+        }
+        RecordOutcome::Failed(e) => {
+            crate::vlog!("could not record recents entry: {e}");
+        }
+    }
 }
 
 /// Build a `file://` URL for `path`: absolutize it first (so a relative
