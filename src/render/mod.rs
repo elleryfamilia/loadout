@@ -441,6 +441,16 @@ pub fn render_workflow_section(wf: &Workflow) -> String {
             let _ = writeln!(s, "   - done when: {item}");
         }
     }
+    // The catch-all for plans produced OUTSIDE the plan-stage command (plan
+    // mode, ad-hoc asks): one always-on sentence offering the visual preview.
+    // The plan-slot command body carries the full directive (channel 2); this
+    // is deliberately just an offer, kept to a single line.
+    let _ = writeln!(
+        s,
+        "\nWhenever you produce an implementation plan — via these stages or not — \
+         offer the user a visual plan preview: emit plan.json per `load plan schema`, \
+         validate with `load plan check`, then open it with `load plan render`."
+    );
     s.trim_end().to_string()
 }
 
@@ -683,6 +693,11 @@ mod tests {
         assert!(out.content.contains("**plan**"));
         assert!(out.content.contains("writes `plan.md`"));
         assert!(out.content.contains("reads `plan.md`"));
+        // The always-on catch-all: plans produced outside the plan-stage
+        // command still get offered the visual preview (one line, an offer —
+        // the full directive lives in the plan command body, channel 2).
+        assert!(out.content.contains("offer the user a visual plan preview"));
+        assert!(out.content.contains("`load plan schema`"));
         // It rides inside profile_guidance, after the fragment conventions.
         assert!(out.profile_guidance.contains("### baseline"));
         let frag_at = out.profile_guidance.find("### baseline").unwrap();

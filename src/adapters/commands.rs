@@ -30,6 +30,20 @@ pub(crate) const SECURITY_CHECKLIST_INTRO: &str =
     "Also run a security review of the change. The checklist below is a vendored security-review prompt — gather the branch's git status/diff/log yourself where it references them, then work through it:";
 /// Vendored security-review prompt — see vendored/sources.toml (`security-review`).
 const SECURITY_CHECKLIST: &str = include_str!("../../vendored/security-review/security-review.md");
+/// Appended to every plan-slot command body (channel 2), whatever the stage is
+/// named — so each workflow's plan step also produces the visual plan preview.
+/// Depends only on the `load` binary, deliberately NOT on the
+/// `loadout-plan-preview` skill being surfaced: the observed failure mode is a
+/// session where the skill never enters the agent's context, and this line is
+/// what keeps the flow alive there.
+pub(crate) const PLAN_PREVIEW_EPILOGUE: &str = "\
+Also produce the visual plan preview: emit `.loadout/workflow/artifacts/plan.json` \
+(the format is printed by `load plan schema`), run `load plan check --json` and fix \
+errors until clean, then `load plan render` to open the review page in the user's \
+browser. If plan.json already holds a different pending plan, don't overwrite it — \
+write a sibling `plan-<topic>.json` instead and render it with `load plan render \
+.loadout/workflow/artifacts/plan-<topic>.json --out .loadout/generated/plan-<topic>.html`. \
+The `loadout-plan-preview` skill carries the full authoring guidance when available.";
 
 /// On-disk format for an agent's command files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -220,6 +234,13 @@ fn stage_body(
         }
         s.push('\n');
     }
+    // Visual-plan enrichment for the plan slot: the stage also emits the
+    // machine-readable plan and renders the review page. Keyed off the
+    // canonical command, so a workflow's "planning"/"decompose" stage gets it
+    // too (channel 2 only, by the same standing rule as verify below).
+    if command == "plan" {
+        let _ = writeln!(s, "{PLAN_PREVIEW_EPILOGUE}\n");
+    }
     // Security enrichment for the verify slot: prefer the agent's native
     // review commands; otherwise embed the vendored checklist (channel 2
     // only — the always-on context carries summaries, by standing rule).
@@ -372,6 +393,53 @@ mod tests {
         assert!(!verify.content.contains("second verify claimant")); // qa folded away
         let ship = cmds.iter().find(|c| c.filename == "ship.md").unwrap();
         assert!(ship.content.contains("commit and push")); // commit kept its own slot
+    }
+
+    #[test]
+    fn plan_slot_commands_carry_the_visual_preview_epilogue() {
+        // Built-ins: every workflow's plan-slot command gets the epilogue…
+        for id in ["superpowers", "spec-driven"] {
+            let cmds = stage_commands(&builtin(id), CommandFormat::Markdown, &[]);
+            let plan = cmds.iter().find(|c| c.filename == "plan.md").unwrap();
+            assert!(
+                plan.content.contains(PLAN_PREVIEW_EPILOGUE),
+                "{id} plan command must carry the preview epilogue"
+            );
+            // …and only the plan slot does.
+            for c in cmds.iter().filter(|c| c.filename != "plan.md") {
+                assert!(
+                    !c.content.contains("load plan check"),
+                    "{} must not carry the plan epilogue",
+                    c.filename
+                );
+            }
+        }
+        // A custom workflow whose plan stage is named `decompose` still fills
+        // the plan slot, so it gets the epilogue too — that's the point of
+        // keying off the canonical command, not the stage name.
+        let wf = Workflow {
+            id: "x".into(),
+            name: Some("X".into()),
+            description: None,
+            icon: None,
+            stages: vec![WorkflowStage {
+                name: "decompose".into(),
+                purpose: Some("break it down".into()),
+                instructions: None,
+                reads: None,
+                writes: None,
+                gate: false,
+                exit: vec![],
+            }],
+            modeled_on: None,
+            researched: None,
+            source: None,
+            disabled: false,
+            origin: crate::fragment::Layer::Global,
+        };
+        let cmds = stage_commands(&wf, CommandFormat::Markdown, &[]);
+        let plan = cmds.iter().find(|c| c.filename == "plan.md").unwrap();
+        assert!(plan.content.contains(PLAN_PREVIEW_EPILOGUE));
     }
 
     #[test]
