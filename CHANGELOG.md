@@ -8,6 +8,18 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Added
+- **Studio Recents tab**: plan previews rendered by `load plan render` are
+  recorded in a per-machine registry (`~/.local/state/loadout/recents.json`)
+  and listed in a new always-visible Recents tab — repo, age, task counts,
+  staleness badge, per-row remove, and a list-only Clear. Clicking an entry
+  opens the render in a new browser tab, served by studio under an
+  origin-isolating `Content-Security-Policy: sandbox` response header.
+- The plan page's Copy-feedback button now surfaces a manual-copy panel when
+  every clipboard path is blocked, so the paste-back loop never dead-ends.
+
 ## 0.14.1 — 2026-07-09
 
 Follow-ups from the first real-world use of the plan preview (a 23-task plan

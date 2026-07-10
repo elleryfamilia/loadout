@@ -147,3 +147,21 @@ topology into shareable/committed config; and running code a cloned repo tries
 to introduce (it can't — fragments are global-only). It does **not** attempt
 to constrain what the agent does once it reads the overlay — that is out of scope
 by design (guidance, not policy).
+
+## Studio artifact serving
+
+The studio Recents tab serves rendered plan previews through
+`GET /artifacts/<id>`. Artifact HTML is model output — potentially hostile —
+so it is never trusted with studio's origin:
+
+- The id indexes a per-machine registry written only by `load` itself; no
+  filesystem path is ever derived from the request.
+- Only files that begin with the loadout-generated marker are served, and
+  the response carries `Content-Security-Policy: sandbox allow-scripts …` —
+  a header-level sandbox that gives the document an opaque origin. Its
+  scripts run, but studio's session cookie, API, and storage are
+  unreachable (`default-src 'none'` blocks fetch outright, and the exact
+  Origin check on state-changing routes rejects the opaque origin's
+  `Origin: null`).
+- Artifact bytes are never inlined into a studio-origin response, never
+  served via `blob:` URLs, and the sandbox never gains `allow-same-origin`.
