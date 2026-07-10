@@ -751,3 +751,8 @@ pre {
   opacity: 0.45;
   cursor: default;
 }
+
+/* Manual-copy terminal fallback (clipboard denied, e.g. sandboxed serving) */
+#manual-copy { position: fixed; right: 1rem; bottom: 1rem; z-index: 60; max-width: 26rem; padding: .75rem; border: 1px solid rgba(127,127,127,.4); border-radius: 8px; background: Canvas; color: CanvasText; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+#manual-copy p { margin: 0 0 .5rem; font-size: .85em; }
+#manual-copy textarea { width: 100%; height: 9rem; font: inherit; font-size: .8em; }
