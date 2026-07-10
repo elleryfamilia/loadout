@@ -93,10 +93,13 @@
       const drafts = loadDrafts("selftest-plan", "selftest-fp");
       if (!Array.isArray(drafts)) throw new Error("loadDrafts must return an array");
     });
-    if (location.protocol !== "file:") {
-      /* Served context only: prove the CSP wall is live and the copy flow
-         terminates in a handled state (clipboard success OR the manual
-         fallback rendered) — never a silent dead-end. */
+    if (location.protocol !== "file:" || window.parent !== window) {
+      /* Non-plain-file contexts only — a real http(s) serving, or the CI
+         harness that frames this page in a sandboxed iframe to give it the
+         same opaque origin the studio's sandbox-CSP header does. Prove the
+         CSP wall is live and the copy flow terminates in a handled state
+         (clipboard success OR the manual fallback rendered) — never a
+         silent dead-end. */
       checkAsync("fetch blocked by CSP", new Promise(function (resolve) {
         try {
           fetch("/selftest-probe").then(function () { resolve(false); }, function () { resolve(true); });
@@ -117,6 +120,14 @@
       marker.textContent =
         (failed ? "LOADOUT_SELFTEST_FAIL" : "LOADOUT_SELFTEST_PASS") + "\n" + results.join("\n");
       document.body.appendChild(marker);
+      /* When framed (the CI harness), relay the verdict to the parent:
+         a sandboxed iframe's DOM is invisible to --dump-dom (it only
+         serializes the top document), but postMessage crosses the opaque-
+         origin boundary by design. No-op in every top-level context. */
+      if (window.parent !== window) {
+        try { window.parent.postMessage("LOADOUT_SELFTEST_RELAY\n" + marker.textContent, "*"); }
+        catch (e) { /* relay is test-harness sugar, never load-bearing */ }
+      }
     }
     Promise.all(pending).then(finish, finish);
   }
@@ -593,7 +604,11 @@
   }
 
   function run() {
-    if (location.hash === "#selftest") selftest(); else init();
+    /* The window.name trigger exists for the CI harness, which embeds this
+       page via a sandboxed iframe's srcdoc (an about:srcdoc document has no
+       URL fragment to carry #selftest). Inert otherwise: the selftest only
+       appends a result marker. */
+    if (location.hash === "#selftest" || window.name === "loadout-selftest") selftest(); else init();
   }
   if (document.readyState !== "loading") {
     run();

@@ -77,7 +77,7 @@ fn char_boundary_tail(s: &str, max_len: usize) -> &str {
 
 #[test]
 #[ignore = "needs Chrome; CI runs it via `cargo test --test browser_smoke -- --ignored`"]
-fn viewer_selftest_passes_when_served_with_sandbox_csp() {
+fn viewer_selftest_passes_under_opaque_origin_sandbox() {
     let chrome = chrome().expect("no Chrome found; set CHROME_BIN");
     let raw = std::fs::read_to_string(format!(
         "{}/tests/fixtures/plan/kitchen-sink.json",
@@ -85,75 +85,127 @@ fn viewer_selftest_passes_when_served_with_sandbox_csp() {
     ))
     .unwrap();
     let plan = loadout::plan::model::parse(&raw, false).unwrap().plan;
-    let html = loadout::plan::render::render(&plan).into_bytes();
+    let html = loadout::plan::render::render(&plan);
 
-    // A bare localhost server replaying the EXACT production header set
-    // (loadout::recents::serve_header_pairs — single source with the studio
-    // handler). Guard behavior is route()-tested; this test's only job is
-    // "does the page work under the opaque origin".
-    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
-    let port = server.server_addr().to_ip().unwrap().port();
-    std::thread::spawn(move || {
-        while let Ok(req) = server.recv() {
-            let mut resp = tiny_http::Response::from_data(html.clone());
-            for (k, v) in loadout::recents::serve_header_pairs() {
-                resp.add_header(tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap());
-            }
-            let _ = req.respond(resp);
-        }
-    });
+    // Opaque-origin proof via <iframe sandbox="allow-scripts" srcdoc=…> in a
+    // file:// harness — the sandbox attribute sets the exact flag set the
+    // studio's `Content-Security-Policy: sandbox allow-scripts` response
+    // header does (spec-identical origin semantics). Header DELIVERY is
+    // pinned end-to-end by tests/studio.rs
+    // (recents_artifact_is_served_with_sandbox_csp_over_tcp) and the route()
+    // tests; this test's job is "does the page FUNCTION under the opaque
+    // origin".
+    //
+    // Why this shape — every simpler variant fails on some Chrome build:
+    //  * real-socket serving + --virtual-time-budget: CI's google-chrome
+    //    dumps an EMPTY dom (virtual time races real I/O — network AND the
+    //    clipboard IPC the copy probe depends on);
+    //  * --timeout / paced responses: --dump-dom fires at load-complete,
+    //    BEFORE the async selftest marker attaches, and the production CSP
+    //    (default-src 'none') blocks every subresource instantly, so the
+    //    page's own load event cannot be delayed;
+    //  * <iframe src="file:…">: a sandboxed (opaque) frame may not load
+    //    file: URLs, hence srcdoc; an about:srcdoc document has no URL
+    //    fragment, hence the window.name="loadout-selftest" trigger.
+    //
+    // The dump must wait for the frame's ASYNC selftest on a REAL clock
+    // (the clipboard probe needs real IPC + an 800ms fallback timer), so
+    // the harness holds its own load event open with a subresource Chrome
+    // cannot finish reading: a FIFO. The test writes to the pipe after the
+    // selftest window has passed; only then does load fire and --dump-dom
+    // serialize — with the relayed verdict in the top document.
+    // (--dump-dom serializes only the top document; a sandboxed iframe's
+    // DOM is invisible to it, which is why plan.js relays its marker to
+    // the parent via postMessage when framed.)
+    let dir = tempfile::tempdir().unwrap();
+    let escaped = html.replace('&', "&amp;").replace('"', "&quot;");
+    let harness = format!(
+        r#"<!doctype html>
+<html><body>
+<iframe name="loadout-selftest" sandbox="allow-scripts" srcdoc="{escaped}"></iframe>
+<iframe src="hold.pipe" style="display:none"></iframe>
+<script>
+  window.addEventListener("message", function (e) {{
+    var pre = document.createElement("pre");
+    pre.id = "selftest-relay";
+    pre.textContent = String(e.data);
+    document.body.appendChild(pre);
+  }});
+</script>
+</body></html>
+"#
+    );
+    let harness_path = dir.path().join("harness.html");
+    std::fs::write(&harness_path, harness).unwrap();
+    let pipe = dir.path().join("hold.pipe");
+    let mkfifo = Command::new("mkfifo")
+        .arg(&pipe)
+        .status()
+        .expect("mkfifo runs");
+    assert!(mkfifo.success(), "mkfifo failed");
 
-    // Real-time --timeout, NOT --virtual-time-budget: virtual time races a
-    // real TCP navigation on some Chrome builds — CI's google-chrome
-    // deterministically dumped an EMPTY dom for this http:// load while the
-    // file:// test (virtual time, instant commit) passed in the same job.
-    // The async selftest marker lands ~1.5s after load; 8s is headroom.
-    // An empty dump still retries (launch hiccups); a NON-empty dump is the
-    // page's actual verdict and is asserted immediately, never retried
-    // (retrying a real FAIL would mask it). stderr rides along in the panic
-    // so a CI failure names its cause. (No explicit --user-data-dir: macOS
-    // Chromium hangs headless=new with one.)
+    // An empty/relay-less dump retries (launch hiccups); a dump WITH the
+    // relay is the page's actual verdict and is asserted immediately, never
+    // retried (retrying a real FAIL would mask it). stderr rides along in
+    // the panic so a CI failure names its cause.
     let mut dom = String::new();
     let mut stderr = String::new();
     for attempt in 0..3 {
+        // Release the load event 4s after launch: enough real time for the
+        // frame to parse (~0.5s) and the selftest's slowest probe (an 800ms
+        // clipboard-fallback timer) to settle. fs::write blocks until Chrome
+        // opens the pipe for reading, then EOFs the subresource.
+        let pipe_writer = pipe.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(4));
+            let _ = std::fs::write(&pipe_writer, "done\n");
+        });
         let out = Command::new(&chrome)
             .args([
                 "--headless=new",
                 "--disable-gpu",
                 "--no-sandbox",
-                "--timeout=8000",
                 "--dump-dom",
             ])
-            .arg(format!("http://127.0.0.1:{port}/plan.html#selftest"))
+            .arg(format!("file://{}", harness_path.display()))
             .output()
             .expect("chrome runs");
         dom = String::from_utf8_lossy(&out.stdout).into_owned();
         stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        if !dom.trim().is_empty() {
+        if dom.contains("id=\"selftest-relay\"") {
             break;
         }
-        eprintln!("attempt {attempt}: empty DOM dump from chrome; stderr:\n{stderr}");
+        eprintln!("attempt {attempt}: no relay in dump; stderr:\n{stderr}");
     }
+    // Anchor every assertion on the RELAY element's text, never the bare
+    // literals: the srcdoc attribute embeds plan.js's own source (where
+    // "LOADOUT_SELFTEST_PASS" exists as a ternary literal), so unanchored
+    // contains() would be satisfied by a page that never ran — the same
+    // tautology class the file:// test's comment warns about. The relay
+    // prefix + REAL newline below cannot occur in the attribute (there the
+    // \n is two source characters, not a newline).
     assert!(
-        dom.contains("id=\"selftest-result\">LOADOUT_SELFTEST_PASS"),
-        "sandboxed selftest failed; DOM tail:\n{}\nchrome stderr tail:\n{}",
+        dom.contains("id=\"selftest-relay\">LOADOUT_SELFTEST_RELAY"),
+        "no selftest relay from the sandboxed iframe; DOM tail:\n{}\nchrome stderr tail:\n{}",
         char_boundary_tail(&dom, 2000),
         char_boundary_tail(&stderr, 2000)
     );
-    // The served-context probes actually ran (they are gated off file://).
+    let relay_at = dom.find("id=\"selftest-relay\"").unwrap();
+    let relay = &dom[relay_at..];
     assert!(
-        dom.contains("PASS fetch blocked by CSP"),
-        "{}",
-        char_boundary_tail(&dom, 2000)
+        relay.contains("LOADOUT_SELFTEST_RELAY\nLOADOUT_SELFTEST_PASS"),
+        "sandboxed selftest failed; relay:\n{}",
+        char_boundary_tail(relay, 2000)
     );
-    assert!(
-        dom.contains("PASS copy terminates handled"),
-        "{}",
-        char_boundary_tail(&dom, 2000)
-    );
-    assert!(
-        dom.contains("PASS storage guarded"),
-        "{}",
-        char_boundary_tail(&dom, 2000)
-    );
+    for probe in [
+        "PASS fetch blocked by CSP",
+        "PASS copy terminates handled",
+        "PASS storage guarded",
+    ] {
+        assert!(
+            relay.contains(probe),
+            "missing '{probe}' in relay:\n{}",
+            char_boundary_tail(relay, 2000)
+        );
+    }
 }
