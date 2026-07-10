@@ -915,3 +915,4 @@ pre.error { color: var(--error-fg); padding: 16px; font-family: var(--mono); whi
 .recent-badge.stale { color: var(--warn, #b45309); border-color: currentColor; }
 .recent-badge.missing { color: var(--muted, #888); }
 .recent-remove { flex: none; }
+.recent-kind-label { font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.15em 0.55em; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); flex: none; }

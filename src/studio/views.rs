@@ -1405,6 +1405,12 @@ pub fn recents_tab_fragment(rows: &[RecentRow], readonly: bool) -> String {
                     @for r in rows {
                         li class=(if r.available { "recent-row" } else { "recent-row recent-unavailable" }) {
                             span class="recent-kind" { (icon(if r.kind == "plan" { "layers" } else { "file" })) }
+                            // The kind, as TEXT — the icon alone is illegible
+                            // as an indicator once several artifact kinds
+                            // (plans, design docs, …) live side by side.
+                            // Unknown kinds label themselves automatically:
+                            // this renders the entry's own kind string.
+                            span class="recent-kind-label" { (r.kind) }
                             @if r.available {
                                 a class="recent-title" href={ "/artifacts/" (r.id) } target="_blank" rel="noopener" { (r.title) }
                             } @else {

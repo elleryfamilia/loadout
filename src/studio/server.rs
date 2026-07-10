@@ -2599,6 +2599,10 @@ mod tests {
         let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Demo plan"));
+        // The kind renders as text, not just an icon — with several artifact
+        // kinds side by side the chip is what tells them apart.
+        assert!(body.contains("recent-kind-label"));
+        assert!(body.contains(">plan</span>"));
         assert!(body.contains(&format!("/artifacts/{id}")));
         assert!(body.contains("target=\"_blank\""));
         assert!(body.contains("rel=\"noopener\""));
