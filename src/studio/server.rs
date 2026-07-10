@@ -1299,15 +1299,116 @@ fn skill_action_at(home: &Path, store: &Path, path: &str, method: &str) -> Resp 
 
 // --- Recents ------------------------------------------------------------
 
+/// The Recents destination. The store is read fresh per request, so renders
+/// done in another terminal appear on the next click with no cache dance.
 fn handle_recents(state: &Arc<Mutex<StudioState>>) -> Resp {
     state.lock().unwrap().active_tab = "recents".to_string();
-    Resp::html(String::new())
+    let store = recents_store(state);
+    Resp::html(views::recents_tab_fragment(
+        &recent_rows(&store),
+        store.is_readonly(),
+    ))
 }
+
 fn handle_recents_clear(state: &Arc<Mutex<StudioState>>) -> Resp {
+    let mut store = recents_store(state);
+    if let Err(e) = store.clear() {
+        return Resp::html(views::error_fragment(&format!(
+            "could not clear recents: {e}"
+        )));
+    }
     handle_recents(state)
 }
-fn handle_recents_remove(state: &Arc<Mutex<StudioState>>, _id: &str) -> Resp {
+
+fn handle_recents_remove(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
+    let mut store = recents_store(state);
+    if let Err(e) = store.remove_id(id) {
+        return Resp::html(views::error_fragment(&format!(
+            "could not remove entry: {e}"
+        )));
+    }
     handle_recents(state)
+}
+
+/// Build display rows. All fs reads happen here (store snapshot already
+/// taken; no state mutex is held). Reads fail fast (ENOENT) on unmounted
+/// volumes and NEVER write back — listing must not prune.
+fn recent_rows(store: &crate::recents::RecentsStore) -> Vec<views::RecentRow> {
+    let now = crate::commands::now_utc();
+    store
+        .entries()
+        .into_iter()
+        .map(|e| {
+            let available = artifact_available(&e.path);
+            let badge = if !available {
+                views::RecentBadge::None
+            } else if e.kind == "plan" {
+                plan_badge(e)
+            } else {
+                views::RecentBadge::None
+            };
+            views::RecentRow {
+                id: e.id(),
+                kind: e.kind.clone(),
+                title: e.title.clone(),
+                repo_name: e
+                    .repo
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| e.repo.display().to_string()),
+                repo_full: e.repo.display().to_string(),
+                age: crate::recents::age_label(&e.rendered_at, now),
+                detail: detail_line(e),
+                badge,
+                available,
+            }
+        })
+        .collect()
+}
+
+/// Cheap availability probe: first line present and marker-bearing.
+fn artifact_available(path: &std::path::Path) -> bool {
+    use std::io::BufRead as _;
+    let Ok(f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut line = String::new();
+    std::io::BufReader::new(f).read_line(&mut line).is_ok()
+        && line
+            .trim_start()
+            .starts_with(crate::render::header::GENERATED_MARKER)
+}
+
+/// Plan-kind staleness: compare the recorded hash to the repo's CURRENT
+/// plan.json (same semantic as `load plan status`). Absent/invalid
+/// plan.json → no badge.
+fn plan_badge(entry: &crate::recents::Entry) -> views::RecentBadge {
+    let pj = crate::commands::plan::plan_json_path(&entry.repo);
+    let Ok(raw) = std::fs::read_to_string(&pj) else {
+        return views::RecentBadge::None;
+    };
+    match crate::plan::model::parse(&raw, true) {
+        Ok(p) if crate::plan::model::validate(&p.plan).is_empty() => {
+            if crate::plan::model::plan_hash(&p.plan) == entry.hash {
+                views::RecentBadge::Fresh
+            } else {
+                views::RecentBadge::Stale
+            }
+        }
+        _ => views::RecentBadge::None,
+    }
+}
+
+/// Kind-specific display line from the entry's `detail` map ("4 phases ·
+/// 15 tasks" for plans); unknown kinds render nothing extra.
+fn detail_line(entry: &crate::recents::Entry) -> String {
+    let (Some(phases), Some(tasks)) = (
+        entry.detail.get("phases").and_then(|v| v.as_u64()),
+        entry.detail.get("tasks").and_then(|v| v.as_u64()),
+    ) else {
+        return String::new();
+    };
+    format!("{phases} phases · {tasks} tasks")
 }
 
 /// Serve cap: refuse (not truncate) anything larger.
@@ -2419,6 +2520,140 @@ mod tests {
         // destinations Loadouts | Library.
         assert!(body.contains("Loadouts"));
         assert!(body.contains("Library"));
+        assert!(body.contains("Recents"));
+    }
+
+    #[test]
+    fn shell_nav_always_shows_recents() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Recents"));
+        assert!(body.contains("data-tab=\"recents\""));
+    }
+
+    #[test]
+    fn recents_tab_renders_instructive_empty_state() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Nothing recent yet"));
+        assert!(body.contains("load plan render"));
+        // No destructive controls on an empty list.
+        assert!(!body.contains("/recents/clear"));
+    }
+
+    #[test]
+    fn recents_tab_lists_rows_with_link_badge_and_controls() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        // A stale plan: the repo's plan.json hashes differently than the entry.
+        std::fs::create_dir_all(d.path().join(".loadout/workflow/artifacts")).unwrap();
+        std::fs::write(
+            d.path().join(".loadout/workflow/artifacts/plan.json"),
+            r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+                 "phases": [ { "id": "p1", "title": "P", "tasks": [
+                   { "id": "t-a", "title": "A" } ] } ] }"#,
+        )
+        .unwrap();
+        let id = seed_recents(d.path(), "Demo plan", "gen/demo.html", "sha256:old");
+        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Demo plan"));
+        assert!(body.contains(&format!("/artifacts/{id}")));
+        assert!(body.contains("target=\"_blank\""));
+        assert!(body.contains("rel=\"noopener\""));
+        assert!(
+            body.contains("stale"),
+            "hash mismatch must badge stale: {body}"
+        );
+        assert!(body.contains(&format!("/recents/{id}")), "per-row remove");
+        assert!(body.contains("/recents/clear"));
+        assert!(body.contains("Rendered files are not deleted."));
+    }
+
+    #[test]
+    fn recents_tab_greys_unavailable_rows_instead_of_pruning() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let _id = seed_recents(d.path(), "Gone plan", "gen/demo.html", "sha256:demo");
+        std::fs::remove_file(d.path().join("gen/demo.html")).unwrap();
+        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Gone plan"));
+        assert!(body.contains("recent-unavailable"));
+        assert!(
+            !body.contains("/artifacts/"),
+            "no link on an unavailable row"
+        );
+        let store =
+            crate::recents::RecentsStore::load_from(&d.path().join("state").join("recents.json"));
+        assert_eq!(store.entries().len(), 1, "listing must never prune");
+    }
+
+    #[test]
+    fn recents_clear_requires_origin_and_empties_the_list() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_recents(d.path(), "Demo", "gen/demo.html", "sha256:demo");
+        // No Origin → 403 (state-changing guard).
+        let r = route(&st, &req("POST", "/recents/clear", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 403);
+        let r = route(
+            &st,
+            &req("POST", "/recents/clear", "", &[HOST, COOKIE, ORIGIN], ""),
+        );
+        assert_eq!(r.status, 200);
+        assert!(String::from_utf8(r.body)
+            .unwrap()
+            .contains("Nothing recent yet"));
+        let store =
+            crate::recents::RecentsStore::load_from(&d.path().join("state").join("recents.json"));
+        assert!(store.is_empty());
+        // Artifact file untouched: clear is list-only.
+        assert!(d.path().join("gen/demo.html").exists());
+    }
+
+    #[test]
+    fn recents_delete_removes_one_row() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id_a = seed_recents(d.path(), "Plan A", "gen/a.html", "sha256:a");
+        let id_b = seed_recents(d.path(), "Plan B", "gen/b.html", "sha256:b");
+        let r = route(
+            &st,
+            &req(
+                "DELETE",
+                &format!("/recents/{id_a}"),
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(!body.contains("Plan A"));
+        assert!(body.contains("Plan B"));
+        let _ = id_b;
+    }
+
+    #[test]
+    fn recents_readonly_store_shows_notice_and_hides_controls() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        std::fs::create_dir_all(d.path().join("state")).unwrap();
+        std::fs::write(
+            d.path().join("state/recents.json"),
+            r#"{"version":999,"entries":[]}"#,
+        )
+        .unwrap();
+        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("newer loadout"));
+        assert!(!body.contains("/recents/clear"));
     }
 
     #[test]
