@@ -1366,6 +1366,11 @@ fn recent_rows(store: &crate::recents::RecentsStore) -> Vec<views::RecentRow> {
         .collect()
 }
 
+/// Cap on the probe read below — the marker sits within the first line of
+/// any loadout-generated file, so a giant single-line (no-newline) file must
+/// not be slurped in full just to answer "is this available".
+const AVAILABILITY_PROBE_CAP: u64 = 4096;
+
 /// Cheap availability probe: first line present and marker-bearing.
 fn artifact_available(path: &std::path::Path) -> bool {
     use std::io::BufRead as _;
@@ -1373,7 +1378,9 @@ fn artifact_available(path: &std::path::Path) -> bool {
         return false;
     };
     let mut line = String::new();
-    std::io::BufReader::new(f).read_line(&mut line).is_ok()
+    std::io::BufReader::new(f.take(AVAILABILITY_PROBE_CAP))
+        .read_line(&mut line)
+        .is_ok()
         && line
             .trim_start()
             .starts_with(crate::render::header::GENERATED_MARKER)
@@ -1456,6 +1463,19 @@ fn artifact_page(status: u16, title: &str, msg: &str) -> Resp {
     }
 }
 
+/// Skip leading ASCII whitespace (space/tab/CR/LF). Used to align the
+/// byte-level marker gate below with the canonical parser in
+/// `render::header::extract_context_hash`, which tolerates the same
+/// leading whitespace via `str::trim_start` per line — a marker gate must
+/// not be stricter than the parser that later reads the same file.
+fn skip_ascii_whitespace(bytes: &[u8]) -> &[u8] {
+    let mut i = 0;
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+        i += 1;
+    }
+    &bytes[i..]
+}
+
 /// Serve one registered artifact. SECURITY SPINE — the id indexes the
 /// registry and the registry yields the path: no request-derived paths,
 /// ever. The marker gate restricts serving to loadout-generated files (any
@@ -1512,7 +1532,9 @@ fn handle_artifact(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         }
         ArtifactRead::Ok(b) => b,
     };
-    if !bytes.starts_with(crate::render::header::GENERATED_MARKER.as_bytes()) {
+    if !skip_ascii_whitespace(&bytes)
+        .starts_with(crate::render::header::GENERATED_MARKER.as_bytes())
+    {
         return artifact_page(
             404,
             "not a loadout artifact",
@@ -2413,7 +2435,11 @@ mod tests {
     }
 
     /// Seed one recents entry + a marker-bearing artifact file inside the
-    /// fixture repo; returns the entry's route id.
+    /// fixture repo; returns the entry's route id. The `detail` map matches
+    /// the production shape `record_render` writes in
+    /// `commands::plan::record_render` (`plan_id` string, `phases`/`tasks`
+    /// as `usize`-derived `serde_json::Value`s) so tests exercise the same
+    /// rendering path real entries go through, not a hand-shaped stand-in.
     fn seed_recents(repo: &std::path::Path, title: &str, artifact_rel: &str, hash: &str) -> String {
         let artifact = repo.join(artifact_rel);
         std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
@@ -2424,6 +2450,13 @@ mod tests {
             ),
         )
         .unwrap();
+        let mut detail = std::collections::BTreeMap::new();
+        detail.insert(
+            "plan_id".to_string(),
+            serde_json::Value::from("demo".to_string()),
+        );
+        detail.insert("phases".to_string(), serde_json::Value::from(4usize));
+        detail.insert("tasks".to_string(), serde_json::Value::from(15usize));
         let entry = crate::recents::Entry {
             kind: "plan".into(),
             path: artifact.clone(),
@@ -2431,7 +2464,7 @@ mod tests {
             title: title.into(),
             hash: hash.into(),
             rendered_at: "2026-07-09T00:00:00Z".into(),
-            detail: std::collections::BTreeMap::new(),
+            detail,
             extra: std::collections::BTreeMap::new(),
         };
         let id = entry.id();
@@ -2570,6 +2603,10 @@ mod tests {
             body.contains("stale"),
             "hash mismatch must badge stale: {body}"
         );
+        assert!(
+            body.contains("4 phases · 15 tasks"),
+            "detail line from the seeded entry's detail map: {body}"
+        );
         assert!(body.contains(&format!("/recents/{id}")), "per-row remove");
         assert!(body.contains("/recents/clear"));
         assert!(body.contains("Rendered files are not deleted."));
@@ -2623,6 +2660,18 @@ mod tests {
         let st = state_for(d.path(), None);
         let id_a = seed_recents(d.path(), "Plan A", "gen/a.html", "sha256:a");
         let id_b = seed_recents(d.path(), "Plan B", "gen/b.html", "sha256:b");
+        // No Origin → 403 (state-changing guard); the row survives.
+        let r = route(
+            &st,
+            &req(
+                "DELETE",
+                &format!("/recents/{id_a}"),
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 403);
         let r = route(
             &st,
             &req(

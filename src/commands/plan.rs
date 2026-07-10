@@ -31,18 +31,21 @@ pub(crate) fn feedback_path(repo_base: &Path) -> PathBuf {
     artifacts_dir(repo_base).join("plan-feedback.json")
 }
 
-/// Resolve a user-supplied path against the repo base loadout is operating
-/// on (`--cwd`, or the detected repo root), not the process's real OS
-/// working directory. `--cwd` never chdirs the process, and every other plan
-/// artifact (plan.json, plan.html, plan-feedback.json) is already
-/// repo-base-anchored, so a relative FILE/`--out` argument should be too —
-/// otherwise it silently resolves against wherever the binary happens to
-/// have been launched from. Absolute paths pass through untouched.
-pub(crate) fn resolve_relative(repo_base: &Path, path: &Path) -> PathBuf {
+/// Resolve a user-supplied path against the directory loadout was invoked
+/// from (`Runtime.cwd` — the explicit `--cwd` value, else the process's real
+/// OS working directory), matching the universal CLI convention that a
+/// relative path resolves against the invocation directory. This is
+/// deliberately NOT the repo base: from `repo/docs/`, a relative `--out
+/// preview.html` must land in `docs/`, not silently jump to the repo root.
+/// Every other plan artifact (plan.json, plan.html, plan-feedback.json) is
+/// its own separate, always-repo-base-anchored path — those are internal
+/// canonical locations, not user-supplied ones. Absolute paths pass through
+/// untouched.
+pub(crate) fn resolve_relative(cwd: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
     } else {
-        repo_base.join(path)
+        cwd.join(path)
     }
 }
 
@@ -75,12 +78,12 @@ pub fn run(rt: &Runtime, args: &PlanArgs) -> crate::Result<()> {
     let writer = AtomicWriter::new(rt.dry_run);
     ensure_plan_gitignore(&prep, &writer)?;
     match args.action.as_ref() {
-        None => status(&prep),
+        None => status(&prep, rt),
         Some(PlanAction::Check {
             file,
             json,
             lenient,
-        }) => check(&prep, file.as_deref(), *json, *lenient),
+        }) => check(&prep, rt, file.as_deref(), *json, *lenient),
         Some(PlanAction::Render { file, out, no_open }) => {
             render(&prep, rt, file.as_deref(), out.as_deref(), *no_open)
         }
@@ -157,12 +160,13 @@ pub(crate) fn clean_artifacts(repo_base: &Path, dry_run: bool) -> crate::Result<
 /// Load + parse + validate; returns the plan or prints diagnostics and errs.
 fn load_checked(
     prep: &Prepared,
+    cwd: &Path,
     file: Option<&Path>,
     json: bool,
     lenient: bool,
 ) -> crate::Result<(model::Plan, Vec<model::Issue>)> {
     let path = file
-        .map(|f| resolve_relative(&prep.repo_base, f))
+        .map(|f| resolve_relative(cwd, f))
         .unwrap_or_else(|| plan_json_path(&prep.repo_base));
     let input = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
@@ -199,8 +203,14 @@ fn report_issues(json: bool, errors: &[model::Issue], warnings: &[model::Issue])
     }
 }
 
-fn check(prep: &Prepared, file: Option<&Path>, json: bool, lenient: bool) -> crate::Result<()> {
-    let (plan, mut warnings) = load_checked(prep, file, json, lenient)?;
+fn check(
+    prep: &Prepared,
+    rt: &Runtime,
+    file: Option<&Path>,
+    json: bool,
+    lenient: bool,
+) -> crate::Result<()> {
+    let (plan, mut warnings) = load_checked(prep, &rt.cwd, file, json, lenient)?;
     warnings.extend(model::advisories(&plan));
     warn_stale_feedback(prep, &plan);
     if json {
@@ -249,7 +259,7 @@ fn warn_stale_feedback(prep: &Prepared, plan: &model::Plan) {
     }
 }
 
-fn status(prep: &Prepared) -> crate::Result<()> {
+fn status(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
     let json = plan_json_path(&prep.repo_base);
     if !json.exists() {
         println!(
@@ -258,7 +268,7 @@ fn status(prep: &Prepared) -> crate::Result<()> {
         );
         return Ok(());
     }
-    match load_checked(prep, None, false, true) {
+    match load_checked(prep, &rt.cwd, None, false, true) {
         Ok((plan, _)) => {
             let hash = model::plan_hash(&plan);
             println!(
@@ -290,14 +300,14 @@ fn render(
     out: Option<&Path>,
     no_open: bool,
 ) -> crate::Result<()> {
-    let (plan, warnings) = load_checked(prep, file, false, false)?;
+    let (plan, warnings) = load_checked(prep, &rt.cwd, file, false, false)?;
     for w in &warnings {
         println!("warning[{}] {}: {}", w.code, w.path, w.message);
     }
     warn_stale_feedback(prep, &plan);
     let html = crate::plan::render::render(&plan);
     let path = out
-        .map(|o| resolve_relative(&prep.repo_base, o))
+        .map(|o| resolve_relative(&rt.cwd, o))
         .unwrap_or_else(|| plan_html_path(&prep.repo_base));
     let written = AtomicWriter::new(rt.dry_run).write(&path, &html)?;
     println!(

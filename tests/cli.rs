@@ -2926,6 +2926,42 @@ fn plan_render_dry_run_out_and_file_variants_record_nothing() {
     );
 }
 
+/// A relative `--out` must anchor to the directory loadout was invoked
+/// from, not the detected repo root — the universal CLI convention (from
+/// `repo/docs/`, `--out preview.html` lands in `docs/`, not the repo root).
+/// This drives the real binary with no `--cwd` flag at all, so the
+/// invocation directory is the process's real OS working directory,
+/// exercised via `Command::current_dir`. The fixture is `git_init`-ed so
+/// repo-root detection climbs from `docs/` back up to the fixture root,
+/// where the default `plan.json` input lives — proving the repo-base
+/// anchor still finds the input while the output anchor tracks `--cwd`
+/// instead.
+#[test]
+fn plan_render_relative_out_anchors_to_invocation_dir_not_repo_root() {
+    let f = Fixture::new();
+    f.git_init();
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    let docs_dir = f.repo_path().join("docs");
+    fs::create_dir_all(&docs_dir).unwrap();
+
+    let mut c = Command::cargo_bin("load").unwrap();
+    c.env("LOADOUT_CONFIG_DIR", f.global.path().join("empty"));
+    c.env("HOME", f.global.path().join("home"));
+    c.env("LOADOUT_STATE_DIR", f.global.path().join("state"));
+    c.current_dir(&docs_dir);
+    c.args(["plan", "render", "--no-open", "--out", "preview.html"]);
+    c.assert().success();
+
+    assert!(
+        docs_dir.join("preview.html").exists(),
+        "relative --out must land in the invocation dir (docs/), not the repo root"
+    );
+    assert!(
+        !f.exists("preview.html"),
+        "relative --out must not land at the repo root"
+    );
+}
+
 #[test]
 fn plan_clean_removes_the_recents_entry() {
     let f = Fixture::new();
