@@ -33,7 +33,7 @@ const SCRIPT_LANGS: &[(&str, &str)] = &[("bash", "Bash"), ("python", "Python"), 
 /// A 16px feather-style inline SVG icon (1.5px stroke, `currentColor`). Matched
 /// against a closed set of **static** strings — never interpolate a dynamic
 /// value into `PreEscaped` (that would bypass escaping).
-fn icon(name: &str) -> Markup {
+pub(crate) fn icon(name: &str) -> Markup {
     let body: &str = match name {
         "plus" => r#"<path d="M12 5v14M5 12h14"/>"#,
         "target" => r#"<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>"#,
@@ -133,6 +133,9 @@ fn icon(name: &str) -> Markup {
             r#"<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>"#
         }
         "clock" => r#"<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>"#,
+        "inbox" => {
+            r#"<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>"#
+        }
         // Built-in target *brand* logos are filled silhouettes, not line art —
         // see `brand_logo` / `brand_svg`, which use a different SVG treatment.
         _ => "",
@@ -347,8 +350,10 @@ fn render_markdown(md: &str) -> Markup {
 // --- page shell --------------------------------------------------------------
 
 /// The full page: top bar (brand + tabs + staged indicator), the `#main` tab
-/// content, and the empty `#modal` container.
-pub fn shell(main: Markup, staged: usize, active_tab: &str) -> String {
+/// content, and the empty `#modal` container. `inbox_pending` is the count of
+/// pending learned candidates awaiting review — shown as a badge on the Inbox
+/// tab when nonzero.
+pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize) -> String {
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -366,7 +371,7 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str) -> String {
             body {
                 header class="topbar" {
                     div class="brand" { span class="brand-mark" { (brand_mark()) } span class="brand-name" { "Loadout" } }
-                    (tab_bar(active_tab))
+                    (tab_bar(active_tab, inbox_pending))
                     div class="topbar-right" {
                         div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
                         button type="button" class="icon-btn" title="Show me around" hx-get="/onboarding/welcome" hx-target="#main" { (icon("help")) }
@@ -381,17 +386,23 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str) -> String {
     .into_string()
 }
 
-/// Top nav: two destinations. **Loadouts** is where you assemble a loadout;
+/// Top nav: four destinations. **Loadouts** is where you assemble a loadout;
 /// **Library** is the shared catalog of gear a loadout binds (fragments, targets,
-/// workflows). Anything reached *inside* the Library keeps `active_tab ==
+/// workflows); **Recents** lists rendered artifacts; **Inbox** is the review
+/// surface for learned candidate preferences (with a pending-count badge when
+/// nonzero). Anything reached *inside* the Library keeps `active_tab ==
 /// "library"`, so the Library button stays lit while you browse its categories.
-fn tab_bar(active: &str) -> Markup {
+fn tab_bar(active: &str, inbox_pending: usize) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
         nav class="tabs" {
             button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
             button class=(cls("library")) data-tab="library" hx-get="/tab/library" hx-target="#main" { (icon("book")) "Library" }
             button class=(cls("recents")) data-tab="recents" hx-get="/tab/recents" hx-target="#main" { (icon("clock")) "Recents" }
+            button class=(cls("inbox")) data-tab="inbox" hx-get="/tab/inbox" hx-target="#main" {
+                (icon("inbox")) "Inbox"
+                @if inbox_pending > 0 { span class="tab-badge" { (inbox_pending) } }
+            }
         }
     }
 }
@@ -2905,7 +2916,7 @@ mod tests {
 
     #[test]
     fn shell_has_capitalized_brand_and_theme_toggle() {
-        let html = shell(maud::html! {}, 0, "fragments");
+        let html = shell(maud::html! {}, 0, "fragments", 0);
         // Wordmark + page title are capitalized; the lowercase command name is
         // not what the chrome shows.
         assert!(html.contains(r#"<span class="brand-name">Loadout</span>"#));
@@ -2921,7 +2932,7 @@ mod tests {
 
     #[test]
     fn shell_inlines_no_flash_theme_init() {
-        let html = shell(maud::html! {}, 0, "fragments");
+        let html = shell(maud::html! {}, 0, "fragments", 0);
         // The inline head script must set the resolved theme + preference before
         // the stylesheet link, so there's no dark→light flash on load. (The
         // attribute is set at runtime via `dataset.theme`; it isn't in the SSR

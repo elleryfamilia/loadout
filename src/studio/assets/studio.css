@@ -916,3 +916,29 @@ pre.error { color: var(--error-fg); padding: 16px; font-family: var(--mono); whi
 .recent-badge.missing { color: var(--muted, #888); }
 .recent-remove { flex: none; }
 .recent-kind-label { font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.15em 0.55em; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); flex: none; }
+
+/* --- Inbox tab ---------------------------------------------------------- */
+/* Pending-count badge on the Inbox nav button. */
+.tab-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 1.25em; margin-left: .1em; padding: 0 .35em; font-size: .7em; font-weight: 700; line-height: 1.5; border-radius: 999px; background: var(--accent); color: var(--on-accent); }
+.inbox-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .75rem; }
+.inbox-subhead { margin: 1.25rem 0 .5rem; font-size: .95em; color: var(--muted); }
+.inbox-card { border: 1px solid var(--border); border-radius: var(--r); padding: .85rem 1rem; margin-bottom: .75rem; background: var(--panel); }
+.candidate-claim { font-weight: 600; margin: 0 0 .5rem; }
+.candidate-meta { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; font-size: .85em; }
+.source-badge { text-transform: uppercase; letter-spacing: .06em; font-size: .85em; padding: .1em .55em; border: 1px solid var(--border); border-radius: 999px; }
+.evidence { list-style: none; margin: .6rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .35rem; }
+.evidence .quote { border-left: 2px solid var(--accent-line); padding: .15rem .6rem; color: var(--muted); font-size: .9em; }
+.evidence-note { margin: .6rem 0 0; font-size: .9em; }
+.candidate-actions { display: flex; gap: .5rem; margin-top: .75rem; }
+.quarantine-banner { margin-bottom: .6rem; }
+.suppressions { list-style: none; margin: 0; padding: 0; }
+.suppression { display: flex; align-items: center; gap: .6rem; padding: .4rem .25rem; border-bottom: 1px solid var(--border); }
+.suppression-claim { flex: 1; color: var(--muted); }
+.inbox-mode, .inbox-profiles { display: flex; flex-direction: column; gap: .4rem; border: 0; padding: 0; margin: .5rem 0 0; }
+.inbox-mode .radio, .inbox-profiles .check { display: flex; align-items: center; gap: .4rem; }
+/* Harvest-history panel. */
+.learn-log { list-style: none; margin: 0; padding: 0; }
+.learn-log-row { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; padding: .45rem .25rem; border-bottom: 1px solid var(--border); font-size: .9em; }
+.log-outcome { text-transform: uppercase; letter-spacing: .05em; font-size: .8em; padding: .1em .5em; border-radius: 999px; border: 1px solid var(--border); }
+.log-outcome.log-extracted { color: var(--ok); border-color: currentColor; }
+.log-outcome.log-failed, .log-outcome.log-deadline_exceeded { color: var(--danger); border-color: currentColor; }
