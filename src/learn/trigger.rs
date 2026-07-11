@@ -8,10 +8,11 @@
 //! (every failure degrades to a verbose log line) — a leaked child or a blocking
 //! wait would tax EVERY loadout invocation, so both are design requirements.
 //!
-//! ## Guard chain (cheapest first — the order is part of the spec)
+//! ## Guard chain (in the spec's exact order)
 //!
 //! [`should_spawn`] short-circuits on the first guard that fails, in this exact
-//! order:
+//! order. The order is the spec, not a strict cost ranking — guard 2 reads a
+//! file while guards 3-4 read cheaper env vars, yet 2 still precedes them:
 //!
 //! 1. `cfg.learn.enabled` — a config-field read, no I/O (config is already
 //!    loaded at every trigger site, read AFTER that flow's throttled auto-pull,
@@ -22,12 +23,18 @@
 //!    agent-CLI call carries this, so a nested `load` can never re-trigger).
 //! 5. not paused ([`state::paused_at`] — 2+ consecutive failures).
 //! 6. the scan stamp is past its 15-min debounce (bounds scan thrash).
-//! 7. the spend stamp is past `learn.interval`, OR an eligibility hint exists
-//!    (a session-end hook named a just-ended session).
+//! 7. the spend stamp is past `learn.interval` (the 6h spend cadence). A
+//!    session-end eligibility hint does NOT enter this decision: it never buys
+//!    an extra extraction call. The consent ceiling is at most one call per
+//!    interval per machine (≤4/day at defaults), and the design rejects spend
+//!    that scales with usage (design-learning.md Decision #3). A hint's only
+//!    effect is later, at harvest time: the worker merges hook-named sessions
+//!    into the readers' `hooked` set so a *due* tick harvests a just-ended
+//!    session even though it is younger than the ~20-min quiescence window.
 //!
-//! Residual idle cost when enabled: the config field plus a few `stat()`s. In
-//! the common steady state (harvested recently) guard 6 short-circuits before
-//! guard 7 ever reads the hint dir.
+//! Residual idle cost when enabled: the config field plus a few `stat()`s
+//! (including the hint dir, which [`eligibility_at`] stats unconditionally for
+//! the status display — it is not part of the spawn decision).
 //!
 //! ## Detached double-spawn (unix)
 //!
@@ -107,7 +114,8 @@ enum Skip {
     Paused,
     /// The scan stamp is still within its debounce window.
     ScanDebounced,
-    /// Neither the spend interval elapsed nor an eligibility hint exists.
+    /// The spend interval has not elapsed. A waiting session-end hint does not
+    /// change this — a hint never buys an extra extraction call.
     NotDue,
 }
 
@@ -164,16 +172,20 @@ fn should_spawn(
     if state::paused_at(learn_dir) {
         return Err(Skip::Paused);
     }
-    // 6 + 7. scan-stamp debounce, then spend interval OR a session-end
-    //    eligibility hint. The hint bypasses the spend interval (a just-ended
-    //    session should be harvested promptly) but NOT the scan-stamp debounce.
-    //    Shared with `load learn status` via [`eligibility_at`], so the status
-    //    line and the guard chain can never drift apart.
+    // 6 + 7. scan-stamp debounce, then the spend interval. A session-end
+    //    eligibility hint does NOT enter this decision: it never buys an extra
+    //    extraction call (design Decision #3 rejects spend that scales with
+    //    usage; the consent ceiling is ≤4 calls/day at defaults). The hint
+    //    matters only later, at harvest time, where the worker merges
+    //    hook-named sessions into the readers' `hooked` set so a due tick
+    //    harvests a just-ended session despite the quiescence window. Shared
+    //    with `load learn status` via [`eligibility_at`], so the status line
+    //    and the guard chain can never drift apart.
     let e = eligibility_at(learn_dir, cfg.learn.interval, now);
     if !e.scan_due {
         return Err(Skip::ScanDebounced);
     }
-    if !e.spend_due && !e.hint {
+    if !e.spend_due {
         return Err(Skip::NotDue);
     }
     Ok(())
@@ -186,21 +198,25 @@ fn should_spawn(
 pub(crate) struct Eligibility {
     /// Guard 6: the scan-stamp debounce window has elapsed.
     pub scan_due: bool,
-    /// Guard 7a: the spend interval has elapsed.
+    /// Guard 7: the spend interval has elapsed.
     pub spend_due: bool,
-    /// Guard 7b: a session-end eligibility hint is waiting. It bypasses the
-    /// spend interval, but not the scan debounce.
+    /// A session-end eligibility hint is waiting. It does NOT gate spawning (a
+    /// hint never buys an extra extraction call — design Decision #3). Surfaced
+    /// for display only: `load learn status` notes that a just-ended session
+    /// will be harvested on the next due tick, bypassing the readers'
+    /// quiescence window (not the spend interval).
     pub hint: bool,
-    /// How long until a trigger would pass guards 6+7: zero when eligible
-    /// now, else the later of the scan-debounce remainder and — absent a
-    /// hint — the spend-interval remainder.
+    /// How long until a trigger would pass guards 6+7: zero when eligible now,
+    /// else the later of the scan-debounce and spend-interval remainders. A
+    /// waiting hint does NOT shorten this — it never advances the spend tick.
     pub wait: Duration,
 }
 
 impl Eligibility {
-    /// Whether a trigger firing right now would pass guards 6+7.
+    /// Whether a trigger firing right now would pass guards 6+7. A waiting hint
+    /// plays no part: it never makes a fresh spend stamp eligible.
     pub fn now(&self) -> bool {
-        self.scan_due && (self.spend_due || self.hint)
+        self.scan_due && self.spend_due
     }
 }
 
@@ -209,20 +225,20 @@ impl Eligibility {
 pub(crate) fn eligibility_at(learn_dir: &Path, interval: Duration, now: SystemTime) -> Eligibility {
     let scan_last = state::read_stamp(&learn_dir.join("scan-stamp"));
     let spend_last = state::read_stamp(&learn_dir.join("spend-stamp"));
+    // Read unconditionally, for the status display only — a hint does not gate
+    // spawning, so this stat is not part of the spawn decision's cost.
     let hint = has_hint(learn_dir);
     let scan_due = state::is_due(scan_last, now, SCAN_DEBOUNCE);
     let spend_due = state::is_due(spend_last, now, interval);
     let scan_wait = remaining(scan_last, now, SCAN_DEBOUNCE);
-    let content_wait = if hint || spend_due {
-        Duration::ZERO // a hint (or an elapsed interval) satisfies guard 7 already
-    } else {
-        remaining(spend_last, now, interval)
-    };
+    // A hint never shortens the wait: only an elapsed interval satisfies the
+    // spend guard (`remaining` already yields zero once the interval is due).
+    let spend_wait = remaining(spend_last, now, interval);
     Eligibility {
         scan_due,
         spend_due,
         hint,
-        wait: scan_wait.max(content_wait),
+        wait: scan_wait.max(spend_wait),
     }
 }
 
@@ -237,10 +253,12 @@ fn remaining(last: Option<SystemTime>, now: SystemTime, interval: Duration) -> D
     }
 }
 
-/// The cheap guard-7 check: at least one eligibility hint file exists.
+/// The cheap display check: at least one eligibility hint *file* exists. Gated
+/// on `is_file` for symmetry with [`read_hints`], which skips non-file entries
+/// — so a stray subdirectory in the hint dir never reads as a waiting hint.
 fn has_hint(learn_dir: &Path) -> bool {
     std::fs::read_dir(eligible_dir(learn_dir))
-        .map(|mut entries| entries.next().is_some())
+        .map(|entries| entries.flatten().any(|e| e.path().is_file()))
         .unwrap_or(false)
 }
 
@@ -617,14 +635,20 @@ mod tests {
     }
 
     #[test]
-    fn hint_bypasses_spend_stamp_but_not_scan_debounce() {
+    fn hint_does_not_bypass_the_spend_stamp() {
+        // A session-end hint never buys an extra extraction call (design
+        // Decision #3 rejects spend that scales with usage; the consent ceiling
+        // is ≤4 calls/day at defaults). So a waiting hint must NOT rescue a
+        // fresh spend stamp — the guard chain still declines. (The hint bypasses
+        // only the readers' quiescence window, at harvest time; that is covered
+        // by the reader suite's `fresh_file_is_skipped_unless_hooked`.)
         let e = learn_env();
         activate(&e.learn_dir);
         write_hint_at(&e.learn_dir, "claude", "sess-1").unwrap();
 
-        // With a fresh scan stamp, the hint must NOT rescue us — scan debounce
-        // is checked before the spend/hint guard.
-        state::write_stamp(&e.learn_dir.join("scan-stamp")).unwrap();
+        // Scan due (stale scan stamp) + fresh spend stamp + a waiting hint →
+        // still NotDue. Under the corrected semantics the hint is irrelevant here.
+        stale_stamp(&e.learn_dir, "scan-stamp");
         state::write_stamp(&e.learn_dir.join("spend-stamp")).unwrap();
         assert_eq!(
             should_spawn(
@@ -633,12 +657,11 @@ mod tests {
                 &pass_env(),
                 SystemTime::now()
             ),
-            Err(Skip::ScanDebounced),
+            Err(Skip::NotDue),
         );
 
-        // Scan due + fresh spend stamp, but the hint exists → spawn.
-        stale_stamp(&e.learn_dir, "scan-stamp");
-        state::write_stamp(&e.learn_dir.join("spend-stamp")).unwrap();
+        // Only an elapsed spend interval spawns — hint or no hint.
+        stale_stamp(&e.learn_dir, "spend-stamp");
         assert_eq!(
             should_spawn(
                 &enabled_config(),

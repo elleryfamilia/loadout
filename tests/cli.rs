@@ -4179,11 +4179,13 @@ fn learn_status_fresh_scan_stamp_shows_debounce_wait_not_eligible() {
         .stdout(predicate::str::contains("eligible now").not());
 }
 
-/// A session-end eligibility hint bypasses the spend interval (but not the
-/// scan debounce): with a due scan stamp and a FRESH spend stamp, a waiting
-/// hint still makes status report "eligible now".
+/// A session-end eligibility hint does NOT bypass the spend interval (design
+/// Decision #3 — a hint never buys an extra extraction call). With a due scan
+/// stamp and a FRESH spend stamp, status must report a wait, NOT "eligible
+/// now", while still noting the waiting hint honestly (it is harvested on the
+/// next scheduled tick, no sooner).
 #[test]
-fn learn_status_hint_is_eligible_now_despite_fresh_spend_stamp() {
+fn learn_status_hint_does_not_make_a_fresh_spend_stamp_eligible() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.author("[learn]\nenabled = true\n");
@@ -4196,8 +4198,8 @@ fn learn_status_hint_is_eligible_now_despite_fresh_spend_stamp() {
         .args(["learn", "status"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("eligible now"))
-        .stdout(predicate::str::contains("session-end hint waiting"));
+        .stdout(predicate::str::contains("session-end hint waiting"))
+        .stdout(predicate::str::contains("eligible now").not());
 }
 
 /// `load learn reset` deletes the watermark store (re-baselining the harvest)

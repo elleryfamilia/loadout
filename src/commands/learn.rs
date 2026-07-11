@@ -320,10 +320,11 @@ fn status(rt: &super::Runtime) -> Result<()> {
             None => println!("  last run:        {}", p.dim("none yet")),
         }
 
-        // Next eligibility — BOTH throttle stamps plus any session-end hint,
-        // computed by the trigger module's own guard math (one source of
-        // truth: a hint bypasses the spend interval but not the 15-min scan
-        // debounce, exactly as a real trigger would decide).
+        // Next eligibility — BOTH throttle stamps, computed by the trigger
+        // module's own guard math (one source of truth, exactly as a real
+        // trigger would decide). A waiting session-end hint is surfaced but
+        // does NOT make a fresh spend stamp eligible: it never buys an extra
+        // extraction call (design Decision #3).
         let e = trigger::eligibility_at(dir, config.learn.interval, SystemTime::now());
         println!("  next harvest:    {}", eligibility_line(&p, &e));
 
@@ -460,20 +461,22 @@ fn prompt_yes_no(question: &str, default_yes: bool) -> Result<bool> {
 }
 
 /// A plain-language "next eligibility" line from the trigger module's
-/// guard-6/7 view: "eligible now" names why (hint and/or elapsed interval);
-/// otherwise the wait is the later of the scan-debounce and spend-interval
-/// remainders, with a waiting hint noted (it fires once the debounce clears).
+/// guard-6/7 view: "eligible now" when both throttle stamps are due; otherwise
+/// the wait is the later of the scan-debounce and spend-interval remainders. A
+/// waiting session-end hint is noted honestly — it does NOT shorten the wait
+/// (it never buys an extra extraction call); it only lets the next due tick
+/// harvest the just-ended session despite the quiescence window.
 fn eligibility_line(p: &Painter, e: &trigger::Eligibility) -> String {
     if e.now() {
-        let why = match (e.hint, e.spend_due) {
-            (true, true) => "session-end hint waiting; interval elapsed",
-            (true, false) => "session-end hint waiting",
-            (false, _) => "interval elapsed",
+        let why = if e.hint {
+            "interval elapsed; a session-end hint will be harvested this tick"
+        } else {
+            "interval elapsed"
         };
         format!("{} ({})", p.green("eligible now"), p.dim(why))
     } else if e.hint {
         p.dim(&format!(
-            "in ~{} (session-end hint waiting; the scan debounce holds it)",
+            "in ~{} (session-end hint waiting; runs at the next tick, not sooner)",
             human_duration(e.wait)
         ))
     } else {

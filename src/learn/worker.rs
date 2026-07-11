@@ -33,10 +33,13 @@
 //! via [`trigger::eligibility_at`] — the consent ceiling holds even for a
 //! direct `load harvest --ambient` invocation, which the fast path never
 //! vetted) and exits as a logged, non-failure [`Outcome::Throttled`] no-op
-//! when the interval hasn't elapsed and no session-end hint waits. A manual
-//! `load harvest` bypasses the interval check entirely but still writes the
-//! spend stamp here (a manual run resets the ambient tick — the cheapest
-//! honest semantics).
+//! when the interval hasn't elapsed. A session-end hint does NOT lift this
+//! throttle: it never buys an extra extraction call (design Decision #3). Its
+//! only role is at harvest time, where step 3 merges hook-named sessions into
+//! the readers' `hooked` set so a *due* tick harvests a just-ended session
+//! despite the quiescence window. A manual `load harvest` bypasses the interval
+//! check entirely but still writes the spend stamp here (a manual run resets
+//! the ambient tick — the cheapest honest semantics).
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::Write as _;
@@ -101,11 +104,11 @@ pub enum Outcome {
     Busy,
     /// The fencing token went foreign mid-run; aborted before any write.
     Fenced,
-    /// An **ambient** run found the spend interval unelapsed and no
-    /// session-end hint waiting; it exited before any reader work
-    /// (defense-in-depth: the trigger fast path is the primary throttle, this
-    /// bounds direct `load harvest --ambient` invocations too). Not a
-    /// failure; spend stamp and watermarks untouched.
+    /// An **ambient** run found the spend interval unelapsed; it exited before
+    /// any reader work (defense-in-depth: the trigger fast path is the primary
+    /// throttle, this bounds direct `load harvest --ambient` invocations too).
+    /// A waiting session-end hint does not lift this — a hint never buys an
+    /// extra call. Not a failure; spend stamp and watermarks untouched.
     Throttled,
     /// No eligible new content; a no-op run (spend stamp untouched).
     Empty,
@@ -326,15 +329,19 @@ fn run_body(
     // script invokes `load harvest --ambient` directly: the lock serializes
     // CONCURRENT workers but does not bound SEQUENTIAL direct calls. So an
     // ambient run re-checks the spend interval here, via the trigger module's
-    // own eligibility math (one source of truth, never duplicated) — a
-    // session-end eligibility hint bypasses the interval exactly as it does in
-    // guard 7. Manual runs are deliberately exempt: a typed `load harvest`
-    // bypasses the interval but still writes the spend stamp at step 6 (the
-    // consent wording's semantics). A throttled exit is NOT a failure: one log
-    // entry (fenced), spend stamp and watermarks untouched.
+    // own eligibility math (one source of truth, never duplicated). A
+    // session-end eligibility hint does NOT lift this throttle — it never buys
+    // an extra extraction call (design Decision #3 rejects spend that scales
+    // with usage). The hint's role is purely at harvest time (step 3 merges
+    // hook-named sessions into the readers' `hooked` set so a due tick harvests
+    // a just-ended session despite the quiescence window). Manual runs are
+    // deliberately exempt: a typed `load harvest` bypasses the interval but
+    // still writes the spend stamp at step 6 (the consent wording's semantics).
+    // A throttled exit is NOT a failure: one log entry (throttled), spend stamp
+    // and watermarks untouched.
     if ctx.trigger == "ambient" {
         let e = trigger::eligibility_at(&ctx.learn_dir, ctx.interval, ctx.now_sys());
-        if !e.spend_due && !e.hint {
+        if !e.spend_due {
             if !guard.still_held() {
                 return Ok(empty_outcome(ctx, Outcome::Fenced));
             }
@@ -579,15 +586,23 @@ fn run_body(
         let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
         let mut quotes: Vec<EvidenceQuote> = Vec::new();
         for ev in &cand.evidence {
-            if let Some(slice) = by_ref.get(&ev.session_ref) {
-                let key = (slice.agent.to_string(), slice.session_id.clone());
-                if seen.insert(key) {
-                    refs.push(SessionRef {
-                        agent: slice.agent.to_string(),
-                        session_id: slice.session_id.clone(),
-                        ts: slice.ts.clone(), // C1: the session's own stable ts
-                    });
-                }
+            // Only evidence whose session_ref resolves to a scanned slice is
+            // kept — both the deduped SessionRef AND the display quote. A quote
+            // citing an unknown/unresolvable session_ref has no attributable
+            // session backing (the model may cite a session not in this scan),
+            // so it is dropped here, mirroring the candidate-level
+            // `refs.is_empty()` drop below — we never store a quote we cannot
+            // attribute to a session.
+            let Some(slice) = by_ref.get(&ev.session_ref) else {
+                continue;
+            };
+            let key = (slice.agent.to_string(), slice.session_id.clone());
+            if seen.insert(key) {
+                refs.push(SessionRef {
+                    agent: slice.agent.to_string(),
+                    session_id: slice.session_id.clone(),
+                    ts: slice.ts.clone(), // C1: the session's own stable ts
+                });
             }
             if quotes.len() < MAX_QUOTES {
                 let q = gate::gate_quote(&ev.quote);
@@ -1250,6 +1265,41 @@ mod tests {
         assert!(logs[0]["usage"].is_object(), "usage blob recorded");
     }
 
+    // --- Fix N2: evidence quotes kept only for resolvable session_refs -----
+
+    #[test]
+    fn evidence_quotes_are_kept_only_for_resolvable_session_refs() {
+        // A candidate can cite evidence for a session NOT in this scan (the
+        // model naming an unknown or rotated-away session). Such a quote has no
+        // attributable session backing, so it must be dropped — only the quote
+        // for the resolvable ref is stored (the same `by_ref` gate the
+        // SessionRef already uses).
+        let e = env(LearnScope::All, vec![]);
+        let ctx = &e.ctx;
+        write_claude_session(ctx, "sess-1", "Always use pnpm, never npm.");
+        // Two evidence entries, distinct quotes: one resolvable (claude:sess-1),
+        // one not (claude:ghost, never scanned).
+        let response = r#"{"candidates":[{"claim":"Always use pnpm, never npm.","kind":"preference","evidence":[{"session_ref":"claude:sess-1","quote":"resolvable quote"},{"session_ref":"claude:ghost","quote":"unresolvable quote"}]}]}"#;
+        let stub = StubExtractor::new(&[response]);
+        let guard = acquire(ctx);
+        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(out.outcome, Outcome::Extracted);
+        assert_eq!(out.candidates, 1);
+
+        let id = journal::candidate_id("Always use pnpm, never npm.");
+        let body = std::fs::read_to_string(ctx.evidence_dir.join(format!("{id}.json"))).unwrap();
+        assert!(
+            body.contains("resolvable quote"),
+            "the resolvable ref's quote is stored: {body}"
+        );
+        assert!(
+            !body.contains("unresolvable quote"),
+            "a quote for an unresolvable session_ref must be dropped: {body}"
+        );
+    }
+
     // --- ACCEPTANCE 2: malformed output burns the tick and nothing else ---
 
     #[test]
@@ -1623,19 +1673,20 @@ mod tests {
     }
 
     #[test]
-    fn ambient_hint_bypasses_the_worker_spend_throttle() {
-        // Guard-7 semantics carried through: a session-end eligibility hint
-        // bypasses the spend interval in the worker exactly as in the fast path.
+    fn ambient_hint_does_not_bypass_the_worker_spend_throttle() {
+        // A session-end eligibility hint never buys an extra extraction call
+        // (design Decision #3 rejects spend that scales with usage; the consent
+        // ceiling is ≤4 calls/day at defaults). So with a FRESH spend stamp an
+        // ambient run is throttled even with a hint waiting — the hint is left
+        // for the next DUE tick, which will harvest the just-ended session
+        // (bypassing the readers' quiescence window, not the spend interval).
         let mut e = env(LearnScope::All, vec![]);
         e.ctx.trigger = "ambient";
         let ctx = &e.ctx;
         write_claude_session(ctx, "sess-1", "Always use pnpm, never npm.");
-        fresh_spend_stamp(ctx);
+        let seeded = fresh_spend_stamp(ctx);
         let hint = plant_hint(ctx, "sess-1");
-        let stub = StubExtractor::new(&[valid_extraction(
-            "claude:sess-1",
-            "Always use pnpm, never npm.",
-        )]);
+        let stub = StubExtractor::new(&["unused"]);
         let guard = acquire(ctx);
 
         let out = run_body(ctx, &guard, Some(&stub)).unwrap();
@@ -1643,11 +1694,19 @@ mod tests {
 
         assert_eq!(
             out.outcome,
-            Outcome::Extracted,
-            "the hint bypasses the interval"
+            Outcome::Throttled,
+            "a fresh spend stamp throttles the ambient run even with a hint waiting"
         );
-        assert_eq!(stub.calls(), 1);
-        assert!(!hint.exists(), "the successful run consumed the hint");
+        assert_eq!(stub.calls(), 0, "a throttled ambient run makes ZERO calls");
+        assert_eq!(
+            std::fs::read_to_string(&ctx.spend_stamp).unwrap(),
+            seeded,
+            "the spend stamp is untouched"
+        );
+        assert!(
+            hint.exists(),
+            "the hint survives a throttled run for the next due tick"
+        );
     }
 
     #[test]
