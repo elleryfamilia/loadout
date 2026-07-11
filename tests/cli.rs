@@ -2550,6 +2550,177 @@ fn hook_remove_strips_only_loadout_entries() {
     assert!(after.contains("worker.cjs"), "third-party entry kept");
 }
 
+// --- ambient-learning session-end serve (T18) --------------------------------
+
+/// `load hook claude --event session-end` marks the just-ended session eligible
+/// (a hint file under the per-machine state dir), prints NOTHING on stdout, and
+/// exits 0. Claude registers a SessionEnd learn hook but has no *freshness*
+/// `hook_registry`, so this path must NOT be rejected the way the freshness
+/// serve path rejects a registry-less agent.
+#[test]
+fn hook_session_end_marks_claude_session_eligible_silently() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    // No cwd in the payload → the write-time scope skip can't judge, so the hint
+    // is kept regardless of the default `Adopted` scope (the worker's own scope
+    // filter is the authority; this hint only wakes it and bypasses quiescence).
+    let payload = r#"{"hook_event_name":"SessionEnd","session_id":"abc-123-def","transcript_path":"/t","reason":"other"}"#;
+    fx.cmd()
+        .args(["hook", "claude", "--event", "session-end"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    // Recorded as state_dir/learn/eligible/<agent>-<session_id>.
+    assert!(
+        fx.state_exists("learn/eligible/claude-abc-123-def"),
+        "the claude session hint must be written"
+    );
+}
+
+/// A malformed or empty session-end payload still exits 0, stays silent, and
+/// writes no hint (lenient parse — a session-end serve never errors outward).
+#[test]
+fn hook_session_end_tolerates_malformed_and_empty_payload() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    for bad in ["not json at all", ""] {
+        fx.cmd()
+            .args(["hook", "claude", "--event", "session-end"])
+            .write_stdin(bad)
+            .assert()
+            .success()
+            .stdout(predicate::str::is_empty());
+    }
+    assert!(
+        !fx.state_exists("learn/eligible"),
+        "no hint dir is created for an unparseable payload"
+    );
+}
+
+/// The session-end serve path does NO refresh/adopt work — that stays exclusive
+/// to the freshness path (no `--event`). Proven as a pair: a bare `load hook
+/// cursor` re-renders on a config change (freshness, unchanged), but the same
+/// payload via `--event session-end` does not (it only records eligibility).
+#[test]
+fn hook_session_end_does_no_freshness_refresh() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\ndescription = \"v1\"\nguidance = \"MARKER-ONE\"\n\
+         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
+    );
+    fx.cmd()
+        .args(["refresh", "--agent", "cursor"])
+        .assert()
+        .success();
+    assert!(fx.read(".cursor/rules/loadout.mdc").contains("MARKER-ONE"));
+
+    let payload = format!(
+        r#"{{ "hook_event_name": "stop", "conversation_id": "conv-1", "workspace_roots": ["{}"] }}"#,
+        fx.repo_path().display()
+    );
+
+    // Freshness path (no --event) DOES pick up a config change.
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\ndescription = \"v2\"\nguidance = \"MARKER-TWO\"\n\
+         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
+    );
+    fx.cmd()
+        .args(["hook", "cursor"])
+        .write_stdin(payload.clone())
+        .assert()
+        .success();
+    assert!(
+        fx.read(".cursor/rules/loadout.mdc").contains("MARKER-TWO"),
+        "freshness path re-rendered"
+    );
+
+    // A further config change, then the SAME payload via --event session-end:
+    // it must NOT re-render (the overlay stays at v2), and it records the cursor
+    // conversation as eligible.
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\ndescription = \"v3\"\nguidance = \"MARKER-THREE\"\n\
+         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
+    );
+    fx.cmd()
+        .args(["hook", "cursor", "--event", "session-end"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert!(
+        fx.read(".cursor/rules/loadout.mdc").contains("MARKER-TWO"),
+        "session-end must not re-render (still v2, not v3)"
+    );
+    assert!(
+        fx.state_exists("learn/eligible/cursor-conv-1"),
+        "the cursor conversation must be recorded eligible"
+    );
+}
+
+/// C13 (write-time scope skip): under the default `Adopted` scope, a claude
+/// session whose payload cwd names a repo loadout has NOT adopted gets NO hint
+/// (the worker's scope filter would drop it anyway — the hint would only wake
+/// the worker for nothing). Once the repo is adopted, the hint IS written.
+#[test]
+fn hook_session_end_skips_unadopted_repo_hint_under_adopted_scope() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    fx.git_init();
+    let cwd = fx.repo_path().display().to_string();
+
+    // Not adopted yet (no .loadout/generated, no binding) → skipped.
+    fx.cmd()
+        .args(["hook", "claude", "--event", "session-end"])
+        .write_stdin(format!(r#"{{"session_id":"sess-skip","cwd":{cwd:?}}}"#))
+        .assert()
+        .success();
+    assert!(
+        !fx.state_exists("learn/eligible/claude-sess-skip"),
+        "an unadopted-repo session must not be hinted under Adopted scope"
+    );
+
+    // Adopt the repo (render an overlay) → repo_is_adopted becomes true.
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success();
+    fx.cmd()
+        .args(["hook", "claude", "--event", "session-end"])
+        .write_stdin(format!(r#"{{"session_id":"sess-keep","cwd":{cwd:?}}}"#))
+        .assert()
+        .success();
+    assert!(
+        fx.state_exists("learn/eligible/claude-sess-keep"),
+        "an adopted-repo session IS hinted"
+    );
+}
+
+/// A cursor stop payload with no `conversation_id` still wakes the worker via a
+/// generic `cursor-tick-<n>` hint (the worker treats any hint as "a session
+/// ended somewhere"; we ship no cursor transcript reader in this release).
+#[test]
+fn hook_session_end_cursor_without_conversation_id_writes_generic_hint() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.cmd()
+        .args(["hook", "cursor", "--event", "session-end"])
+        .write_stdin(r#"{"hook_event_name":"stop","status":"completed"}"#)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    let dir = fx.global.path().join("state/learn/eligible");
+    let entries: Vec<_> = fs::read_dir(&dir).unwrap().flatten().collect();
+    assert_eq!(entries.len(), 1, "exactly one generic hint");
+    let name = entries[0].file_name().into_string().unwrap();
+    assert!(
+        name.starts_with("cursor-tick-"),
+        "generic wake hint name: got {name}"
+    );
+}
+
 /// Repo-local clean leaves the user-global hook registered (other repos rely
 /// on it) and says so.
 #[test]

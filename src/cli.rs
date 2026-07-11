@@ -132,6 +132,12 @@ pub struct HookArgs {
     /// Deregister loadout's entries from the agent's user-level hooks file.
     #[arg(long)]
     pub remove: bool,
+    /// Which lifecycle event fired. `session-end` takes the ambient-learning
+    /// serve path (mark the just-ended session eligible + wake the harvest
+    /// worker); absent is the freshness serve path. Set by the registered hook
+    /// command, never typed by hand.
+    #[arg(long)]
+    pub event: Option<String>,
 }
 
 /// `skill` options. Bare `load skill` shows status.

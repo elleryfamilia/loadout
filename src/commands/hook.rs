@@ -9,6 +9,13 @@
 //! suppresses warnings, and **always exits 0** — a loadout failure must never
 //! block the agent.
 //!
+//! The `--event session-end` variant is a second serve path for ambient
+//! learning: an agent's session-end hook (Claude's `SessionEnd`, Cursor's
+//! `stop`) calls it when a session ends. It does no refresh work — it records
+//! the just-ended session as eligible for the next harvest and wakes the
+//! throttled worker — while keeping the same serve invariants (stdout-silent,
+//! warnings quiet, bounded stdin, always exit 0).
+//!
 //! `--remove` deregisters loadout's entries from the agent's hooks file (the
 //! counterpart to the automatic registration during `refresh`/`run`; repo-local
 //! `clean` deliberately leaves the global hook alone).
@@ -22,7 +29,7 @@ use super::{prepare_live, Runtime};
 use crate::adapters::{self, ApplyOptions, HookRegistry};
 use crate::cli::HookArgs;
 use crate::config::{self, Config};
-use crate::learn::trigger::{maybe_spawn, Trigger};
+use crate::learn::trigger::{maybe_spawn, write_eligibility_hint, Trigger};
 
 /// Debounce window per repo. Cursor fires more than one session event on a
 /// single window open (verified live: two ~5s apart); only the first should
@@ -31,19 +38,32 @@ const DEBOUNCE: Duration = Duration::from_secs(30);
 
 /// Entry point for `load hook`.
 pub fn run(rt: &Runtime, args: &HookArgs) -> crate::Result<()> {
-    // Resolve the agent's hook registry from config. Interactive misuse
-    // (unknown agent, no hook integration) may error normally — the registered
-    // hook command always names a valid agent.
+    // Resolve the agent (interactive misuse of an unknown agent may error
+    // normally — the registered hook command always names a valid agent). The
+    // freshness serve path additionally needs a hook registry, resolved below;
+    // the session-end learn path does not.
     let repo_base = crate::context::repo_base_for(&rt.cwd);
     let cfg = config::Config::load(&repo_base)?;
     let d = adapters::resolve_agent_token(&cfg, &args.agent)
         .ok_or_else(|| anyhow::anyhow!("unknown agent '{}'", args.agent))?;
-    let Some(hr) = d.hook_registry.clone() else {
-        anyhow::bail!("agent '{}' has no hook integration", args.agent);
-    };
     // The canonical id, not the invocation token — `load hook cursor-agent`
     // must adopt/refresh `cursor`, and everything downstream keys on ids.
     let id = d.id.clone();
+
+    // Ambient-learning session-end serve path. Taken BEFORE the freshness
+    // hook-registry resolution below on purpose: claude registers a SessionEnd
+    // learn hook but has NO freshness `hook_registry`, so requiring one here
+    // would reject `load hook claude --event session-end`. This path does no
+    // refresh/adopt work — it only marks the just-ended session eligible and
+    // wakes the throttled harvest worker.
+    if args.event.as_deref() == Some("session-end") {
+        serve_session_end(&id, &cfg);
+        return Ok(());
+    }
+
+    let Some(hr) = d.hook_registry.clone() else {
+        anyhow::bail!("agent '{}' has no hook integration", args.agent);
+    };
     if args.remove {
         return remove(&hr, rt.dry_run);
     }
@@ -78,6 +98,116 @@ fn serve(agent: &str, auto_adopt: bool, dry_run: bool, cfg: &Config) {
     // `[learn]` is global-only (a repo layer can't override it), so it's the
     // same value regardless of which workspace root(s) were just refreshed.
     maybe_spawn(cfg, Trigger::HookServe);
+}
+
+/// Serve mode for a just-ended agent session (the `--event session-end` path):
+/// record the session as immediately eligible for the next harvest and wake the
+/// throttled worker. Does NO refresh/adopt work — the freshness [`serve`] owns
+/// that. Keeps every serve invariant: nothing to stdout, warnings quiet,
+/// bounded stdin, and ALWAYS returns (the caller exits 0). Infallible by design.
+fn serve_session_end(agent: &str, cfg: &Config) {
+    // Same stdout/stderr discipline as `serve`: the agent parses stdout as the
+    // hook response, and warnings only confuse a machine caller.
+    crate::report::set_quiet_warnings(true);
+    let mut payload = String::new();
+    // Bound the read defensively; real session-end payloads are a few hundred
+    // bytes. `session_id`/`conversation_id` come from an EXTERNAL payload, so
+    // everything below stays lenient — a missing or odd field degrades to "no
+    // hint", never an error.
+    let _ = std::io::stdin().take(1 << 20).read_to_string(&mut payload);
+
+    // Recursion hygiene: if this serve is somehow running inside the harvest
+    // worker's OWN agent-CLI call (`LOADOUT_LEARN_WORKER` set), never mark that
+    // session eligible. `maybe_spawn`'s guard 4 already blocks the nested spawn;
+    // skipping the hint write too keeps the worker's own sessions out of the
+    // eligible set. Belt and braces — the readers' sentinel/entry-point
+    // self-exclusion is the primary defense; this is a second, cheaper layer.
+    if std::env::var_os("LOADOUT_LEARN_WORKER").is_none() {
+        if let Some(hint_id) = hint_id(agent, &payload, cfg) {
+            write_eligibility_hint(agent, &hint_id);
+        }
+    }
+
+    // Wake the throttled worker. The guard chain (including the recursion guard)
+    // is the single authority on whether a spawn actually happens; this never
+    // blocks past the millisecond-lived intermediate and never errors outward.
+    maybe_spawn(
+        cfg,
+        Trigger::SessionEnd {
+            agent: agent.to_string(),
+        },
+    );
+}
+
+/// The eligibility-hint id for a session-end payload, or `None` to write no
+/// hint. Lenient throughout: an unparseable payload or a missing id degrades to
+/// `None` (claude) or a generic wake (cursor); it never errors outward.
+///
+/// - **claude**: the `session_id` field. Under `scope = Adopted` (the default),
+///   a hint is skipped when the payload's `cwd` names a repo loadout has NOT
+///   adopted — the worker's scope filter ([`crate::learn::slices`]) would drop
+///   that session anyway, so the hint would only wake the worker to do nothing
+///   (carry-forward C13). This is a best-effort write-time optimization, NOT a
+///   correctness guarantee: the config read here can differ from the worker's at
+///   run time (e.g. `scope` flipped, or the repo adopted, between now and the
+///   worker), so the deterministic backstop is the TTL sweep in
+///   [`crate::learn::trigger::read_hints`]. When `cwd` is absent the hint is
+///   kept (can't judge) and the worker's own scope filter — the authority —
+///   still applies.
+/// - **cursor**: the `conversation_id` field (doc-verified 2026-07-11 against
+///   <https://cursor.com/docs/hooks> — the `stop` payload carries
+///   `conversation_id`, no `cwd`, so no scope skip). A missing/empty id degrades
+///   to a generic `tick-<unix>` hint (file `cursor-tick-<unix>`): we ship no
+///   cursor transcript reader this release, so a cursor hint's only job is to
+///   wake the claude/codex/gemini scan.
+fn hint_id(agent: &str, payload: &str, cfg: &Config) -> Option<String> {
+    let v = serde_json::from_str::<serde_json::Value>(payload).ok();
+    match agent {
+        "cursor" => Some(cursor_hint_id(v.as_ref())),
+        // claude (the only other agent that registers a session-end learn hook).
+        _ => {
+            let v = v.as_ref()?;
+            let session_id = v.get("session_id").and_then(|s| s.as_str())?;
+            if session_id.is_empty() || scope_skips_hint(cfg, v) {
+                return None;
+            }
+            Some(session_id.to_string())
+        }
+    }
+}
+
+/// Cursor's stop-payload id: the doc-verified `conversation_id` (stable across
+/// turns). Absent/empty → a generic `tick-<unix>` so the worker still wakes.
+fn cursor_hint_id(v: Option<&serde_json::Value>) -> String {
+    let id = v
+        .and_then(|v| v.get("conversation_id"))
+        .and_then(|s| s.as_str())
+        .filter(|s| !s.is_empty());
+    match id {
+        Some(s) => s.to_string(),
+        None => format!("tick-{}", now_unix()),
+    }
+}
+
+/// C13 write-time scope skip (claude): `true` when `scope = Adopted` and the
+/// payload's `cwd` is present and names a repo loadout has not adopted. A
+/// missing `cwd` returns `false` (keep the hint — can't judge).
+fn scope_skips_hint(cfg: &Config, payload: &serde_json::Value) -> bool {
+    if cfg.learn.scope != config::LearnScope::Adopted {
+        return false;
+    }
+    match payload.get("cwd").and_then(|c| c.as_str()) {
+        Some(cwd) => !crate::learn::slices::repo_is_adopted(Path::new(cwd)),
+        None => false,
+    }
+}
+
+/// Wall-clock unix seconds (best-effort; `0` if the clock is before the epoch).
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// The `workspace_roots` array of the hook payload; empty on any mismatch.

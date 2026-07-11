@@ -63,6 +63,18 @@ use crate::vlog;
 /// window regardless of how many triggers fire (bounds free re-scan thrash).
 const SCAN_DEBOUNCE: Duration = Duration::from_secs(15 * 60);
 
+/// Eligibility-hint TTL. A hint older than this is swept (deleted) on read,
+/// whatever the run's outcome — the deterministic backstop for carry-forward
+/// C13, where a *never-harvestable* hint would otherwise be re-read on every
+/// worker start forever. A hint becomes never-harvestable when its session is
+/// permanently out of scope (`scope = Adopted`, repo never adopted) or its
+/// transcript was rotated away before any harvest reached it: the normal
+/// success-path deletion (step 8 of the worker) is never taken, so nothing
+/// removes it. 7 days is far longer than any legitimately-pending session waits
+/// for its first harvest (the spend interval defaults to 6h), so a swept hint
+/// was, with certainty, going to be harvested at run time — never.
+const HINT_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 /// Which entry point fired the trigger. All variants funnel into the same
 /// throttled worker (more triggers never mean more spend); the label is carried
 /// for verbose diagnostics and to document intent at each call site.
@@ -345,9 +357,21 @@ pub(crate) fn read_hints(
     let Ok(entries) = std::fs::read_dir(eligible_dir(learn_dir)) else {
         return (hooked, paths);
     };
+    let now = SystemTime::now();
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
+            continue;
+        }
+        // TTL sweep (C13 backstop): a hint older than `HINT_TTL` is deleted here
+        // and now, whatever this run's outcome — otherwise a never-harvestable
+        // hint (permanently out of scope, or its transcript rotated away) would
+        // wake the worker on every scan forever. Safe to delete mid-read: this
+        // runs under the single-writer harvest lock, so no concurrent worker is
+        // reading the same dir, and a hint written by a session-end hook after
+        // this point is far younger than the TTL.
+        if hint_expired(&entry, now) {
+            let _ = std::fs::remove_file(&path);
             continue;
         }
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -364,6 +388,19 @@ pub(crate) fn read_hints(
         paths.push(path);
     }
     (hooked, paths)
+}
+
+/// Whether a hint file's mtime is older than [`HINT_TTL`]. A file whose mtime
+/// can't be read is treated as NOT expired (fail safe — never delete a hint we
+/// can't age; the success-path deletion will still reclaim it once harvested).
+fn hint_expired(entry: &std::fs::DirEntry, now: SystemTime) -> bool {
+    entry
+        .metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|mtime| now.duration_since(mtime).ok())
+        .map(|age| age > HINT_TTL)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -597,6 +634,36 @@ mod tests {
         let seed: BTreeSet<String> = ["already-hooked".to_string()].into_iter().collect();
         let (hooked, _paths) = read_hints(&e.learn_dir, &seed);
         assert!(hooked.contains("already-hooked"));
+    }
+
+    /// C13 backstop: a hint older than `HINT_TTL` is swept (deleted) on read and
+    /// never surfaced, whatever the run outcome; a fresh hint survives and is
+    /// scheduled for the normal success-path deletion. This bounds the lifetime
+    /// of a never-harvestable hint (out of scope, or transcript rotated away).
+    #[test]
+    fn expired_hints_are_swept_on_read_and_fresh_ones_survive() {
+        let e = learn_env();
+        write_hint_at(&e.learn_dir, "claude", "old-session").unwrap();
+        write_hint_at(&e.learn_dir, "claude", "fresh-session").unwrap();
+
+        // Backdate the "old" hint's mtime well past the TTL.
+        let old = eligible_dir(&e.learn_dir).join("claude-old-session");
+        let f = std::fs::File::options().write(true).open(&old).unwrap();
+        f.set_modified(SystemTime::now() - HINT_TTL - Duration::from_secs(60))
+            .unwrap();
+
+        let (hooked, paths) = read_hints(&e.learn_dir, &BTreeSet::new());
+        assert!(!old.exists(), "an expired hint is swept on read");
+        assert!(
+            !hooked.contains("old-session"),
+            "an expired hint is not surfaced to the readers"
+        );
+        assert!(hooked.contains("fresh-session"), "a fresh hint survives");
+        assert_eq!(
+            paths.len(),
+            1,
+            "only the fresh hint is scheduled for success-path deletion"
+        );
     }
 
     #[test]
