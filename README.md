@@ -155,6 +155,20 @@ Rendering is deterministic (the same `plan.json` and loadout version always prod
 
 ---
 
+## Learning
+
+You've told your agent this preference before — in another repo, another session, weeks ago. It doesn't remember; you type it again. **Ambient learning** mines your own recent agent sessions for durable, cross-project preferences you already stated once, and stages what it finds for review — nothing reaches a profile without an explicit promote.
+
+```bash
+load learn on
+```
+
+prints a plain consent block before it turns anything on: exactly what runs (`load harvest --ambient`, a process you'd see in `ps`, never a daemon), when (after your agent sessions end, or at loadout's own commands, at most once per 6-hour tick), the ceiling (at most one extraction call a tick — four a day at most, per machine, by default), which files it edits (a session-end hook in `~/.claude/settings.json`, one in `~/.cursor/hooks.json`), and a real cost estimate (typically 1-3¢ on a metered API key, $0 marginal on a subscription-backed CLI). `load learn off` turns it back off everywhere it's synced; `load learn status` shows what's on and what's waiting for review; run `load harvest` yourself for a pass on demand.
+
+It reads your own Claude Code, Codex, and Gemini CLI session transcripts — interactive sessions only, secrets redacted before anything is measured or sent anywhere — and stages what it finds in a per-machine journal inside your synced config: claim text syncs, the verbatim quote behind it stays on the machine that observed it. The **studio Inbox tab** is where you decide — promote a candidate into a fragment, dismiss it, or bring a dismissed one back. Same rule as everywhere else in loadout: nothing you didn't explicitly approve ends up in a profile.
+
+---
+
 ## Supported agents
 
 Loadout produces one overlay and delivers it the way each agent expects.
@@ -251,6 +265,8 @@ A read-only **palette** of starter fragments also ships inside the binary; dupli
 | `load detect [--probes]`                     | Print detected context and optional provider data                   |
 | `load doctor`                                | Diagnose config, agents, overlays, and safety issues                |
 | `load plan [check\|render\|schema\|clean]`   | Validate, render, and review an agent-written development plan       |
+| `load learn [on\|off\|status\|reset]`        | Opt in/out of ambient learning, check status, or re-baseline it       |
+| `load harvest`                               | Manually mine recent sessions into the review inbox                  |
 | `load trust [--rebuild]`                     | Show the per-machine script-trust store (`--rebuild` re-approves all) |
 | `load fragments trust <id>`                  | Re-approve a fragment's script after an out-of-band change          |
 | `load targets trust <id>`                    | Re-approve a target's script after an out-of-band change            |
