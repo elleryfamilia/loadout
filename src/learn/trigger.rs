@@ -164,20 +164,77 @@ fn should_spawn(
     if state::paused_at(learn_dir) {
         return Err(Skip::Paused);
     }
-    // 6. scan-stamp debounce (bounds scan thrash across bursts of triggers)
-    let scan_stamp = learn_dir.join("scan-stamp");
-    if !state::is_due(state::read_stamp(&scan_stamp), now, SCAN_DEBOUNCE) {
+    // 6 + 7. scan-stamp debounce, then spend interval OR a session-end
+    //    eligibility hint. The hint bypasses the spend interval (a just-ended
+    //    session should be harvested promptly) but NOT the scan-stamp debounce.
+    //    Shared with `load learn status` via [`eligibility_at`], so the status
+    //    line and the guard chain can never drift apart.
+    let e = eligibility_at(learn_dir, cfg.learn.interval, now);
+    if !e.scan_due {
         return Err(Skip::ScanDebounced);
     }
-    // 7. spend interval OR a session-end eligibility hint. The hint bypasses the
-    //    spend interval (a just-ended session should be harvested promptly) but
-    //    NOT the scan-stamp debounce above.
-    let spend_stamp = learn_dir.join("spend-stamp");
-    let spend_due = state::is_due(state::read_stamp(&spend_stamp), now, cfg.learn.interval);
-    if !spend_due && !has_hint(learn_dir) {
+    if !e.spend_due && !e.hint {
         return Err(Skip::NotDue);
     }
     Ok(())
+}
+
+/// The guard-6/7 eligibility view, shared by [`should_spawn`] and `load learn
+/// status` (one source of truth for "when would a trigger actually run?").
+/// Pure over `(learn_dir, interval, now)` like the guard chain itself.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Eligibility {
+    /// Guard 6: the scan-stamp debounce window has elapsed.
+    pub scan_due: bool,
+    /// Guard 7a: the spend interval has elapsed.
+    pub spend_due: bool,
+    /// Guard 7b: a session-end eligibility hint is waiting. It bypasses the
+    /// spend interval, but not the scan debounce.
+    pub hint: bool,
+    /// How long until a trigger would pass guards 6+7: zero when eligible
+    /// now, else the later of the scan-debounce remainder and — absent a
+    /// hint — the spend-interval remainder.
+    pub wait: Duration,
+}
+
+impl Eligibility {
+    /// Whether a trigger firing right now would pass guards 6+7.
+    pub fn now(&self) -> bool {
+        self.scan_due && (self.spend_due || self.hint)
+    }
+}
+
+/// Compute the guard-6/7 [`Eligibility`] from both throttle stamps and the
+/// hint dir under `learn_dir`.
+pub(crate) fn eligibility_at(learn_dir: &Path, interval: Duration, now: SystemTime) -> Eligibility {
+    let scan_last = state::read_stamp(&learn_dir.join("scan-stamp"));
+    let spend_last = state::read_stamp(&learn_dir.join("spend-stamp"));
+    let hint = has_hint(learn_dir);
+    let scan_due = state::is_due(scan_last, now, SCAN_DEBOUNCE);
+    let spend_due = state::is_due(spend_last, now, interval);
+    let scan_wait = remaining(scan_last, now, SCAN_DEBOUNCE);
+    let content_wait = if hint || spend_due {
+        Duration::ZERO // a hint (or an elapsed interval) satisfies guard 7 already
+    } else {
+        remaining(spend_last, now, interval)
+    };
+    Eligibility {
+        scan_due,
+        spend_due,
+        hint,
+        wait: scan_wait.max(content_wait),
+    }
+}
+
+/// Time left on a stamp's interval; zero when due (including never-run and
+/// clock-went-backwards, matching [`state::is_due`]'s semantics exactly).
+fn remaining(last: Option<SystemTime>, now: SystemTime, interval: Duration) -> Duration {
+    match last {
+        Some(last) if !state::is_due(Some(last), now, interval) => {
+            interval.saturating_sub(now.duration_since(last).unwrap_or_default())
+        }
+        _ => Duration::ZERO,
+    }
 }
 
 /// The cheap guard-7 check: at least one eligibility hint file exists.

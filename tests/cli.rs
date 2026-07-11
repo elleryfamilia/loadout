@@ -4093,7 +4093,7 @@ fn learn_on_consent_names_ceiling_files_sync_and_cost_then_aborts_non_tty() {
 fn learn_off_flips_flag_removes_ack_and_deregisters_hooks() {
     let fx = Fixture::new();
     fx.rust_project();
-    fx.author("[learn]\nscope = \"all\"\n");
+    fx.author("# keep me through off too\n[learn]\nscope = \"all\"\n");
     fx.mkdir_home(".claude");
     fx.mkdir_home(".cursor");
 
@@ -4111,6 +4111,10 @@ fn learn_off_flips_flag_removes_ack_and_deregisters_hooks() {
     assert!(
         cfg.contains("enabled = false"),
         "off must flip the synced flag: {cfg}"
+    );
+    assert!(
+        cfg.contains("# keep me through off too"),
+        "off must preserve config comments (toml_edit, not a re-serialize): {cfg}"
     );
     assert!(
         !fx.state_exists("learn/activation.json"),
@@ -4145,6 +4149,55 @@ fn learn_status_reports_paused_after_seeded_failures() {
         .success()
         .stdout(predicate::str::contains("paused"))
         .stdout(predicate::str::contains("load harvest"));
+}
+
+/// Unix-seconds stamp content for "right now" (the on-disk throttle-stamp
+/// format `state::read_stamp` parses).
+fn stamp_now() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .to_string()
+}
+
+/// `status`'s "next harvest" line honors BOTH stamps: a fresh scan stamp keeps
+/// it inside the 15-min debounce window even though the spend interval is due
+/// (no spend stamp at all) — so it must show a wait, never "eligible now".
+#[test]
+fn learn_status_fresh_scan_stamp_shows_debounce_wait_not_eligible() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.write_state("learn/scan-stamp", &stamp_now());
+
+    fx.cmd()
+        .args(["learn", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("next harvest:    in ~"))
+        .stdout(predicate::str::contains("eligible now").not());
+}
+
+/// A session-end eligibility hint bypasses the spend interval (but not the
+/// scan debounce): with a due scan stamp and a FRESH spend stamp, a waiting
+/// hint still makes status report "eligible now".
+#[test]
+fn learn_status_hint_is_eligible_now_despite_fresh_spend_stamp() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    // Fresh spend stamp (interval NOT elapsed), no scan stamp (debounce due),
+    // and a hint file — exactly the post-session-end shape.
+    fx.write_state("learn/spend-stamp", &stamp_now());
+    fx.write_state("learn/eligible/claude-sess-9", "");
+
+    fx.cmd()
+        .args(["learn", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("eligible now"))
+        .stdout(predicate::str::contains("session-end hint waiting"));
 }
 
 /// `load learn reset` deletes the watermark store (re-baselining the harvest)

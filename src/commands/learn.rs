@@ -6,8 +6,8 @@
 //! then flips `[learn] enabled = true` in the synced global config, mints this
 //! machine's learning id, writes the activation ack, and registers the
 //! session-end learning hooks. `off` reverses all of that (and, when the config
-//! dir is synced, pushes the disable so other machines dormant learning at
-//! their next launch). `status` reports what's on and what's staged; `reset`
+//! dir is synced, pushes the disable so learning goes dormant on other machines
+//! at their next launch). `status` reports what's on and what's staged; `reset`
 //! re-baselines the harvest watermarks after corruption.
 
 use std::io::{IsTerminal, Write as _};
@@ -22,7 +22,7 @@ use crate::config::{self, Config};
 use crate::context;
 use crate::learn::journal::{self, CandidateStatus};
 use crate::learn::watermarks::Watermarks;
-use crate::learn::{agent_cli, state, worker};
+use crate::learn::{agent_cli, state, trigger, worker};
 use crate::style::Painter;
 use crate::sync;
 
@@ -213,14 +213,14 @@ fn off(rt: &super::Runtime) -> Result<()> {
     set_enabled(false).context("disabling learning in the global config")?;
     println!("{} disabled ambient learning (synced).", p.green("✓"));
 
-    // 2. Push the disable so other machines dormant learning at their next
-    //    launch. Bounded and warn-don't-fail: never leave this machine half-off
-    //    because a remote was slow.
+    // 2. Push the disable so learning goes dormant on other machines at their
+    //    next launch. Bounded and warn-don't-fail: never leave this machine
+    //    half-off because a remote was slow.
     if let Some(dir) = config::global_config_dir() {
         if sync::is_synced(&dir) {
             match sync::commit_push(&dir, "loadout: disable ambient learning", OFF_PUSH_TIMEOUT) {
                 Ok(sync::PushOutcome::Pushed) => println!(
-                    "  {} pushed the disable — other machines dormant learning at their next launch.",
+                    "  {} pushed the disable — learning goes dormant on other machines at their next launch.",
                     p.dim("·")
                 ),
                 Ok(sync::PushOutcome::NothingToPush) => {}
@@ -320,13 +320,12 @@ fn status(rt: &super::Runtime) -> Result<()> {
             None => println!("  last run:        {}", p.dim("none yet")),
         }
 
-        // Next eligibility (both throttle stamps).
-        let now = SystemTime::now();
-        let spend = state::read_stamp(&dir.join("spend-stamp"));
-        println!(
-            "  next harvest:    {}",
-            due_line(&p, spend, now, config.learn.interval)
-        );
+        // Next eligibility — BOTH throttle stamps plus any session-end hint,
+        // computed by the trigger module's own guard math (one source of
+        // truth: a hint bypasses the spend interval but not the 15-min scan
+        // debounce, exactly as a real trigger would decide).
+        let e = trigger::eligibility_at(dir, config.learn.interval, SystemTime::now());
+        println!("  next harvest:    {}", eligibility_line(&p, &e));
 
         // Paused after repeated failures + the clearing action.
         if state::paused_at(dir) {
@@ -460,16 +459,25 @@ fn prompt_yes_no(question: &str, default_yes: bool) -> Result<bool> {
     })
 }
 
-/// A plain-language "next eligibility" line from the spend stamp + interval.
-fn due_line(p: &Painter, last: Option<SystemTime>, now: SystemTime, interval: Duration) -> String {
-    if state::is_due(last, now, interval) {
-        p.green("eligible now")
-    } else if let Some(last) = last {
-        let elapsed = now.duration_since(last).unwrap_or_default();
-        let remaining = interval.saturating_sub(elapsed);
-        p.dim(&format!("in ~{}", human_duration(remaining)))
+/// A plain-language "next eligibility" line from the trigger module's
+/// guard-6/7 view: "eligible now" names why (hint and/or elapsed interval);
+/// otherwise the wait is the later of the scan-debounce and spend-interval
+/// remainders, with a waiting hint noted (it fires once the debounce clears).
+fn eligibility_line(p: &Painter, e: &trigger::Eligibility) -> String {
+    if e.now() {
+        let why = match (e.hint, e.spend_due) {
+            (true, true) => "session-end hint waiting; interval elapsed",
+            (true, false) => "session-end hint waiting",
+            (false, _) => "interval elapsed",
+        };
+        format!("{} ({})", p.green("eligible now"), p.dim(why))
+    } else if e.hint {
+        p.dim(&format!(
+            "in ~{} (session-end hint waiting; the scan debounce holds it)",
+            human_duration(e.wait)
+        ))
     } else {
-        p.green("eligible now")
+        p.dim(&format!("in ~{}", human_duration(e.wait)))
     }
 }
 
