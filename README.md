@@ -204,6 +204,8 @@ load sync clone https://github.com/you/loadout-config.git   # on another machine
 
 After that, launching an agent (`load claude`) pulls the latest config before rendering. Your private `local.toml` (hostnames, host classes, machine-specific values) stays local and never syncs.
 
+Sync needs `git` on the machine — minimal images (Proxmox, slim containers) often don't ship it, so `apt install git` first.
+
 ---
 
 ## Already have a `CLAUDE.md` or `AGENTS.md`?
