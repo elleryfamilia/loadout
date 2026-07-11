@@ -212,7 +212,10 @@ pub enum HookFormat {
 /// sessions, which never go through `load run`. Registration is global and
 /// idempotent; loadout's entry is matched by the `subcommand` suffix (so a
 /// moved binary is re-pointed, not duplicated) and every other tool's entry is
-/// preserved byte-for-byte.
+/// preserved value-identically. (Preservation is semantic, not byte-exact: the
+/// file is parsed to a `serde_json::Value` and re-emitted, which sorts each
+/// object's keys — a rich foreign entry keeps all its fields and values but may
+/// see its keys reordered.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HookRegistry {
@@ -223,6 +226,14 @@ pub struct HookRegistry {
     /// The `load` subcommand the hook runs (e.g. `hook cursor`). The registered
     /// command is `"<current load binary>" <subcommand>`; the suffix also
     /// identifies our entry for updates and `--remove`.
+    ///
+    /// CAUTION: entries are matched by `command.ends_with(" <subcommand>")`, so
+    /// this discrimination is safe only while no subcommand's ` <subcommand>`
+    /// string is a suffix of another subcommand's full command line. Today it
+    /// holds — `hook cursor` is NOT a suffix of `hook cursor --event
+    /// session-end` (which ends in `session-end`), and vice versa. Adding a
+    /// subcommand like `session-end` (a trailing substring of an existing one)
+    /// would break it: prefer distinct, mutually non-suffixing tails.
     pub subcommand: String,
     /// Whether the hook may **adopt** a repo on first open — wiring this agent
     /// into a git repo some loadout applies to, with no prior `load refresh`
@@ -1442,8 +1453,11 @@ fn apply_hook_registry_at(
 }
 
 /// Ensure an entry running `command` exists under `hooks.<event>` in the hooks
-/// file JSON, preserving every other field and entry byte-for-byte (the file is
-/// shared with other tools). An existing loadout entry — identified by the
+/// file JSON, preserving every other field and entry value-identically (the file
+/// is shared with other tools). Preservation is semantic, not byte-exact: the
+/// JSON is parsed and re-emitted, so a foreign object's keys may be reordered
+/// (serde_json sorts them) — every field and value survives, the byte layout
+/// need not. An existing loadout entry — identified by the
 /// ` <subcommand>` suffix — is updated in place when the binary moved. Returns
 /// the new pretty-printed JSON, or `None` when already current (no churn).
 fn upsert_hook_command(
@@ -1658,7 +1672,7 @@ mod hook_registry_tests {
             .unwrap()
             .expect("should write");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        // Other tools' entries survive byte-for-byte…
+        // Other tools' entries survive value-identically…
         assert_eq!(
             v["hooks"]["beforeSubmitPrompt"].as_array().unwrap().len(),
             1
@@ -1784,9 +1798,12 @@ mod hook_registry_tests {
         assert_eq!(arr.len(), 2, "only the learn entry removed");
         assert_eq!(
             arr[0]["command"], freshness,
-            "freshness survives byte-for-byte"
+            "freshness survives value-identical"
         );
-        assert_eq!(arr[1]["command"], foreign, "foreign survives byte-for-byte");
+        assert_eq!(
+            arr[1]["command"], foreign,
+            "foreign survives value-identical"
+        );
         // Reverse: with the learn entry gone, removing it again is a no-op — the
         // freshness `hook cursor` suffix is NOT mistaken for the learn suffix.
         assert!(remove_hook_command(&out, "hook cursor --event session-end")
@@ -1875,7 +1892,7 @@ mod hook_registry_tests {
     // --- remove_learn_hooks at the descriptor level -------------------------
 
     #[test]
-    fn remove_learn_hooks_leaves_freshness_and_foreign_byte_identical() {
+    fn remove_learn_hooks_leaves_freshness_and_foreign_value_identical() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".cursor")).unwrap();
         let freshness = "\"/usr/local/bin/load\" hook cursor";
@@ -1901,7 +1918,7 @@ mod hook_registry_tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         // Freshness hook untouched.
         assert_eq!(v["hooks"]["sessionStart"][0]["command"], freshness);
-        // Learn hook gone; foreign hook survives byte-for-byte.
+        // Learn hook gone; foreign hook survives value-identical.
         let stop = v["hooks"]["stop"].as_array().unwrap();
         assert_eq!(stop.len(), 1);
         assert_eq!(stop[0]["command"], foreign);
