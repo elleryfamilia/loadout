@@ -29,9 +29,10 @@
 //! human can see *why* a store went quiet rather than guessing.
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 pub mod claude;
+pub mod codex;
 
 /// One harvestable session's user-authored text, plus everything the worker
 /// needs to attribute it and to advance the watermark exactly once.
@@ -81,3 +82,35 @@ pub struct ScanOutcome {
 /// session-end hook names the just-ended session explicitly and bypasses this
 /// wait for that one session only.
 pub const QUIESCENCE: Duration = Duration::from_secs(20 * 60);
+
+/// Resume position for an append-only transcript, guarding against a file that
+/// shrank or was replaced. A recorded offset at or before the current end is
+/// trusted; an offset *past* the end is stale (the file was truncated or
+/// rotated out from under the watermark), so reading resumes from byte 0 rather
+/// than seeking past EOF and stranding the reader on an empty read forever.
+///
+/// Genuinely identical across the append-only readers (claude, codex), so it
+/// lives here rather than being copied per reader.
+pub(crate) fn resume_start(recorded_offset: u64, file_len: u64) -> u64 {
+    if recorded_offset <= file_len {
+        recorded_offset
+    } else {
+        0
+    }
+}
+
+/// Whether a transcript file is too fresh to read: modified within
+/// [`QUIESCENCE`] of `now`, or carrying an mtime in the future (clock skew,
+/// treated as "just now"). A file still being written must not be read because
+/// its final line may be half-written.
+///
+/// Shared by the non-hooked quiescence gate in every reader. The claude reader
+/// applies it only when a session-end hook did *not* name the session; codex
+/// (no hooks in v0.15) always applies it.
+pub(crate) fn too_fresh(mtime: SystemTime, now: SystemTime) -> bool {
+    match now.duration_since(mtime) {
+        Ok(age) => age < QUIESCENCE,
+        // mtime in the future (clock skew): treat as "just now" and wait.
+        Err(_) => true,
+    }
+}

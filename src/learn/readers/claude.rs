@@ -30,7 +30,7 @@ use std::time::SystemTime;
 
 use serde_json::Value;
 
-use super::{SessionSlice, QUIESCENCE};
+use super::{resume_start, too_fresh, SessionSlice};
 use crate::learn::watermarks::Watermarks;
 
 /// Scan every Claude Code transcript under `home/.claude/projects/*/*.jsonl`
@@ -126,28 +126,19 @@ fn scan_one(
     // is skipped unless a hook told us this session just ended.
     if !hooked.contains(&session_id) {
         let mtime = meta.modified().ok()?;
-        match now.duration_since(mtime) {
-            // Modified too recently — the session may still be live.
-            Ok(age) if age < QUIESCENCE => return None,
-            // mtime in the future (clock skew): treat as "just now" and wait.
-            Err(_) => return None,
-            _ => {}
+        if too_fresh(mtime, now) {
+            return None;
         }
     }
 
     let key = path.to_string_lossy();
     let mark = marks.mark(&key).copied().unwrap_or_default();
-    let file_len = meta.len();
     // Staleness guard: a recorded offset past the current end means the file
     // was truncated or replaced. Seeking there would read nothing and strand
-    // us forever, so re-read from the top instead. (`mark.mtime_seen` is
-    // corroborating context recorded by the worker; the length comparison is
-    // the authoritative, unambiguous trigger — see the module report.)
-    let start = if mark.bytes_processed <= file_len {
-        mark.bytes_processed
-    } else {
-        0
-    };
+    // us forever, so re-read from the top instead (see [`super::resume_start`]).
+    // (`mark.mtime_seen` is corroborating context recorded by the worker; the
+    // length comparison is the authoritative, unambiguous trigger.)
+    let start = resume_start(mark.bytes_processed, meta.len());
 
     let mut file = fs::File::open(path).ok()?;
     file.seek(SeekFrom::Start(start)).ok()?;
@@ -253,6 +244,8 @@ fn user_text(value: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    use super::super::QUIESCENCE;
 
     /// Absolute path to a committed fixture.
     fn fixture(name: &str) -> PathBuf {
