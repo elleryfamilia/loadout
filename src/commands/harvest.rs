@@ -60,6 +60,13 @@ pub fn print_summary(out: &worker::RunOutcome) {
             );
         }
         Outcome::Empty => println!("{}", p.dim("learning: no new sessions to harvest")),
+        Outcome::Throttled => println!(
+            "{}",
+            p.dim(
+                "learning: ambient run throttled — the spend interval hasn't elapsed \
+                 (a manual `load harvest` runs regardless)"
+            )
+        ),
         Outcome::NoCli => println!(
             "{}",
             p.dim(

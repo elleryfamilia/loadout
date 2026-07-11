@@ -28,10 +28,15 @@
 //! burn the tick, while a crash-looping worker still costs at most one call
 //! per interval because the stamp precedes the spend. The throttle *checks*
 //! (is the scan stamp debounced? is the spend stamp past `learn.interval`?)
-//! live in the trigger fast path (a later task); this worker only *writes* the
-//! stamps as it proceeds. A manual `load harvest` bypasses the interval check
-//! upstream but still writes the spend stamp here (a manual run resets the
-//! ambient tick — the cheapest honest semantics).
+//! live primarily in the trigger fast path; an **ambient** run additionally
+//! re-checks the spend interval right after the scan stamp (defense-in-depth
+//! via [`trigger::eligibility_at`] — the consent ceiling holds even for a
+//! direct `load harvest --ambient` invocation, which the fast path never
+//! vetted) and exits as a logged, non-failure [`Outcome::Throttled`] no-op
+//! when the interval hasn't elapsed and no session-end hint waits. A manual
+//! `load harvest` bypasses the interval check entirely but still writes the
+//! spend stamp here (a manual run resets the ambient tick — the cheapest
+//! honest semantics).
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::Write as _;
@@ -96,6 +101,12 @@ pub enum Outcome {
     Busy,
     /// The fencing token went foreign mid-run; aborted before any write.
     Fenced,
+    /// An **ambient** run found the spend interval unelapsed and no
+    /// session-end hint waiting; it exited before any reader work
+    /// (defense-in-depth: the trigger fast path is the primary throttle, this
+    /// bounds direct `load harvest --ambient` invocations too). Not a
+    /// failure; spend stamp and watermarks untouched.
+    Throttled,
     /// No eligible new content; a no-op run (spend stamp untouched).
     Empty,
     /// Eligible content exists but no extraction CLI is installed; nothing
@@ -118,6 +129,7 @@ impl Outcome {
         match self {
             Outcome::Busy => "busy",
             Outcome::Fenced => "fenced",
+            Outcome::Throttled => "throttled",
             Outcome::Empty => "empty",
             Outcome::NoCli => "no_cli",
             Outcome::Corrupt => "corrupt_watermarks",
@@ -184,6 +196,10 @@ struct Ctx {
     spend_stamp: PathBuf,
     log_path: PathBuf,
     scope: LearnScope,
+    /// `learn.interval` — the spend-stamp interval the ambient self-throttle
+    /// re-checks in the worker (defense-in-depth; the trigger fast path is the
+    /// primary throttle and uses the same value).
+    interval: Duration,
     /// `(id, description)` for every configured fragment — the CURRENT
     /// FRAGMENTS list the prompt anchors against, and the exact-duplicate
     /// dedupe source.
@@ -246,6 +262,7 @@ pub fn run_harvest(cfg: &Config, manual: bool) -> Result<RunOutcome> {
         spend_stamp: learn_dir.join("spend-stamp"),
         log_path: learn_dir.join("log.jsonl"),
         scope: cfg.learn.scope,
+        interval: cfg.learn.interval,
         fragments: cfg
             .fragments
             .iter()
@@ -300,6 +317,34 @@ fn run_body(
     // wasted stat()s, never money. Contrast the SPEND stamp at step 6, whose
     // write failure must abort the run before the paid call.
     let _ = state::write_stamp(&ctx.scan_stamp);
+
+    // --- Ambient self-throttle (defense-in-depth) -------------------------
+    // The trigger fast path (guards 6+7 in `trigger::should_spawn`) is the
+    // throttle's primary home — production only spawns an ambient worker after
+    // those passed. But the consent ceiling ("at most 1 extraction call per
+    // interval per machine") must hold even if a wiring bug or an external
+    // script invokes `load harvest --ambient` directly: the lock serializes
+    // CONCURRENT workers but does not bound SEQUENTIAL direct calls. So an
+    // ambient run re-checks the spend interval here, via the trigger module's
+    // own eligibility math (one source of truth, never duplicated) — a
+    // session-end eligibility hint bypasses the interval exactly as it does in
+    // guard 7. Manual runs are deliberately exempt: a typed `load harvest`
+    // bypasses the interval but still writes the spend stamp at step 6 (the
+    // consent wording's semantics). A throttled exit is NOT a failure: one log
+    // entry (fenced), spend stamp and watermarks untouched.
+    if ctx.trigger == "ambient" {
+        let e = trigger::eligibility_at(&ctx.learn_dir, ctx.interval, ctx.now_sys());
+        if !e.spend_due && !e.hint {
+            if !guard.still_held() {
+                return Ok(empty_outcome(ctx, Outcome::Fenced));
+            }
+            log_run(
+                ctx,
+                &LogFields::new(ctx, Outcome::Throttled, start.elapsed()),
+            );
+            return Ok(empty_outcome(ctx, Outcome::Throttled));
+        }
+    }
 
     // --- Step 3: watermarks, scan, assemble ------------------------------
     let mut wm = Watermarks::load_from(&ctx.watermarks_path);
@@ -1052,6 +1097,7 @@ mod tests {
             spend_stamp: learn_dir.join("spend-stamp"),
             log_path: learn_dir.join("log.jsonl"),
             scope,
+            interval: Duration::from_secs(6 * 3600),
             fragments,
             machine_id: "test-machine".to_string(),
             now_utc: fixed_now(),
@@ -1530,6 +1576,107 @@ mod tests {
         assert!(
             hint.exists(),
             "a run that advanced no watermarks must leave the hint for a later retry"
+        );
+    }
+
+    // --- ambient self-throttle (defense-in-depth) --------------------------
+
+    /// Write a spend stamp that is FRESH relative to the test clock
+    /// (`fixed_now()`), i.e. within the 6h interval.
+    fn fresh_spend_stamp(ctx: &Ctx) -> String {
+        let val = (ctx.now_unix() - 60).to_string();
+        std::fs::write(&ctx.spend_stamp, &val).unwrap();
+        val
+    }
+
+    #[test]
+    fn ambient_run_with_fresh_spend_stamp_is_throttled_before_any_scan() {
+        let mut e = env(LearnScope::All, vec![]);
+        e.ctx.trigger = "ambient";
+        let ctx = &e.ctx;
+        // Content EXISTS — only the interval throttle may stop this run.
+        write_claude_session(ctx, "sess-1", "Always use pnpm.");
+        let seeded = fresh_spend_stamp(ctx);
+        let stub = StubExtractor::new(&["unused"]);
+        let guard = acquire(ctx);
+
+        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(out.outcome, Outcome::Throttled);
+        assert_eq!(stub.calls(), 0, "a throttled ambient run makes ZERO calls");
+        assert_eq!(
+            std::fs::read_to_string(&ctx.spend_stamp).unwrap(),
+            seeded,
+            "the spend stamp is untouched (not re-written, not consumed)"
+        );
+        assert!(!ctx.watermarks_path.exists(), "watermarks untouched");
+        assert!(journal_events(ctx).is_empty(), "no events");
+        let logs = log_lines(ctx);
+        assert_eq!(logs.len(), 1, "one attributable throttled entry");
+        assert_eq!(logs[0]["outcome"], "throttled");
+        assert_eq!(logs[0]["trigger"], "ambient");
+        assert!(
+            !ctx.learn_dir.join("failures.json").exists(),
+            "a throttled exit is NOT a failure"
+        );
+    }
+
+    #[test]
+    fn ambient_hint_bypasses_the_worker_spend_throttle() {
+        // Guard-7 semantics carried through: a session-end eligibility hint
+        // bypasses the spend interval in the worker exactly as in the fast path.
+        let mut e = env(LearnScope::All, vec![]);
+        e.ctx.trigger = "ambient";
+        let ctx = &e.ctx;
+        write_claude_session(ctx, "sess-1", "Always use pnpm, never npm.");
+        fresh_spend_stamp(ctx);
+        let hint = plant_hint(ctx, "sess-1");
+        let stub = StubExtractor::new(&[valid_extraction(
+            "claude:sess-1",
+            "Always use pnpm, never npm.",
+        )]);
+        let guard = acquire(ctx);
+
+        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(
+            out.outcome,
+            Outcome::Extracted,
+            "the hint bypasses the interval"
+        );
+        assert_eq!(stub.calls(), 1);
+        assert!(!hint.exists(), "the successful run consumed the hint");
+    }
+
+    #[test]
+    fn manual_run_bypasses_the_worker_spend_throttle() {
+        // Manual runs deliberately ignore the interval (q-manual-throttle): the
+        // user typed it, so it runs — and still resets the ambient tick at step 6.
+        let e = env(LearnScope::All, vec![]);
+        let ctx = &e.ctx; // trigger stays "manual"
+        write_claude_session(ctx, "sess-1", "Always use pnpm, never npm.");
+        let seeded = fresh_spend_stamp(ctx);
+        let stub = StubExtractor::new(&[valid_extraction(
+            "claude:sess-1",
+            "Always use pnpm, never npm.",
+        )]);
+        let guard = acquire(ctx);
+
+        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(
+            out.outcome,
+            Outcome::Extracted,
+            "manual runs are never throttled"
+        );
+        assert_eq!(stub.calls(), 1);
+        assert_ne!(
+            std::fs::read_to_string(&ctx.spend_stamp).unwrap(),
+            seeded,
+            "the manual run re-wrote the spend stamp (resets the ambient tick)"
         );
     }
 

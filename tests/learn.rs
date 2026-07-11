@@ -397,13 +397,17 @@ fn scenario2_no_new_content_second_harvest_is_a_noop() {
 }
 
 // --- Scenario 3: throttle ---------------------------------------------------
+//
+// The throttle is locked at BOTH layers: the trigger fast path (its primary
+// home — a fresh spend stamp means no worker is even spawned) and the worker's
+// own ambient self-throttle (defense-in-depth — a direct `load harvest
+// --ambient`, which no fast path vetted, re-checks the interval and exits as a
+// logged `throttled` no-op). A session-end eligibility hint bypasses the
+// interval at both layers (guard-7 semantics).
 
-/// The ambient throttle DENIES a fast-path trigger when the spend stamp is
-/// fresh: a real trigger entry point (`load run`) runs the guard chain and,
-/// finding the spend interval unelapsed, spawns no worker — so the stub is never
-/// called. (The 6h interval throttle lives in the fast path; a direct
-/// `load harvest --ambient` is the post-gate worker and does not re-check it —
-/// see the report's scenario-3 note.)
+/// Fast-path layer: a real trigger entry point (`load run`) runs the guard
+/// chain and, finding the spend interval unelapsed, spawns no worker — so the
+/// stub is never called.
 #[test]
 fn scenario3_fresh_spend_stamp_denies_ambient_spawn() {
     let e = Env::new();
@@ -429,9 +433,84 @@ fn scenario3_fresh_spend_stamp_denies_ambient_spawn() {
     );
 }
 
-/// The ambient worker itself (`load harvest --ambient`, the throttle-passed
-/// path) makes exactly one call and writes the spend stamp, logged with the
-/// `ambient` trigger label.
+/// Worker layer (the card's original form): `load harvest --ambient` invoked
+/// DIRECTLY with a fresh spend stamp ⇒ zero stub calls, one `throttled` log
+/// entry, spend stamp and watermarks untouched, not counted as a failure.
+#[test]
+fn scenario3_ambient_direct_with_fresh_spend_stamp_makes_zero_calls() {
+    let e = Env::new();
+    e.write_config(HARVEST_CFG);
+    // Content EXISTS — only the self-throttle may stop this run.
+    let claim = "Always run fmt before committing.";
+    e.write_claude_session("sess-1", claim);
+    e.write_envelope("sess-1", claim);
+    let fresh = now_secs() - 60; // well within the 6h interval
+    e.write_stamp("spend-stamp", fresh);
+
+    e.cmd()
+        .args(["harvest", "--ambient"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("throttled"));
+
+    assert_eq!(
+        e.calls(),
+        0,
+        "a direct ambient run inside the interval must make ZERO extraction calls"
+    );
+    // One attributable throttled log entry; not a failure.
+    let log = e.log_text();
+    assert!(
+        log.contains(r#""outcome":"throttled""#),
+        "throttled entry logged: {log}"
+    );
+    assert!(
+        !e.learn_dir().join("failures.json").exists(),
+        "a throttled exit is not a failure"
+    );
+    // Spend stamp untouched (same seeded content), watermarks untouched.
+    let stamp = fs::read_to_string(e.learn_dir().join("spend-stamp")).unwrap();
+    assert_eq!(stamp.trim(), fresh.to_string(), "spend stamp untouched");
+    assert!(
+        !e.learn_dir().join("watermarks.json").exists(),
+        "watermarks untouched"
+    );
+    assert!(e.journal_text().is_empty(), "no candidates staged");
+}
+
+/// Worker layer, hint bypass: ambient + fresh spend stamp + a session-end
+/// eligibility hint ⇒ the run PROCEEDS (guard-7 semantics carried through to
+/// the self-throttle), makes exactly one call, and consumes the hint.
+#[test]
+fn scenario3_hint_bypasses_the_worker_self_throttle() {
+    let e = Env::new();
+    e.write_config(HARVEST_CFG);
+    let claim = "Prefer squash merges.";
+    e.write_claude_session("sess-1", claim);
+    e.write_envelope("sess-1", claim);
+    e.write_stamp("spend-stamp", now_secs() - 60); // fresh — would throttle…
+                                                   // …but a session-end hook named the just-ended session.
+    fs::create_dir_all(e.eligible_dir()).unwrap();
+    let hint = e.eligible_dir().join("claude-sess-1");
+    fs::write(&hint, b"").unwrap();
+
+    e.cmd()
+        .args(["harvest", "--ambient"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("harvested 1 session"));
+
+    assert_eq!(e.calls(), 1, "the hint bypasses the interval → one call");
+    assert!(
+        e.log_text().contains(r#""outcome":"extracted""#),
+        "the run extracted"
+    );
+    assert!(!hint.exists(), "the successful run consumed the hint");
+}
+
+/// The ambient worker itself (`load harvest --ambient` with a STALE spend
+/// stamp, the throttle-passed state) makes exactly one call and writes the
+/// spend stamp, logged with the `ambient` trigger label.
 #[test]
 fn scenario3_ambient_worker_run_makes_one_call() {
     let e = Env::new();
