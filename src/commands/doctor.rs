@@ -290,11 +290,17 @@ const LEARN_STALE: std::time::Duration = std::time::Duration::from_secs(14 * 24 
 /// reason this lives in doctor.rs rather than checks.rs. Never spawns the
 /// harvest worker: every read here is passive.
 fn check_learn(cfg: &config::Config) -> Vec<checks::Finding> {
+    // Same convention as `check_skills`: an unresolvable $HOME/state dir gets
+    // a visible skip line, never a silently empty section.
     let Some(learn_dir) = crate::learn::state::learn_dir() else {
-        return Vec::new();
+        return vec![checks::Finding::warn(
+            "cannot resolve the learning state dir (no home) — learning checks skipped",
+        )];
     };
     let Some(home) = config::home_dir() else {
-        return Vec::new();
+        return vec![checks::Finding::warn(
+            "cannot resolve $HOME — learning checks skipped",
+        )];
     };
     check_learn_at(cfg, &learn_dir, &home, SystemTime::now())
 }
@@ -461,7 +467,9 @@ fn check_learn_hook_at(
     };
 
     // Claude's global kill switch: every hook (ours included) is inert, so
-    // its absence here is expected, not a fault — say why instead of warning.
+    // its absence here is expected, not a fault — say why instead of warning,
+    // in the exact sentence hook registration already prints (the shared
+    // constant, so the two surfaces can never drift).
     if hr.format == crate::adapters::HookFormat::ClaudeNested
         && json
             .get("disableAllHooks")
@@ -469,9 +477,7 @@ fn check_learn_hook_at(
             == Some(true)
     {
         if active {
-            out.push(Finding::ok(
-                "claude hooks disabled by disableAllHooks; entry-point triggers carry learning",
-            ));
+            out.push(Finding::ok(crate::adapters::DISABLE_ALL_HOOKS_NOTE));
         }
         return;
     }
@@ -971,6 +977,61 @@ mod learn_tests {
         );
     }
 
+    // --- hook expected but missing, while active ------------------------------
+
+    /// Learning is active and the agent looks installed (its dotfile dir
+    /// exists), but the hooks file is absent entirely — the file-absent early
+    /// return must still warn with the `load refresh` clearing action.
+    #[test]
+    fn active_with_hooks_file_absent_warns_not_registered() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        // The agent's dotfile dir exists (installed signal) but no hooks file.
+        std::fs::create_dir_all(e.home.join(".cursor")).unwrap();
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "cursor: stop learning hook not registered")
+            .expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(
+            f.message.contains("load refresh"),
+            "must name the clearing action: {}",
+            f.message
+        );
+    }
+
+    /// Learning is active and the hooks file exists, but carries no entry with
+    /// our subcommand suffix (only a foreign hook) — the `(active, !present)`
+    /// arm must warn with the `load refresh` clearing action.
+    #[test]
+    fn active_with_file_present_but_our_entry_absent_warns_not_registered() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        let hr = learn_hook(&cfg, "claude");
+        let path = e.home.join(&hr.hooks_file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Valid JSON, foreign hook only — nothing carrying our suffix.
+        std::fs::write(
+            &path,
+            r#"{"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"\"/opt/other\" wrapup"}]}]}}"#,
+        )
+        .unwrap();
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "claude: SessionEnd learning hook not registered")
+            .expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(
+            f.message.contains("load refresh"),
+            "must name the clearing action: {}",
+            f.message
+        );
+    }
+
     // --- disableAllHooks: informational, not a warning -----------------------
 
     #[test]
@@ -991,7 +1052,9 @@ mod learn_tests {
             Status::Ok,
             "absence under disableAllHooks is informational, not a warning"
         );
-        assert!(f.message.contains("entry-point triggers carry learning"));
+        // The exact sentence is the shared constant hook registration prints
+        // too — one source of truth, no drift between the two surfaces.
+        assert_eq!(f.message, crate::adapters::DISABLE_ALL_HOOKS_NOTE);
         assert!(
             find(&findings, "not registered").is_none(),
             "must not ALSO warn 'not registered': {findings:?}"
@@ -1154,5 +1217,37 @@ mod learn_tests {
             before, after,
             "check_learn_at must not write anything to the state dir"
         );
+    }
+
+    // --- eligibility_note format ---------------------------------------------
+
+    /// Lock the note's concrete text for one branch each: eligible-now, and a
+    /// waiting duration in the hours (and minutes) form.
+    #[test]
+    fn eligibility_note_formats_now_and_wait_branches() {
+        use crate::learn::trigger::Eligibility;
+        let eligible = Eligibility {
+            scan_due: true,
+            spend_due: true,
+            hint: false,
+            wait: Duration::ZERO,
+        };
+        assert_eq!(eligibility_note(&eligible), "eligible now");
+
+        let waiting = Eligibility {
+            scan_due: true,
+            spend_due: false,
+            hint: false,
+            wait: Duration::from_secs(2 * 3600 + 5 * 60), // 2h05m
+        };
+        assert_eq!(eligibility_note(&waiting), "in ~2h5m");
+
+        let waiting_minutes = Eligibility {
+            scan_due: false,
+            spend_due: false,
+            hint: false,
+            wait: Duration::from_secs(90),
+        };
+        assert_eq!(eligibility_note(&waiting_minutes), "in ~1m");
     }
 }

@@ -40,6 +40,11 @@ use crate::writer::{self, WriteAction, Writer, WrittenFile};
 pub mod commands;
 mod hooks_claude;
 
+// The one sentence both surfaces (hook registration notes and doctor's
+// Learning section) print for Claude's `disableAllHooks: true` state — a
+// single constant so the wording can never drift between them.
+pub use hooks_claude::DISABLE_ALL_HOOKS_NOTE;
+
 /// A declarative description of how to deliver the overlay to one agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
