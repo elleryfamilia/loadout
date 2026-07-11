@@ -6,6 +6,10 @@
 //!   machine-local, never synced (the config dir syncs via `load sync`; this
 //!   must not). Per-machine identity, the activation ack, the two-stamp
 //!   throttle, and the consecutive-failure pause counter.
+//! - [`watermarks`] also lives under `state_dir()/learn/`, same
+//!   machine-local/never-synced rule as `state` — how far the harvest
+//!   worker has read into each transcript source, so a run only mines
+//!   what's new.
 //! - [`journal`] lives under `global_config_dir()/inbox/` — synced by
 //!   design, so every machine's observations and dispositions travel with
 //!   `load sync` and fold together cleanly.
@@ -16,3 +20,4 @@
 
 pub mod journal;
 pub mod state;
+pub mod watermarks;
