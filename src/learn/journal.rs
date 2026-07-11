@@ -29,28 +29,41 @@
 //! those sort correctly as plain strings, same convention as
 //! `src/recents.rs`). Per candidate id:
 //!
-//! - An `Observed` event refreshes claim/kind/source/last_seen and unions in
+//! - An `Observed` event refreshes claim/kind/source/last_seen, unions in
 //!   its session refs (dedup by distinct `(agent, session_id, ts)` — that's
 //!   what `observation_count` counts) and its source machine id (that's what
-//!   `machines` lists), **regardless of current status** — even a suppressed
-//!   or promoted candidate keeps accruing observation metadata.
-//! - Status, however, is **sticky once disposed**: once a `Dismiss` or
-//!   `Promote` disposition has set status to `Suppressed`/`Promoted`, a later
-//!   `Observed` event cannot move it back to `Pending`/`Quarantined` — only
-//!   another disposition can (`Unsuppress` → `Pending`, `Promote` →
-//!   `Promoted`). This is the permanence the design pre-commits to for
-//!   `Dismiss` specifically; this module applies the same stickiness to
-//!   `Promote` for symmetry, since both are explicit user dispositions and,
-//!   per Decision #8, the worker is expected to never re-emit an `Observed`
-//!   for an already-promoted claim (exact duplicates are dropped before the
-//!   journal) — so the extension is defensive, not load-bearing.
-//! - A quarantined `Observed` (non-empty `quarantined`) folds to
-//!   `Quarantined`, never `Pending` — unless status is already sticky
-//!   (above).
-//! - `suppressed` (the id set) is tracked independently of `candidates`, so
-//!   a `Dismiss` for an id that has no `Observed` backing in this read (a
+//!   `machines` lists), **regardless of dispositions** — even a suppressed
+//!   or promoted candidate keeps accruing observation metadata. It also
+//!   replaces the quarantine verdict with its own: **the latest
+//!   observation's quarantine verdict wins**. Rationale: the claim gate
+//!   (injection lint) is deterministic on claim text, so a changed verdict
+//!   for the same id means the lint itself changed between versions, and
+//!   the newest verdict governs; quarantine has no manual clear action, so
+//!   a permanently sticky quarantine would be a dead end.
+//! - Final status is **derived at fold-end from the id's latest disposition
+//!   (by `ts`)**, never by inline mutation — so it is independent of how
+//!   dispositions interleave with observations across machines. A `Dismiss`
+//!   stamped before the id's first `Observed` (multi-machine clock skew)
+//!   still suppresses. The derivation: `Dismiss` → `Suppressed`, `Promote`
+//!   → `Promoted`, `Unsuppress` or no disposition at all → observation-
+//!   derived (`Quarantined` if the latest observation was quarantined, else
+//!   `Pending`).
+//! - Permanence falls out of that derivation: an `Observed` event can never
+//!   outrank a `Dismiss` or `Promote` — only a later disposition can change
+//!   the outcome (`Unsuppress` → back to observation-derived status). This
+//!   is the permanence the design pre-commits to for `Dismiss` specifically;
+//!   `Promote` gets the same treatment for symmetry, since both are explicit
+//!   user dispositions and, per Decision #8, the worker is expected to never
+//!   re-emit an `Observed` for an already-promoted claim (exact duplicates
+//!   are dropped before the journal) — so the extension is defensive, not
+//!   load-bearing.
+//! - `suppressed` (the id set) is exactly the ids whose latest disposition
+//!   is `Dismiss`. It is tracked independently of `candidates`, so a
+//!   `Dismiss` for an id that has no `Observed` backing in this read (a
 //!   future-compaction scenario: the observation could have been pruned
-//!   while the disposition survives) still registers the suppression.
+//!   while the disposition survives) still registers the suppression — and,
+//!   because status derives from the same latest-disposition map, the set
+//!   can never disagree with a folded candidate's status.
 //! - Malformed lines (bad JSON, wrong shape) are skipped, not fatal — a
 //!   `fold_at` call must never panic or error on a corrupt journal.
 
@@ -233,19 +246,9 @@ struct Working {
     source: String,
     first_seen: Option<String>,
     last_seen: String,
-    status: CandidateStatus,
     quarantine_labels: Vec<String>,
     machines: BTreeSet<String>,
     session_refs: HashSet<(String, String, String)>,
-}
-
-/// Whether `status` is a disposition outcome that [`Observed`] events must
-/// not override (see the module docs' stickiness rule).
-fn is_sticky(status: CandidateStatus) -> bool {
-    matches!(
-        status,
-        CandidateStatus::Suppressed | CandidateStatus::Promoted
-    )
 }
 
 /// Read every `journal-*.jsonl` file in `inbox_dir` and fold them into one
@@ -290,7 +293,12 @@ pub fn fold_at(inbox_dir: &Path) -> Fold {
     tagged.sort_by(|(_, a), (_, b)| a.ts().cmp(b.ts()));
 
     let mut states: BTreeMap<String, Working> = BTreeMap::new();
-    let mut suppressed: BTreeSet<String> = BTreeSet::new();
+    // The latest disposition per id (last write wins over the chronologically
+    // sorted event list). Status derives from THIS at fold-end, never from
+    // inline mutation — so a disposition that sorts before its id's first
+    // Observed (multi-machine clock skew) governs exactly like one that
+    // sorts after it.
+    let mut latest_disposition: BTreeMap<String, Action> = BTreeMap::new();
 
     for (machine_id, event) in tagged {
         match event {
@@ -308,46 +316,43 @@ pub fn fold_at(inbox_dir: &Path) -> Fold {
                 w.claim = o.claim.clone();
                 w.kind = o.kind.clone();
                 w.source = o.source.clone();
-
-                if !is_sticky(w.status) {
-                    match &o.quarantined {
-                        Some(labels) if !labels.is_empty() => {
-                            w.status = CandidateStatus::Quarantined;
-                            w.quarantine_labels = labels.clone();
-                        }
-                        _ => {
-                            w.status = CandidateStatus::Pending;
-                            w.quarantine_labels.clear();
-                        }
-                    }
-                }
+                // The latest observation's quarantine verdict wins: the claim
+                // gate is deterministic on claim text, so a changed verdict
+                // for the same id means the lint itself changed between
+                // versions, and the newest verdict governs. Quarantine has no
+                // manual clear action, so a sticky quarantine would be a dead
+                // end — a later clean Observed clears it, a later quarantined
+                // one replaces the labels.
+                w.quarantine_labels = o.quarantined.clone().unwrap_or_default();
             }
-            Event::Disposition(d) => match d.action {
-                Action::Dismiss => {
-                    suppressed.insert(d.id.clone());
-                    if let Some(w) = states.get_mut(&d.id) {
-                        w.status = CandidateStatus::Suppressed;
-                    }
-                }
-                Action::Unsuppress => {
-                    suppressed.remove(&d.id);
-                    if let Some(w) = states.get_mut(&d.id) {
-                        w.status = CandidateStatus::Pending;
-                    }
-                }
-                Action::Promote => {
-                    suppressed.remove(&d.id);
-                    if let Some(w) = states.get_mut(&d.id) {
-                        w.status = CandidateStatus::Promoted;
-                    }
-                }
-            },
+            Event::Disposition(d) => {
+                latest_disposition.insert(d.id.clone(), d.action);
+            }
         }
     }
+
+    // Suppressed = ids whose latest disposition is Dismiss. Derived from the
+    // same map as candidate status, so the two can never disagree.
+    let suppressed: BTreeSet<String> = latest_disposition
+        .iter()
+        .filter(|(_, action)| matches!(action, Action::Dismiss))
+        .map(|(id, _)| id.clone())
+        .collect();
 
     let candidates = states
         .into_iter()
         .map(|(id, w)| {
+            let status = match latest_disposition.get(&id) {
+                Some(Action::Dismiss) => CandidateStatus::Suppressed,
+                Some(Action::Promote) => CandidateStatus::Promoted,
+                Some(Action::Unsuppress) | None => {
+                    if w.quarantine_labels.is_empty() {
+                        CandidateStatus::Pending
+                    } else {
+                        CandidateStatus::Quarantined
+                    }
+                }
+            };
             let candidate = Candidate {
                 id: id.clone(),
                 claim: w.claim,
@@ -356,7 +361,7 @@ pub fn fold_at(inbox_dir: &Path) -> Fold {
                 observation_count: w.session_refs.len(),
                 first_seen: w.first_seen.unwrap_or_default(),
                 last_seen: w.last_seen,
-                status: w.status,
+                status,
                 quarantine_labels: w.quarantine_labels,
                 machines: w.machines.into_iter().collect(),
             };
@@ -804,6 +809,304 @@ mod tests {
         let fold = fold_at(inbox_dir);
         assert!(fold.candidates.is_empty());
         assert!(fold.suppressed.is_empty());
+    }
+
+    // --- wire-format lock --------------------------------------------------
+    //
+    // Journals persist across versions and sync between machines running
+    // DIFFERENT versions, and fold_at silently skips lines it can't parse —
+    // so a field rename would orphan every old line with a green suite.
+    // These goldens pin the exact on-disk JSON; any wire-shape change must
+    // fail here loudly and be made back-compatible instead.
+
+    #[test]
+    fn observed_event_wire_format_is_locked() {
+        let event = Event::Observed(Observed {
+            id: "a1".into(),
+            kind: "preference".into(),
+            source: "session".into(),
+            claim: "use pnpm".into(),
+            session_refs: vec![session_ref("claude", "s1", "2026-07-10T10:00:00Z")],
+            produced_by: produced_by(),
+            quarantined: Some(vec!["injection-lint".into()]),
+            ts: "2026-07-10T10:00:00Z".into(),
+        });
+        let golden = concat!(
+            r#"{"type":"observed","id":"a1","kind":"preference","source":"session","#,
+            r#""claim":"use pnpm","#,
+            r#""session_refs":[{"agent":"claude","session_id":"s1","ts":"2026-07-10T10:00:00Z"}],"#,
+            r#""produced_by":{"cli":"claude","model":"haiku"},"#,
+            r#""quarantined":["injection-lint"],"#,
+            r#""ts":"2026-07-10T10:00:00Z"}"#
+        );
+        assert_eq!(serde_json::to_string(&event).unwrap(), golden);
+        // And the literal wire form must parse back to the same value —
+        // this is what keeps yesterday's journal lines readable tomorrow.
+        assert_eq!(serde_json::from_str::<Event>(golden).unwrap(), event);
+
+        // A clean observation omits `quarantined` entirely (skip_serializing_if).
+        let clean = observed(
+            "a1",
+            "use pnpm",
+            vec![session_ref("claude", "s1", "2026-07-10T10:00:00Z")],
+            "2026-07-10T10:00:00Z",
+        );
+        let serialized = serde_json::to_string(&clean).unwrap();
+        assert!(
+            !serialized.contains("quarantined"),
+            "None quarantined must be omitted from the wire: {serialized}"
+        );
+    }
+
+    #[test]
+    fn disposition_event_wire_format_is_locked() {
+        let event = disposition("a1", Action::Dismiss, "2026-07-10T10:05:00Z");
+        let golden =
+            r#"{"type":"disposition","id":"a1","action":"dismiss","ts":"2026-07-10T10:05:00Z"}"#;
+        assert_eq!(serde_json::to_string(&event).unwrap(), golden);
+        assert_eq!(serde_json::from_str::<Event>(golden).unwrap(), event);
+
+        // All three action spellings are part of the wire contract.
+        for (action, spelling) in [
+            (Action::Promote, "\"promote\""),
+            (Action::Dismiss, "\"dismiss\""),
+            (Action::Unsuppress, "\"unsuppress\""),
+        ] {
+            let line = serde_json::to_string(&disposition("x", action, "t")).unwrap();
+            assert!(line.contains(spelling), "{line} must contain {spelling}");
+        }
+    }
+
+    // --- fold_at: dispositions vs observation order (clock skew) ------------
+
+    #[test]
+    fn fold_dismiss_sorting_before_first_observed_still_suppresses_status() {
+        // Multi-machine clock skew: machine-b's Dismiss carries an EARLIER ts
+        // than machine-a's first (and only) Observed. Status must still be
+        // Suppressed — and must agree with the `suppressed` set.
+        let dir = tempfile::tempdir().unwrap();
+        let inbox_dir = dir.path();
+        let id = candidate_id("always use pnpm");
+
+        append_events_at(
+            inbox_dir,
+            "machine-b",
+            &[disposition(&id, Action::Dismiss, "2026-07-10T09:00:00Z")],
+        )
+        .unwrap();
+        append_events_at(
+            inbox_dir,
+            "machine-a",
+            &[observed(
+                &id,
+                "always use pnpm",
+                vec![session_ref("claude", "s1", "2026-07-10T10:00:00Z")],
+                "2026-07-10T10:00:00Z",
+            )],
+        )
+        .unwrap();
+
+        let fold = fold_at(inbox_dir);
+        assert_eq!(fold.candidates[&id].status, CandidateStatus::Suppressed);
+        assert!(fold.suppressed.contains(&id));
+    }
+
+    #[test]
+    fn fold_promote_sorting_before_first_observed_still_promotes_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let inbox_dir = dir.path();
+        let id = candidate_id("always use pnpm");
+
+        append_events_at(
+            inbox_dir,
+            "machine-b",
+            &[disposition(&id, Action::Promote, "2026-07-10T09:00:00Z")],
+        )
+        .unwrap();
+        append_events_at(
+            inbox_dir,
+            "machine-a",
+            &[observed(
+                &id,
+                "always use pnpm",
+                vec![session_ref("claude", "s1", "2026-07-10T10:00:00Z")],
+                "2026-07-10T10:00:00Z",
+            )],
+        )
+        .unwrap();
+
+        let fold = fold_at(inbox_dir);
+        assert_eq!(fold.candidates[&id].status, CandidateStatus::Promoted);
+        assert!(!fold.suppressed.contains(&id));
+    }
+
+    #[test]
+    fn fold_promote_stays_promoted_despite_later_observed() {
+        let dir = tempfile::tempdir().unwrap();
+        let inbox_dir = dir.path();
+        let id = candidate_id("always use pnpm");
+
+        append_events_at(
+            inbox_dir,
+            "machine-a",
+            &[
+                observed(
+                    &id,
+                    "always use pnpm",
+                    vec![session_ref("claude", "s1", "2026-07-10T10:00:00Z")],
+                    "2026-07-10T10:00:00Z",
+                ),
+                disposition(&id, Action::Promote, "2026-07-10T10:05:00Z"),
+                // A later Observed must not knock it back to Pending.
+                observed(
+                    &id,
+                    "always use pnpm",
+                    vec![session_ref("claude", "s2", "2026-07-10T11:00:00Z")],
+                    "2026-07-10T11:00:00Z",
+                ),
+            ],
+        )
+        .unwrap();
+
+        let fold = fold_at(inbox_dir);
+        let c = &fold.candidates[&id];
+        assert_eq!(c.status, CandidateStatus::Promoted);
+        assert_eq!(
+            c.observation_count, 2,
+            "a promoted candidate still accrues observation metadata"
+        );
+    }
+
+    #[test]
+    fn fold_dismiss_from_another_machines_journal_suppresses() {
+        // The disposition syncs in from a different machine's journal than
+        // the one that observed the candidate.
+        let dir = tempfile::tempdir().unwrap();
+        let inbox_dir = dir.path();
+        let id = candidate_id("always use pnpm");
+
+        append_events_at(
+            inbox_dir,
+            "machine-a",
+            &[observed(
+                &id,
+                "always use pnpm",
+                vec![session_ref("claude", "s1", "2026-07-10T10:00:00Z")],
+                "2026-07-10T10:00:00Z",
+            )],
+        )
+        .unwrap();
+        append_events_at(
+            inbox_dir,
+            "machine-b",
+            &[disposition(&id, Action::Dismiss, "2026-07-10T11:00:00Z")],
+        )
+        .unwrap();
+
+        let fold = fold_at(inbox_dir);
+        let c = &fold.candidates[&id];
+        assert_eq!(c.status, CandidateStatus::Suppressed);
+        assert!(fold.suppressed.contains(&id));
+        assert_eq!(
+            c.machines,
+            vec!["machine-a".to_string()],
+            "machines lists observers only, not disposition sources"
+        );
+    }
+
+    #[test]
+    fn fold_survives_machine_id_rename_of_a_journal_file() {
+        // A machine reminted its id and its journal file got renamed to
+        // match (the design's testing section names this fixture). Machine
+        // attribution follows the CURRENT filename; dedupe and counts are
+        // unaffected because they key on candidate id and session refs.
+        let dir = tempfile::tempdir().unwrap();
+        let inbox_dir = dir.path();
+        let id = candidate_id("always use pnpm");
+
+        append_events_at(
+            inbox_dir,
+            "old-machine",
+            &[observed(
+                &id,
+                "always use pnpm",
+                vec![session_ref("claude", "s1", "2026-07-10T10:00:00Z")],
+                "2026-07-10T10:00:00Z",
+            )],
+        )
+        .unwrap();
+        std::fs::rename(
+            inbox_dir.join("journal-old-machine.jsonl"),
+            inbox_dir.join("journal-new-machine.jsonl"),
+        )
+        .unwrap();
+        // Post-rename appends land in the renamed file.
+        append_events_at(
+            inbox_dir,
+            "new-machine",
+            &[observed(
+                &id,
+                "always use pnpm",
+                vec![session_ref("claude", "s2", "2026-07-10T11:00:00Z")],
+                "2026-07-10T11:00:00Z",
+            )],
+        )
+        .unwrap();
+
+        let fold = fold_at(inbox_dir);
+        assert_eq!(fold.candidates.len(), 1);
+        let c = &fold.candidates[&id];
+        assert_eq!(
+            c.observation_count, 2,
+            "counts accumulate across the rename"
+        );
+        assert_eq!(
+            c.machines,
+            vec!["new-machine".to_string()],
+            "attribution follows the current filename"
+        );
+    }
+
+    // --- fold_at: quarantine verdict is the latest observation's ------------
+
+    #[test]
+    fn fold_later_clean_observed_clears_quarantine_to_pending() {
+        // The claim gate's verdict is deterministic on claim text, so a
+        // changed verdict for the same id means the lint changed between
+        // versions — the newest verdict governs (quarantine has no manual
+        // clear action, so a sticky quarantine would be a dead end).
+        let dir = tempfile::tempdir().unwrap();
+        let inbox_dir = dir.path();
+        let id = candidate_id("always use pnpm");
+
+        append_events_at(
+            inbox_dir,
+            "machine-a",
+            &[
+                quarantined_observed(
+                    &id,
+                    "always use pnpm",
+                    vec![session_ref("claude", "s1", "2026-07-10T10:00:00Z")],
+                    "2026-07-10T10:00:00Z",
+                ),
+                observed(
+                    &id,
+                    "always use pnpm",
+                    vec![session_ref("claude", "s2", "2026-07-10T11:00:00Z")],
+                    "2026-07-10T11:00:00Z",
+                ),
+            ],
+        )
+        .unwrap();
+
+        let fold = fold_at(inbox_dir);
+        let c = &fold.candidates[&id];
+        assert_eq!(c.status, CandidateStatus::Pending);
+        assert!(
+            c.quarantine_labels.is_empty(),
+            "a later clean verdict clears the labels: {:?}",
+            c.quarantine_labels
+        );
     }
 
     #[test]
