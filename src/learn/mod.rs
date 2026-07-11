@@ -18,8 +18,10 @@
 //! trigger fast path, detached worker, transcript readers, journal/inbox
 //! model.
 
+pub mod extract;
 pub mod journal;
 pub mod lock;
 pub mod readers;
+pub mod slices;
 pub mod state;
 pub mod watermarks;
