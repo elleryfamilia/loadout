@@ -93,6 +93,20 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
             println!("  ⚠  {}", f.message);
         }
     }
+
+    // Ambient learning paused after repeated failures: cheap (the `learn_active`
+    // flag already computed above, plus one more state-dir read) — surfaced here
+    // so a paused machine is visible without running `load learn status`. A
+    // read-only check with no side effects, so it runs even on `--dry-run`.
+    if learn_active {
+        if let Some(dir) = learn_state::learn_dir() {
+            if learn_state::paused_at(&dir) {
+                crate::warn_user!(
+                    "learning paused after repeated failures — see load learn status"
+                );
+            }
+        }
+    }
     Ok(())
 }
 

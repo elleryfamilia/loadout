@@ -4234,3 +4234,137 @@ fn learn_reset_clears_watermarks_but_keeps_journals() {
         "reset must never touch the review inbox journals"
     );
 }
+
+// --- T21: doctor learning section + refresh pause warning -------------------
+
+impl Fixture {
+    /// Write this machine's activation ack directly (bypassing `load learn
+    /// on`), so a test can seed "enabled + activated" state cheaply.
+    fn activate_learning(&self) {
+        self.write_state(
+            "learn/activation.json",
+            "{\"machine_id\":\"test-machine\",\"hostname\":\"test.local\",\
+             \"activated_at\":\"2026-07-10T00:00:00Z\"}\n",
+        );
+    }
+}
+
+/// `load refresh` prints the exact verbatim pause line to stderr when learning
+/// is both enabled (synced) and activated on this machine, and two seeded
+/// consecutive failures have paused ambient triggering.
+#[test]
+fn refresh_warns_on_stderr_when_learning_is_paused() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.activate_learning();
+    fx.write_state("learn/failures.json", "{\"consecutive\":2}\n");
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "learning paused after repeated failures — see load learn status",
+        ));
+}
+
+/// No seeded failures → the pause warning must be absent (a healthy, active
+/// machine stays quiet on this specific line).
+#[test]
+fn refresh_omits_pause_warning_when_not_paused() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.activate_learning();
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("learning paused").not());
+}
+
+/// Paused, but this machine was never activated (`enabled = true` alone isn't
+/// enough — the fast path's own gate requires the local activation ack). The
+/// warning must stay silent: an inactive machine can't be "ambiently paused"
+/// here in any way `load learn status` would call out.
+#[test]
+fn refresh_omits_pause_warning_when_not_activated() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.write_state("learn/failures.json", "{\"consecutive\":2}\n");
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("learning paused").not());
+}
+
+/// `load doctor` prints a "Learning" section. Smoke-tests the real wiring
+/// (real `Config` with built-in agents, real state-dir/`$HOME` resolution)
+/// end to end, complementing the fixture-injected unit tests in
+/// `commands::doctor::learn_tests`.
+#[test]
+fn doctor_prints_a_learning_section() {
+    let fx = Fixture::new();
+    fx.rust_project();
+
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Learning"))
+        .stdout(predicate::str::contains("load learn on"));
+}
+
+/// `load doctor` flags a learning hook left registered after learning went
+/// inactive on this machine (Decision #4's orphan case), across BOTH hook-file
+/// dialects, and names the clearing action.
+#[test]
+fn doctor_flags_orphaned_learn_hooks_both_dialects() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    // Cursor: flat `hooks.json` dialect.
+    fx.mkdir_home(".cursor");
+    fs::write(
+        fx.home().join(".cursor/hooks.json"),
+        r#"{"version":1,"hooks":{"stop":[{"command":"\"/usr/local/bin/load\" hook cursor --event session-end"}]}}"#,
+    )
+    .unwrap();
+    // Claude: nested `.claude/settings.json` matcher schema.
+    fx.mkdir_home(".claude");
+    fs::write(
+        fx.home().join(".claude/settings.json"),
+        r#"{"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"\"/usr/local/bin/load\" hook claude --event session-end","timeout":10}]}]}}"#,
+    )
+    .unwrap();
+
+    fx.cmd().arg("doctor").assert().success().stdout(
+        predicate::str::contains("still registered")
+            .and(predicate::str::contains("load learn off")),
+    );
+}
+
+/// `load doctor` never spawns the harvest worker: even with learning enabled
+/// and due, the state dir gains no eligible-hint/log/stamp files from a
+/// `load doctor` run.
+#[test]
+fn doctor_never_spawns_the_harvest_worker() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.activate_learning();
+
+    fx.cmd().arg("doctor").assert().success();
+
+    // No worker log, no eligible-hint dir, no scan/spend stamps — the fast
+    // path was never reached (doctor never calls `maybe_spawn`).
+    assert!(!fx.state_exists("learn/log.jsonl"));
+    assert!(!fx.state_exists("learn/worker.log"));
+    assert!(!fx.state_exists("learn/scan-stamp"));
+    assert!(!fx.state_exists("learn/spend-stamp"));
+    assert!(!fx.state_exists("learn/eligible"));
+}
