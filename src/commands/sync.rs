@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{bail, Context as _, Result};
 
 use crate::cli::{SyncAction, SyncArgs};
+use crate::providers::{probe_cli, CliProbe};
 use crate::style::Painter;
 use crate::sync::{self, GhCreate, PullOutcome, PushOutcome, ReconcileOutcome};
 
@@ -17,6 +18,7 @@ use crate::sync::{self, GhCreate, PullOutcome, PushOutcome, ReconcileOutcome};
 const MANUAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn run(rt: &super::Runtime, args: &SyncArgs) -> Result<()> {
+    ensure_git("git")?;
     let dir = sync::config_dir()?;
     let p = Painter::auto();
     let result = match &args.action {
@@ -154,6 +156,22 @@ fn offer_gh(dir: &Path, p: &Painter) -> Result<()> {
     }
 }
 
+/// Every sync op shells out to git, but a fresh machine (a minimal Debian or
+/// container image) may not have it installed. Catch that up front with install
+/// guidance instead of failing mid-operation with a raw spawn error. `program`
+/// is a parameter only so tests can probe a name that never exists; real
+/// callers pass "git". A probe timeout means git exists but is slow — proceed,
+/// the ops have their own timeouts.
+fn ensure_git(program: &str) -> Result<()> {
+    if matches!(probe_cli(program), CliProbe::Missing) {
+        bail!(
+            "`load sync` needs git, which wasn't found on this machine — install it and re-run \
+             (Debian/Ubuntu: `apt install git`, macOS: `xcode-select --install`)"
+        );
+    }
+    Ok(())
+}
+
 /// Whether we can prompt (both stdin and stdout are a terminal).
 fn interactive() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
@@ -260,5 +278,24 @@ fn changes(n: usize) -> String {
         "1 change".to_string()
     } else {
         format!("{n} changes")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_git_yields_install_guidance() {
+        let err = ensure_git("loadout-test-no-such-binary").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("needs git"), "unexpected message: {msg}");
+        assert!(msg.contains("apt install git"), "unexpected message: {msg}");
+    }
+
+    #[test]
+    fn present_git_passes_preflight() {
+        // git is a hard dev/CI dependency of this repo, so it's always present here.
+        assert!(ensure_git("git").is_ok());
     }
 }
