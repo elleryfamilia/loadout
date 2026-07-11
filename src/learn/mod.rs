@@ -18,6 +18,7 @@
 //! trigger fast path, detached worker, transcript readers, journal/inbox
 //! model.
 
+pub mod agent_cli;
 pub mod extract;
 pub mod gate;
 pub mod journal;
