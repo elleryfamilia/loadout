@@ -893,7 +893,38 @@ pub struct LogRecord {
     pub model: Option<String>,
     pub sessions: usize,
     pub candidates: usize,
+    /// Wall-clock run duration in milliseconds. Optional so a log line from an
+    /// older loadout (which never wrote it) still folds; `#[serde(default)]`
+    /// yields `None` when absent. Surfaced in the studio history panel.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    /// The CLI's token-usage blob as a display string — the spend-audit signal
+    /// the history panel shows. On the wire `usage` is polymorphic (a JSON
+    /// object like `{"input_tokens":10}`, a bare string, `null`, or absent), so
+    /// it is read leniently into a single display string rather than a fixed
+    /// shape: an object is compacted to its JSON text, a string kept verbatim,
+    /// and `null`/absent fold to `None`. Reading it as a plain `Option<String>`
+    /// would instead REJECT the common object form and drop the whole log line.
+    #[serde(default, deserialize_with = "de_usage_string")]
+    pub usage: Option<String>,
     pub outcome: String,
+}
+
+/// Lenient deserializer for [`LogRecord::usage`]: accept any JSON value and
+/// render it to a display string. An object (the usual `{"input_tokens":…}`
+/// blob) becomes its compact JSON text, a string stays verbatim, and `null`
+/// becomes `None`. This is what lets `usage` be an `Option<String>` without a
+/// present-but-object value failing the whole line's parse.
+fn de_usage_string<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(v.and_then(|v| match v {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => Some(s),
+        other => Some(other.to_string()),
+    }))
 }
 
 impl LogRecord {
@@ -1585,6 +1616,8 @@ mod tests {
             model: None,
             sessions: 0,
             candidates: 0,
+            duration_ms: None,
+            usage: None,
             outcome: "extracted".to_string(),
         };
         assert!(good.ts_unix().is_some());
@@ -1592,5 +1625,42 @@ mod tests {
         let mut bad = good.clone();
         bad.ts = "not a timestamp".to_string();
         assert!(bad.ts_unix().is_none());
+    }
+
+    #[test]
+    fn log_record_reads_object_string_and_absent_usage_shapes() {
+        // The production wire shape writes `usage` as a JSON OBJECT
+        // (`{"input_tokens":…}`). A naive `Option<String>` would reject that and
+        // `read_log` would silently drop the whole (successful, spend-bearing)
+        // run — the exact spend-audit line the studio history must show. The
+        // lenient deserializer keeps all three real shapes.
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("log.jsonl");
+        write_log_lines(
+            &log_path,
+            &[
+                // object usage (the real extracted-run shape)
+                r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","model":"haiku","sessions":1,"dropped_over_cap":0,"candidates":1,"quarantined":0,"duration_ms":1200,"outcome":"extracted","usage":{"input_tokens":10,"output_tokens":5},"skipped":[]}"#,
+                // string usage
+                r#"{"ts":"2026-07-10T10:05:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"empty","usage":"raw-blob"}"#,
+                // absent usage + absent duration (older loadout)
+                r#"{"ts":"2026-07-10T10:10:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"empty"}"#,
+            ],
+        );
+
+        let records = read_log(&log_path);
+        assert_eq!(
+            records.len(),
+            3,
+            "no line dropped by a usage-shape mismatch"
+        );
+        assert_eq!(
+            records[0].usage.as_deref(),
+            Some(r#"{"input_tokens":10,"output_tokens":5}"#)
+        );
+        assert_eq!(records[0].duration_ms, Some(1200));
+        assert_eq!(records[1].usage.as_deref(), Some("raw-blob"));
+        assert_eq!(records[2].usage, None);
+        assert_eq!(records[2].duration_ms, None);
     }
 }

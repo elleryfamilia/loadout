@@ -5009,4 +5009,133 @@ mod tests {
         assert!(body.contains("claude"), "cli shown");
         assert!(body.contains("3 sessions"), "session count shown");
     }
+
+    /// XSS regression at the trust boundary: candidate claim text is ultimately
+    /// third-party transcript content, so a claim carrying a `<script>` tag must
+    /// render HTML-escaped in the inbox tab and NEVER as a raw tag. `maud`
+    /// escapes by construction; this locks it (a future `PreEscaped` on this path
+    /// would be a stored-XSS hole in the studio the user opens in their browser).
+    #[test]
+    fn inbox_tab_escapes_script_tags_in_candidate_claim() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_candidate(
+            d.path(),
+            "machine-a",
+            "<script>alert(1)</script> always use tabs",
+        );
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/tab/inbox", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+            "the script tag must render escaped: {body}"
+        );
+        assert!(
+            !body.contains("<script>alert(1)</script>"),
+            "a raw <script> tag must never reach the rendered inbox HTML"
+        );
+    }
+
+    /// The shell's Inbox badge shows the actual pending COUNT, not merely its
+    /// presence — two pending candidates render a "2" badge.
+    #[test]
+    fn inbox_shell_badge_shows_the_pending_count_value() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_candidate(d.path(), "machine-a", "Always use pnpm, never npm.");
+        seed_candidate(d.path(), "machine-a", "Prefer rg over grep.");
+
+        let shell = body_of(route(&st, &req("GET", "/", "", &[HOST, COOKIE], "")));
+        assert!(
+            shell.contains("tab-badge\">2<"),
+            "the badge must carry the pending count value 2: {shell}"
+        );
+    }
+
+    /// The history panel surfaces run DURATION and token USAGE (the spend-audit
+    /// signals). The seeded line carries `usage` as a JSON OBJECT — the real
+    /// extracted-run wire shape — proving the lenient `LogRecord::usage` read
+    /// keeps object-usage lines instead of dropping them.
+    #[test]
+    fn inbox_history_shows_run_duration_and_token_usage() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let dir = d.path().join("learn");
+        std::fs::create_dir_all(&dir).unwrap();
+        let line = r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","model":"haiku","sessions":1,"dropped_over_cap":0,"candidates":1,"quarantined":0,"duration_ms":1200,"outcome":"extracted","usage":{"input_tokens":10,"output_tokens":5},"skipped":[]}"#;
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("log.jsonl"))
+            .unwrap();
+        writeln!(f, "{line}").unwrap();
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("input_tokens"),
+            "token usage must surface for spend audit: {body}"
+        );
+        assert!(body.contains("1200ms"), "run duration must surface: {body}");
+    }
+
+    /// Editing a claim before promote keeps the disposition keyed to the
+    /// ORIGINAL candidate id (the one the user was looking at), not the edited
+    /// text's new id — verified through `Session::apply`. Otherwise the
+    /// candidate the user acted on would stay Pending forever while a phantom id
+    /// got promoted.
+    #[test]
+    fn inbox_edited_claim_promote_keys_disposition_to_original_id_through_apply() {
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(INBOX_CFG));
+        let original = seed_candidate(d.path(), "machine-a", "Always use pnpm, never npm.");
+        let edited_claim = "Prefer pnpm for all installs.";
+        let edited_id = crate::learn::journal::candidate_id(edited_claim);
+        assert_ne!(edited_id, original, "the edit must change the candidate id");
+
+        // Promote with the EDITED claim text.
+        let staged = body_of(route(
+            &st,
+            &req(
+                "POST",
+                &format!("/inbox/{original}/promote"),
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "claim=Prefer+pnpm+for+all+installs.&mode=new&name=prefer-pnpm",
+            ),
+        ));
+        assert!(
+            staged.contains("staged promotion"),
+            "promote staged: {staged}"
+        );
+
+        // Apply flushes both the config write and the disposition.
+        body_of(route(
+            &st,
+            &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+
+        let fold = inbox_fold(d.path());
+        assert_eq!(
+            fold.candidates[&original].status,
+            crate::learn::journal::CandidateStatus::Promoted,
+            "the ORIGINAL id is the one the disposition settles"
+        );
+        assert!(
+            !fold.candidates.contains_key(&edited_id),
+            "the edited text must not spawn a phantom candidate"
+        );
+        // The edited text is what actually landed as the fragment guidance.
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
+        assert!(
+            on_disk.contains("Prefer pnpm for all installs."),
+            "the edited claim text is the written guidance: {on_disk}"
+        );
+    }
 }

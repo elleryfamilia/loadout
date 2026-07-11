@@ -560,6 +560,38 @@ mod tests {
     }
 
     #[test]
+    fn single_oversized_newest_session_yields_empty_all_dropped_over_cap() {
+        // T9 edge, locked intentionally: the ONLY (and newest) session's
+        // already-redacted text exceeds `max_bytes`. The strict-prefix loop must
+        // break on it immediately — no best-fit skip to a smaller session exists
+        // to fall back to — so `slices` is empty and the session is counted in
+        // `dropped_over_cap`, not silently lost. This is the boundary the
+        // watermark's drop-don't-defer advance relies on (the worker still moves
+        // past it), so an over-cap newest session can never wedge the harvest.
+        let big = "x".repeat(200);
+        let s = slice(
+            "only",
+            Some(Path::new("/p")),
+            "2026-06-03T10:00:00.000Z",
+            &[&big],
+        );
+        let caps = Caps {
+            max_sessions: 20,
+            max_bytes: 50, // < 200 → the sole session cannot fit
+            age_cutoff_days: 14,
+        };
+        let out = assemble(vec![s], &caps, LearnScope::All, None, work_dir());
+        assert!(
+            out.slices.is_empty(),
+            "an oversized sole/newest session admits nothing"
+        );
+        assert_eq!(
+            out.dropped_over_cap, 1,
+            "the dropped session is counted, not silently lost"
+        );
+    }
+
+    #[test]
     fn full_pipeline_orders_all_six_steps_together() {
         // One fixture per drop reason, plus one clean survivor, run through
         // the whole pipeline at once as an end-to-end sanity check (each

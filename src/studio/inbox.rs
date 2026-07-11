@@ -724,7 +724,9 @@ fn promote_modal(
 
 /// The run-log history panel. Fields come from [`worker::LogRecord`] (the
 /// stable read-back reader); it exposes ts, trigger, cli/model, sessions,
-/// candidates, and outcome.
+/// candidates, run duration, token usage, and outcome. Duration and usage are
+/// the spend-audit signals — usage is shown verbatim so a metered run's cost is
+/// legible on the machine that harvested it.
 fn history_fragment(records: &[LogRecord]) -> String {
     html! {
         div class="inbox" {
@@ -751,6 +753,14 @@ fn history_fragment(records: &[LogRecord]) -> String {
                             }
                             span class="log-counts muted" {
                                 (r.sessions) " sessions · " (r.candidates) " candidates"
+                            }
+                            @if let Some(ms) = r.duration_ms {
+                                span class="log-duration muted" { (ms) "ms" }
+                            }
+                            // Token usage — the spend-audit signal. Untrusted
+                            // CLI-derived text, escaped by maud.
+                            @if let Some(usage) = &r.usage {
+                                span class="log-usage muted" { "usage " (usage) }
                             }
                         }
                     }
