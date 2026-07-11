@@ -33,19 +33,24 @@ use std::time::{Duration, SystemTime};
 
 pub mod claude;
 pub mod codex;
+pub mod gemini;
 
 /// One harvestable session's user-authored text, plus everything the worker
 /// needs to attribute it and to advance the watermark exactly once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSlice {
-    /// Which reader produced this (`"claude"`, later `"codex"`/`"gemini"`).
+    /// Which reader produced this (`"claude"`, `"codex"`, or `"gemini"`).
     /// A `&'static str` because the set is closed and known at compile time.
     pub agent: &'static str,
-    /// The session identifier. For file-per-session stores (claude, codex)
-    /// this is the file stem, which is also the store's own session id.
+    /// The session identifier, sourced per reader: claude uses the file stem
+    /// (which is the session uuid); codex uses the `session_meta` payload's
+    /// `id` (the file name is `rollout-*`, not the id); gemini uses the
+    /// `sessionId` field on each `logs.json` entry.
     pub session_id: String,
     /// The session's working directory, taken from the first line that
-    /// carries one. `None` when no scanned line recorded a `cwd`.
+    /// carries one. `None` when no scanned line recorded a `cwd` — always the
+    /// case for gemini, whose `logs.json` carries no cwd (the directory hash
+    /// is the only locator; see [`gemini::gemini_project_hash`]).
     pub cwd: Option<PathBuf>,
     /// Timestamp (verbatim from the transcript, RFC 3339 UTC) of the newest
     /// user message in `messages` — the freshness signal the worker sorts by.
@@ -59,6 +64,8 @@ pub struct SessionSlice {
     /// Byte offset one past the last **fully parsed** line (a complete,
     /// newline-terminated line). The worker records this as the new watermark
     /// so the next run resumes exactly here — never inside a partial line.
+    /// Always `0` for gemini, which has no byte offsets: it resumes by the
+    /// processed-`sessionId` set ([`crate::learn::watermarks::Watermarks::gemini_record`]).
     pub end_offset: u64,
 }
 

@@ -1,0 +1,8 @@
+[
+  42,
+  {"sessionId":"aaaaaaaa-aaaa-4bbb-8ccc-000000000001","messageId":0,"type":"user","timestamp":"2026-06-01T08:00:00.000Z"},
+  {"sessionId":"aaaaaaaa-aaaa-4bbb-8ccc-000000000001","messageId":1,"type":"assistant","message":"assistant reply, not user text","timestamp":"2026-06-01T08:01:00.000Z"},
+  {"sessionId":"aaaaaaaa-aaaa-4bbb-8ccc-000000000001","messageId":2,"type":"user","message":"   ","timestamp":"2026-06-01T08:02:00.000Z"},
+  {"sessionId":"bbbbbbbb-aaaa-4bbb-8ccc-000000000002","messageId":0,"type":"user","message":"Document every public function.","timestamp":"2026-06-01T08:03:00.000Z"},
+  {"sessionId":"bbbbbbbb-aaaa-4bbb-8ccc-000000000002","messageId":1,"type":"user","message":"Never leave a failing test in main.","timestamp":"2026-06-01T08:04:00.000Z"}
+]
