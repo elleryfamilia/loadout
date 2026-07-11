@@ -38,6 +38,7 @@ use crate::workflow::Workflow;
 use crate::writer::{self, WriteAction, Writer, WrittenFile};
 
 pub mod commands;
+mod hooks_claude;
 
 /// A declarative description of how to deliver the overlay to one agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,18 +185,19 @@ pub enum HookPurpose {
 }
 
 /// The on-disk shape of an agent's hooks file, so registration writes the right
-/// dialect. `Flat` is the single-array-of-`{command}` layout Cursor uses (and
-/// the only writer that exists in this task); `ClaudeNested` is Claude Code's
-/// nested matcher schema in `.claude/settings.json` — its writer lands in a
-/// later task, and both [`apply_hook_registry_at`] and [`remove_learn_hooks_at`]
-/// deliberately skip `ClaudeNested` entries until then rather than corrupt that
-/// nested file with a flat write. Code-side descriptor data only.
+/// dialect. `Flat` is the single-array-of-`{command}` layout Cursor uses;
+/// `ClaudeNested` is Claude Code's nested matcher schema in `.claude/settings.json`,
+/// written by [`hooks_claude`]. Both [`apply_hook_registry_at`] and
+/// [`remove_learn_hooks_at`] route on this so a flat `{command}` line is never
+/// written into the nested file (which would corrupt it). Code-side descriptor
+/// data only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HookFormat {
     /// Flat `{ hooks: { <event>: [ { command } ] } }` (Cursor's `hooks.json`).
     #[default]
     Flat,
-    /// Claude Code's nested matcher schema (writer lands in a later task).
+    /// Claude Code's nested matcher schema in `.claude/settings.json`
+    /// (`hooks.<event>: [{ matcher?, hooks: [{ type, command, timeout? }] }]`).
     ClaudeNested,
 }
 
@@ -285,8 +287,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             review_commands: vec!["/code-review".into(), "/security-review".into()],
             // Ambient learning: a SessionEnd hook fires the harvest fast path when
             // a Claude session ends. Written in the nested matcher schema of
-            // `.claude/settings.json` (`format: ClaudeNested`) — the writer for it
-            // lands in a later task, so bootstrap skips it for now.
+            // `.claude/settings.json` (`format: ClaudeNested`) by `hooks_claude`.
             learn_hooks: vec![HookRegistry {
                 hooks_file: ".claude/settings.json".into(),
                 event: "SessionEnd".into(),
@@ -1264,12 +1265,11 @@ fn register_if_installed(
 /// Deregister every agent's ambient-learning hooks — called by `load learn off`.
 /// Strips only entries whose command carries a learn subcommand's ` <subcommand>`
 /// suffix, so Cursor's freshness hook (`… hook cursor`, a *different* suffix) and
-/// every other tool's entries survive byte-for-byte. Only the `Flat` dialect is
-/// handled here; `ClaudeNested` learn hooks are skipped until their writer lands
-/// (a later task), symmetric with [`apply_hook_registry_at`] — nothing writes
-/// them today, so nothing needs removing today. A one-time `.loadout-bak` backup
-/// precedes the first edit of a pre-existing file. Returns human notes for each
-/// file actually cleaned.
+/// every other tool's entries survive. Routes on [`HookRegistry::format`]: `Flat`
+/// entries via [`remove_hook_command`], `ClaudeNested` via
+/// [`hooks_claude::remove_claude_hook`] (which also drops the loadout-created
+/// containers it emptied). A one-time `.loadout-bak` backup precedes the first
+/// edit of a pre-existing file. Returns human notes for each file actually cleaned.
 pub fn remove_learn_hooks(config: &Config, dry_run: bool) -> Vec<String> {
     let Some(home) = config::home_dir() else {
         return Vec::new();
@@ -1282,15 +1282,18 @@ fn remove_learn_hooks_at(config: &Config, home: &Path, dry_run: bool) -> Vec<Str
     let mut notes = Vec::new();
     for d in &config.agents {
         for hr in &d.learn_hooks {
-            if hr.format != HookFormat::Flat {
-                // ClaudeNested remover lands with its writer (a later task).
-                continue;
-            }
             let path = home.join(&hr.hooks_file);
             let Ok(existing) = std::fs::read_to_string(&path) else {
                 continue; // absent/unreadable → nothing to remove (never clobber)
             };
-            match remove_hook_command(&existing, &hr.subcommand) {
+            // Route on dialect: Cursor's flat array vs Claude Code's nested schema.
+            let removed = match hr.format {
+                HookFormat::Flat => remove_hook_command(&existing, &hr.subcommand),
+                HookFormat::ClaudeNested => {
+                    hooks_claude::remove_claude_hook(&existing, &hr.subcommand)
+                }
+            };
+            match removed {
                 Ok(Some(updated)) => {
                     if dry_run {
                         notes.push(format!(
@@ -1344,11 +1347,12 @@ fn apply_hook_registry(
 }
 
 /// Home-explicit core of [`apply_hook_registry`] (the `_at` test seam). Routes on
-/// [`HookRegistry::format`]: `Flat` writes the single-array dialect exactly as
-/// before; `ClaudeNested` is intentionally a no-op here — Claude Code's nested
-/// `.claude/settings.json` needs a dedicated writer (a later task), and emitting
-/// a flat `{command}` line into that nested file would corrupt it, so we skip
-/// rather than write the wrong shape.
+/// [`HookRegistry::format`]: `Flat` writes Cursor's single-array dialect;
+/// `ClaudeNested` writes Claude Code's nested matcher schema in
+/// `.claude/settings.json` via [`hooks_claude`]. Both share the read → backup →
+/// atomic-write → note path; only the JSON transform differs. Claude Code's
+/// top-level `disableAllHooks: true` short-circuits (register nothing) and
+/// surfaces [`hooks_claude::DISABLE_ALL_HOOKS_NOTE`].
 fn apply_hook_registry_at(
     writer: &dyn Writer,
     home: &Path,
@@ -1357,10 +1361,6 @@ fn apply_hook_registry_at(
     notes: &mut Vec<String>,
     warnings: &mut Vec<String>,
 ) -> crate::Result<()> {
-    if hr.format != HookFormat::Flat {
-        // ClaudeNested writer lands in a later task; never flat-write the nested file.
-        return Ok(());
-    }
     let path = home.join(&hr.hooks_file);
     let existing = match std::fs::read_to_string(&path) {
         Ok(s) => Some(s),
@@ -1374,13 +1374,35 @@ fn apply_hook_registry_at(
             return Ok(());
         }
     };
+
+    // Claude Code disables every hook when this top-level flag is set — our entry
+    // would be inert, so we register nothing and tell the user learning falls back
+    // to entry-point triggers.
+    if hr.format == HookFormat::ClaudeNested
+        && hooks_claude::hooks_disabled(existing.as_deref().unwrap_or(""))
+    {
+        notes.push(hooks_claude::DISABLE_ALL_HOOKS_NOTE.to_string());
+        return Ok(());
+    }
+
     let Ok(exe) = std::env::current_exe() else {
         warnings.push("could not resolve the load binary path for hook registration".into());
         return Ok(());
     };
     let command = format!("\"{}\" {}", exe.display(), hr.subcommand);
 
-    match upsert_hook_command(existing.as_deref(), &hr.event, &hr.subcommand, &command) {
+    let updated = match hr.format {
+        HookFormat::Flat => {
+            upsert_hook_command(existing.as_deref(), &hr.event, &hr.subcommand, &command)
+        }
+        HookFormat::ClaudeNested => hooks_claude::upsert_claude_hook(
+            existing.as_deref().unwrap_or(""),
+            &hr.event,
+            &hr.subcommand,
+            &command,
+        ),
+    };
+    match updated {
         Ok(Some(updated)) => {
             // One-time backup of a pre-existing file we're about to modify.
             if existing.is_some() && !writer.is_dry_run() {
@@ -1805,7 +1827,7 @@ mod hook_registry_tests {
     }
 
     #[test]
-    fn bootstrap_registers_flat_learn_hook_but_defers_claude_nested_when_active() {
+    fn bootstrap_registers_both_learn_dialects_when_active() {
         let home = installed_home();
         bootstrap_hook_registrations_at(&Config::defaults(), true, home.path(), false);
 
@@ -1828,13 +1850,21 @@ mod hook_registry_tests {
                 .ends_with(" hook cursor --event session-end"),
             "cursor's Flat learn hook is registered: {stop:?}"
         );
-        // Claude's learn hook is ClaudeNested → deferred to the nested writer (a
-        // later task). A flat write here would corrupt .claude/settings.json, so
-        // bootstrap writes nothing to it today.
-        assert!(
-            !home.path().join(".claude/settings.json").exists(),
-            "ClaudeNested learn hook is deferred, not flat-written"
-        );
+        // Claude's learn hook is ClaudeNested → written in the nested matcher schema
+        // of .claude/settings.json by the dedicated writer (Task 17).
+        let claude: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let groups = claude["hooks"]["SessionEnd"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        let inner = groups[0]["hooks"].as_array().unwrap();
+        assert_eq!(inner[0]["type"], "command");
+        assert!(inner[0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with(" hook claude --event session-end"));
+        assert_eq!(inner[0]["timeout"], 10);
     }
 
     // --- remove_learn_hooks at the descriptor level -------------------------
@@ -1876,6 +1906,49 @@ mod hook_registry_tests {
             "backup written before edit"
         );
         // Idempotent: a second removal finds nothing left and writes nothing new.
+        let again = remove_learn_hooks_at(&Config::defaults(), home.path(), false);
+        assert!(again.is_empty(), "second removal is a no-op");
+    }
+
+    /// `remove_learn_hooks_at` dispatches the ClaudeNested dialect to the nested
+    /// writer: our SessionEnd group is stripped, a foreign sibling group and every
+    /// foreign key survive, a `.loadout-bak` backup is written, and it is idempotent.
+    #[test]
+    fn remove_learn_hooks_strips_claude_nested_keeps_foreign() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        let ours = "\"/usr/local/bin/load\" hook claude --event session-end";
+        let foreign = "\"/opt/other\" wrapup";
+        let contents = serde_json::to_string_pretty(&serde_json::json!({
+            "model": "keep-me",
+            "hooks": {
+                "SessionEnd": [
+                    { "hooks": [ { "type": "command", "command": foreign } ] },
+                    { "hooks": [ { "type": "command", "command": ours, "timeout": 10 } ] }
+                ]
+            }
+        }))
+        .unwrap();
+        let path = home.path().join(".claude/settings.json");
+        std::fs::write(&path, &contents).unwrap();
+
+        let notes = remove_learn_hooks_at(&Config::defaults(), home.path(), false);
+        assert!(!notes.is_empty(), "removal reported an action");
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let se = v["hooks"]["SessionEnd"].as_array().unwrap();
+        assert_eq!(
+            se.len(),
+            1,
+            "our emptied group dropped, foreign sibling kept"
+        );
+        assert_eq!(se[0]["hooks"][0]["command"], foreign);
+        assert_eq!(v["model"], "keep-me", "foreign key preserved");
+        assert!(
+            path.with_extension("json.loadout-bak").exists(),
+            "backup written before edit"
+        );
         let again = remove_learn_hooks_at(&Config::defaults(), home.path(), false);
         assert!(again.is_empty(), "second removal is a no-op");
     }
