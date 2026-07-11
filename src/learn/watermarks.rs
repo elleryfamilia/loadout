@@ -46,7 +46,7 @@ const VERSION: u32 = 1;
 
 /// How far the worker has read into one append-only transcript file
 /// (claude/codex JSONL sources resume by byte offset).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileMark {
     /// Bytes of the file already scanned; the next run resumes from here.
     pub bytes_processed: u64,
@@ -132,12 +132,16 @@ impl Watermarks {
     /// Record a new read position for `file`, monotonically: the stored
     /// `bytes_processed`/`mtime_seen` become `max(current, new)`, never
     /// regressing. See the module docs for why this must never be a plain
-    /// overwrite.
+    /// overwrite. Refused (no-op) while the store is corrupt — like
+    /// `trust.rs::record`, corruption blocks the mutation itself, not just
+    /// the save: a corrupt load leaves an in-memory default, and marks
+    /// fabricated on top of it would read back through
+    /// [`Watermarks::mark`] as if they were legitimate resume points.
     pub fn advance(&mut self, file: &str, offset: u64, mtime: i64) {
-        let entry = self.file.files.entry(file.to_string()).or_insert(FileMark {
-            bytes_processed: 0,
-            mtime_seen: 0,
-        });
+        if self.corrupt {
+            return;
+        }
+        let entry = self.file.files.entry(file.to_string()).or_default();
         entry.bytes_processed = entry.bytes_processed.max(offset);
         entry.mtime_seen = entry.mtime_seen.max(mtime);
     }
@@ -149,8 +153,12 @@ impl Watermarks {
 
     /// Record a gemini session id as harvested. Idempotent: recording the
     /// same id twice is a no-op (the set can only grow, never shrink), the
-    /// same monotonic spirit as [`Watermarks::advance`].
+    /// same monotonic spirit as [`Watermarks::advance`]. Refused (no-op)
+    /// while the store is corrupt, for the same reason as `advance`.
     pub fn gemini_record(&mut self, session_id: &str) {
+        if self.corrupt {
+            return;
+        }
         self.file.gemini_sessions.insert(session_id.to_string());
     }
 
@@ -161,8 +169,13 @@ impl Watermarks {
 
     /// Set the baseline only if it is not already set — the first
     /// `load learn on` (or the first run after a `reset`) fixes it; later
-    /// calls must never move it.
+    /// calls must never move it. Refused (no-op) while the store is
+    /// corrupt, for the same reason as `advance` — the on-disk store may
+    /// hold a real baseline this in-memory default can't see.
     pub fn set_baseline_if_absent(&mut self, ts: &str) {
+        if self.corrupt {
+            return;
+        }
         if self.file.baseline.is_none() {
             self.file.baseline = Some(ts.to_string());
         }
@@ -262,6 +275,40 @@ mod tests {
         wm.advance("a.jsonl", 10, 10);
         wm.save(&set(&["a.jsonl"])).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), newer);
+    }
+
+    #[test]
+    fn mutators_are_no_ops_on_a_corrupt_store() {
+        // A corrupt load leaves an in-memory default; mutation must be
+        // refused too (like trust.rs::record), not just the save — otherwise
+        // a caller that mutates before checking corrupt() fabricates marks
+        // this run, and mark()/gemini_seen()/baseline() report them back as
+        // if they were legitimate resume points (the "silent misread" the
+        // design forbids).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("watermarks.json");
+        let newer = r#"{"version":999,"files":{},"gemini_sessions":[],"baseline":null}"#;
+        std::fs::write(&path, newer).unwrap();
+
+        let mut wm = Watermarks::load_from(&path);
+        assert!(wm.corrupt());
+
+        wm.advance("a.jsonl", 500, 1_000);
+        wm.gemini_record("sess-1");
+        wm.set_baseline_if_absent("2026-01-01T00:00:00Z");
+
+        assert!(
+            wm.mark("a.jsonl").is_none(),
+            "advance on a corrupt store must not fabricate a mark"
+        );
+        assert!(
+            !wm.gemini_seen("sess-1"),
+            "gemini_record on a corrupt store must not record"
+        );
+        assert!(
+            wm.baseline().is_none(),
+            "set_baseline_if_absent on a corrupt store must not set"
+        );
     }
 
     #[test]
