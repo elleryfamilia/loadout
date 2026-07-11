@@ -20,5 +20,6 @@
 
 pub mod journal;
 pub mod lock;
+pub mod readers;
 pub mod state;
 pub mod watermarks;
