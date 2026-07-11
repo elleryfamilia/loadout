@@ -150,16 +150,31 @@ impl Event {
     }
 }
 
-/// sha256 hex of the normalized claim text: trim, collapse inner whitespace
-/// to single spaces, lowercase. Stable across re-observations that reuse the
-/// exact pending claim text (Decision #8's prompt-anchoring contract), so
-/// the same durable preference always folds to the same candidate id.
-pub fn candidate_id(claim: &str) -> String {
-    let normalized = claim
+/// Normalize claim text the same way [`candidate_id`] hashes it: trim,
+/// collapse inner whitespace to single spaces, lowercase. Exposed (not just
+/// inlined into `candidate_id`) so [`crate::learn::gate`] can run the
+/// injection lint over both a claim's raw and normalized form: two claims
+/// that normalize identically share one candidate id, and per this module's
+/// fold semantics **the latest observation's quarantine verdict wins** — so
+/// if only the raw form of a claim tripped the lint, a later differently-
+/// cased/spaced re-observation of the same normalized claim could compute a
+/// clean verdict and silently clear the quarantine. Checking the normalized
+/// form too closes that gap: both variants see the identical normalized
+/// string, so whatever it trips, both trip.
+pub fn normalize(claim: &str) -> String {
+    claim
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .to_lowercase();
+        .to_lowercase()
+}
+
+/// sha256 hex of the normalized claim text (see [`normalize`]). Stable
+/// across re-observations that reuse the exact pending claim text
+/// (Decision #8's prompt-anchoring contract), so the same durable
+/// preference always folds to the same candidate id.
+pub fn candidate_id(claim: &str) -> String {
+    let normalized = normalize(claim);
     let digest = Sha256::digest(normalized.as_bytes());
     hex_encode(&digest)
 }

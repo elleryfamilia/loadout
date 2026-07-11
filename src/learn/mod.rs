@@ -19,6 +19,7 @@
 //! model.
 
 pub mod extract;
+pub mod gate;
 pub mod journal;
 pub mod lock;
 pub mod readers;
