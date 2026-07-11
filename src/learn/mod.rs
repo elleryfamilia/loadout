@@ -19,5 +19,6 @@
 //! model.
 
 pub mod journal;
+pub mod lock;
 pub mod state;
 pub mod watermarks;
