@@ -293,19 +293,29 @@ fn run_body(
     if !guard.still_held() {
         return Ok(empty_outcome(ctx, Outcome::Fenced));
     }
+    // Swallowing this write error is tolerable: the scan stamp only debounces
+    // free re-scans. A missing stamp means the fast path re-scans sooner —
+    // wasted stat()s, never money. Contrast the SPEND stamp at step 6, whose
+    // write failure must abort the run before the paid call.
     let _ = state::write_stamp(&ctx.scan_stamp);
 
     // --- Step 3: watermarks, scan, assemble ------------------------------
     let mut wm = Watermarks::load_from(&ctx.watermarks_path);
     if wm.corrupt() {
+        // The warning is deliberately NOT fenced: the store is corrupt
+        // regardless of who holds the lock, and stderr advice is not shared
+        // state. The failure counter and the log ARE shared state the healthy
+        // holder owns, so both writes sit behind the fence — a fenced-out
+        // worker writes nothing, consistent with every other branch.
         crate::warn_user!(
             "learning watermark store is corrupt — run `load learn reset` to re-baseline \
              (it harvests forward only, never re-mines old sessions)"
         );
-        state::record_failure_at(&ctx.learn_dir);
-        if guard.still_held() {
-            log_run(ctx, &LogFields::new(ctx, Outcome::Corrupt, start.elapsed()));
+        if !guard.still_held() {
+            return Ok(empty_outcome(ctx, Outcome::Fenced));
         }
+        state::record_failure_at(&ctx.learn_dir);
+        log_run(ctx, &LogFields::new(ctx, Outcome::Corrupt, start.elapsed()));
         return Ok(empty_outcome(ctx, Outcome::Corrupt));
     }
     // Fix the 14-day age-cutoff baseline on the first ever run (idempotent;
@@ -332,9 +342,13 @@ fn run_body(
         &ctx.work_dir,
     );
 
-    // Empty scan → no-op log, exit; spend stamp untouched (two-stamp
-    // semantics). Watermarks are NOT advanced: scanned-but-scope-dropped
-    // content is preserved for a later run (e.g. once its repo is adopted).
+    // Empty assembly → no-op log, exit; spend stamp untouched (two-stamp
+    // semantics) and watermarks NOT advanced. That preservation is exactly as
+    // narrow as this branch: it holds only when the ENTIRE scan assembled to
+    // nothing. In a MIXED successful run, step 8 advances past everything in
+    // `scanned` — in-scope and out-of-scope alike — so out-of-scope sessions
+    // consumed alongside a paid extraction do NOT resurface if their repo is
+    // adopted later (drop-don't-defer applies to scope drops too).
     if assembled.slices.is_empty() {
         if !guard.still_held() {
             return Ok(empty_outcome(ctx, Outcome::Fenced));
@@ -386,7 +400,29 @@ fn run_body(
     // NO other side effect in between. A reclaim landing in this window is
     // caught by the fresh check and aborts WITHOUT spawning (the tick is
     // already burned by design, so the interval — not a retry — governs).
-    let _ = state::write_stamp(&ctx.spend_stamp);
+    //
+    // The stamp write must SUCCEED before anything is spent: a paid call with
+    // no stamp on disk (ENOSPC, EIO, permissions) would read as "never spent"
+    // to the interval throttle, which would then re-spend on every tick — the
+    // exact crash-loop cost the stamp exists to cap. A failed write therefore
+    // aborts the run as a failure, making zero calls.
+    if let Err(e) = state::write_stamp(&ctx.spend_stamp) {
+        crate::warn_user!(
+            "learning: could not write the spend stamp ({e}); aborting before the extraction call"
+        );
+        if guard.still_held() {
+            state::record_failure_at(&ctx.learn_dir);
+            let mut fields = LogFields::new(ctx, Outcome::Failed, start.elapsed());
+            fields.cli = Some(extractor.cli_id().to_string());
+            fields.model = Some(extractor.model().to_string());
+            fields.sessions = assembled.slices.len();
+            fields.dropped_over_cap = assembled.dropped_over_cap;
+            fields.error = Some(format!("spend stamp write failed: {e}"));
+            fields.skipped = skipped.clone();
+            log_run(ctx, &fields);
+        }
+        return Ok(failed_outcome(ctx, extractor, &assembled, skipped));
+    }
     if !guard.still_held() {
         return Ok(empty_outcome(ctx, Outcome::Fenced));
     }
@@ -740,6 +776,7 @@ struct LogFields {
     duration_ms: u128,
     usage: Option<serde_json::Value>,
     skipped: Vec<String>,
+    error: Option<String>,
     ts: String,
 }
 
@@ -757,14 +794,17 @@ impl LogFields {
             duration_ms: elapsed.as_millis(),
             usage: None,
             skipped: Vec::new(),
+            error: None,
             ts: ctx.now_ts(),
         }
     }
 }
 
-/// One line of `state_dir/learn/log.jsonl`. The `skipped` field is additive
-/// over the card's shape (contract C9): per-store skip reasons the studio
-/// history panel can surface.
+/// One line of `state_dir/learn/log.jsonl`. Two fields are additive over the
+/// card's shape: `skipped` (contract C9 — per-store skip reasons the studio
+/// history panel can surface) and `error` (a short reason string on failed
+/// runs, e.g. a spend-stamp write failure; omitted from the wire when absent
+/// so ordinary entries keep the card's exact shape).
 #[derive(Serialize)]
 struct LogEntry<'a> {
     ts: &'a str,
@@ -779,6 +819,8 @@ struct LogEntry<'a> {
     outcome: &'a str,
     usage: Option<&'a serde_json::Value>,
     skipped: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
 }
 
 /// Append one run-log line (best-effort append, like `src/audit.rs`). The
@@ -797,6 +839,7 @@ fn log_run(ctx: &Ctx, f: &LogFields) {
         outcome: f.outcome.label(),
         usage: f.usage.as_ref(),
         skipped: &f.skipped,
+        error: f.error.as_deref(),
     };
     let Ok(line) = serde_json::to_string(&entry) else {
         return;
@@ -1088,6 +1131,63 @@ mod tests {
         assert_eq!(logs[0]["outcome"], "failed");
         // One failure recorded → not yet paused.
         assert!(!state::paused_at(&ctx.learn_dir));
+    }
+
+    // --- money path: a spend-stamp write failure must not spend ------------
+
+    #[test]
+    fn spend_stamp_write_failure_aborts_before_the_call() {
+        // If the paid call fired with no stamp on disk, the interval throttle
+        // would read "never spent" and re-spend every tick. A failed stamp
+        // write must therefore make ZERO calls and log a failed run.
+        let e = env(LearnScope::All, vec![]);
+        let ctx = &e.ctx;
+        write_claude_session(ctx, "sess-1", "Always use pnpm.");
+        // Make write_stamp fail deterministically: a DIRECTORY at the stamp
+        // path (atomic_write's rename onto an existing directory errors),
+        // while the learn dir itself stays writable so the log/failure-counter
+        // assertions below still exercise their real paths.
+        std::fs::create_dir_all(&ctx.spend_stamp).unwrap();
+        let stub = StubExtractor::new(&[valid_extraction("claude:sess-1", "Always use pnpm.")]);
+        let guard = acquire(ctx);
+
+        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(out.outcome, Outcome::Failed);
+        assert_eq!(
+            stub.calls(),
+            0,
+            "an unwritten spend stamp must abort BEFORE the extraction call"
+        );
+        assert!(journal_events(ctx).is_empty(), "no events");
+        let wm = Watermarks::load_from(&ctx.watermarks_path);
+        assert!(
+            wm.mark(
+                &ctx.home
+                    .join(".claude/projects/proj/sess-1.jsonl")
+                    .to_string_lossy()
+            )
+            .is_none(),
+            "no watermark advance"
+        );
+        let logs = log_lines(ctx);
+        assert_eq!(logs.len(), 1, "one attributable failure entry");
+        assert_eq!(logs[0]["outcome"], "failed");
+        assert!(
+            logs[0]["error"]
+                .as_str()
+                .is_some_and(|s| s.contains("spend stamp")),
+            "the log entry's error must name the stamp write: {}",
+            logs[0]
+        );
+        // The failure counter advanced (one failure → not yet paused).
+        assert!(!state::paused_at(&ctx.learn_dir));
+        state::record_failure_at(&ctx.learn_dir);
+        assert!(
+            state::paused_at(&ctx.learn_dir),
+            "the stamp-write failure must have been the FIRST recorded failure"
+        );
     }
 
     // --- ACCEPTANCE 3 + C7: fenced-out worker makes no spend and no writes -
