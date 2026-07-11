@@ -99,13 +99,26 @@ const MACHINE_ID_FILE: &str = "machine-id";
 /// Read the per-machine id from `dir/machine-id`, minting and persisting a
 /// fresh 16-byte-hex (32 char) id the first time it's asked for. Stable
 /// across every subsequent call (same `dir`) once minted.
+///
+/// Only "file absent" (and an empty file, as self-heal) mints. Any OTHER
+/// read failure on an existing file (permissions, transient I/O) propagates
+/// as `Err` — journals are named `journal-<machine-id>.jsonl` and
+/// `activation.json` captures the id once, so silently reminting over a
+/// momentarily-unreadable file would fork the persistent identity and
+/// orphan both. (`atomic_write` needs only PARENT-dir write access, so
+/// read-fails/write-succeeds is a real scenario, not a hypothetical.)
 pub fn machine_id_at(dir: &Path) -> io::Result<String> {
     let path = dir.join(MACHINE_ID_FILE);
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        let trimmed = existing.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
+    match std::fs::read_to_string(&path) {
+        Ok(existing) => {
+            let trimmed = existing.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
+            // Empty file: self-heal by minting below.
         }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
     let id = random_hex(16);
     crate::writer::atomic_write(&path, &id).map_err(io::Error::other)?;
@@ -247,6 +260,33 @@ mod tests {
         // The file itself survives and holds exactly the returned id.
         let on_disk = std::fs::read_to_string(dir.path().join(MACHINE_ID_FILE)).unwrap();
         assert_eq!(on_disk.trim(), first);
+    }
+
+    /// A read failure that is NOT "file absent" (here: permissions) must
+    /// propagate as `Err`, never silently mint a replacement id — journals
+    /// are named by this id and `activation.json` captures it once, so a
+    /// remint would orphan both. `atomic_write` only needs write access to
+    /// the PARENT dir, so read-fails/write-succeeds is a real scenario the
+    /// mint path would happily clobber through.
+    #[test]
+    #[cfg(unix)]
+    fn machine_id_unreadable_file_errors_instead_of_reminting() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(MACHINE_ID_FILE);
+        std::fs::write(&path, "0123456789abcdef0123456789abcdef").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let err = machine_id_at(dir.path()).expect_err("unreadable id file must error, not remint");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+
+        // The existing identity must survive untouched.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "0123456789abcdef0123456789abcdef",
+            "a failed read must not clobber the persisted id"
+        );
     }
 
     #[test]
