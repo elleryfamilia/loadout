@@ -8,6 +8,29 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Fixed
+
+- **`load sync clone` works on a freshly installed machine.** The shell
+  installer writes `loadout-receipt.json` (self-update state) into
+  `~/.config/loadout/` before `load` ever runs, so the config dir was never
+  empty and `clone` always refused with "is not empty". `clone` now tolerates
+  loadout's own machine-local files and only refuses when real content
+  (e.g. an existing `config.toml`) is present — naming the offending files.
+- **Machine-local state no longer syncs across machines.** The managed
+  `.gitignore` now covers `loadout-receipt.json`, studio's `run/` state, and
+  `.DS_Store`; sync previously committed these (via `git add -A`) and pushed
+  them to every machine — a synced receipt breaks `load update` elsewhere by
+  misreporting what's installed there. Repos that already track these files
+  heal on their next `load sync`: the files are untracked (local copies stay
+  put) and the removal syncs. If a machine still on an older loadout then
+  loses its receipt on pull, re-running the installer restores it.
+- **Missing git is caught up front.** `load sync`/`init`/`clone` shell out to
+  git; on a machine without it (minimal Debian, slim containers) they now say
+  so and how to install it, instead of failing mid-operation with a raw
+  "No such file or directory" spawn error.
+
 ## 0.15.1 — 2026-07-10
 
 ### Changed

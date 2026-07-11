@@ -236,6 +236,11 @@ pub fn reconcile_rebase(dir: &Path, timeout: Duration) -> Result<ReconcileOutcom
 /// once from GitHub's private-email rejection (GH007) by re-stamping the commit
 /// with your GitHub noreply address.
 pub fn commit_push(dir: &Path, message: &str, timeout: Duration) -> Result<PushOutcome> {
+    // Repos created by older versions managed a shorter ignore list (no
+    // `loadout-receipt.json`, no `run/`) and may track those files — refresh
+    // the .gitignore and untrack them so the repo heals with this push.
+    ensure_gitignore(dir)?;
+    untrack_machine_local(dir);
     git(dir, &["add", "-A"], None)?; // respects .gitignore → never stages local.toml
     let staged_clean = git(dir, &["diff", "--cached", "--quiet"], None)?.ok;
     if !staged_clean {
@@ -323,23 +328,7 @@ pub fn init(dir: &Path, remote: Option<&str>, timeout: Duration) -> Result<()> {
     run_ok(dir, &["branch", "-M", "main"])?;
     // Belt-and-suspenders: never track the private/derived files even if a prior
     // setup added them.
-    let _ = git(
-        dir,
-        &[
-            "rm",
-            "--cached",
-            "-r",
-            "--ignore-unmatch",
-            "-q",
-            "local.toml",
-            "bindings.toml",
-            "generated",
-            "cache",
-            "logs",
-            "update-check",
-        ],
-        None,
-    );
+    untrack_machine_local(dir);
     let _ = git(dir, &["add", "config.toml"], None); // may not exist yet
     run_ok(dir, &["add", ".gitignore"])?;
     if !git(dir, &["diff", "--cached", "--quiet"], None)?.ok {
@@ -358,8 +347,12 @@ pub fn init(dir: &Path, remote: Option<&str>, timeout: Duration) -> Result<()> {
     Ok(())
 }
 
-/// Clone an existing config repo into `dir` (which must be empty or absent), then
-/// ensure a fresh per-machine `local.toml` exists.
+/// Clone an existing config repo into `dir`, then ensure a fresh per-machine
+/// `local.toml` exists. `dir` need not be empty: loadout's own machine-local
+/// files are tolerated — notably `loadout-receipt.json`, which the shell
+/// installer writes there *before* `load` ever runs, so on a fresh machine the
+/// config dir is never empty. Anything else blocks the clone rather than being
+/// silently mixed into the checkout.
 pub fn clone(url: &str, dir: &Path, timeout: Duration) -> Result<()> {
     if dir.join(".git").exists() {
         bail!(
@@ -367,28 +360,65 @@ pub fn clone(url: &str, dir: &Path, timeout: Duration) -> Result<()> {
             dir.display()
         );
     }
-    if dir.exists()
-        && dir
-            .read_dir()
-            .map(|mut d| d.next().is_some())
-            .unwrap_or(false)
-    {
+    let blocking: Vec<String> = match dir.read_dir() {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .filter(|n| !is_machine_local(n))
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect(),
+        // Absent (or unreadable — the clone below will surface that).
+        Err(_) => Vec::new(),
+    };
+    if !blocking.is_empty() {
         bail!(
-            "{} is not empty — move it aside, or set LOADOUT_CONFIG_DIR to a fresh path",
-            dir.display()
+            "{} already has content ({}) — move it aside, or set LOADOUT_CONFIG_DIR to a fresh path",
+            dir.display(),
+            blocking.join(", ")
         );
     }
-    if let Some(parent) = dir.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
+    // `git clone` refuses *any* non-empty target, machine-local files included —
+    // so clone into a temp sibling and move the checkout in around them.
+    let parent = dir.parent().unwrap_or(dir).to_path_buf();
+    std::fs::create_dir_all(&parent).ok();
+    let base = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "loadout".to_string());
+    let tmp = parent.join(format!(".{base}.clone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp); // stale leftover from a crashed run
     let out = git_in(
-        dir.parent().unwrap_or(dir),
-        &["clone", "-q", url, &dir.to_string_lossy()],
+        &parent,
+        &["clone", "-q", url, &tmp.to_string_lossy()],
         Some(timeout),
     )?;
     if !out.ok {
+        let _ = std::fs::remove_dir_all(&tmp);
         bail!("git clone {url} failed: {}", first_line(&out.stderr));
     }
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    for entry in tmp
+        .read_dir()
+        .with_context(|| format!("reading {}", tmp.display()))?
+    {
+        let entry = entry?;
+        let to = dir.join(entry.file_name());
+        // A tracked path colliding with a machine-local file (e.g. a repo that
+        // synced `loadout-receipt.json` before it was gitignored) must not
+        // clobber THIS machine's copy — the local file wins, and the stale
+        // tracked copy is untracked on the next push.
+        if to.exists() {
+            continue;
+        }
+        std::fs::rename(entry.path(), &to).with_context(|| {
+            format!(
+                "moving {} into {}",
+                entry.file_name().to_string_lossy(),
+                dir.display()
+            )
+        })?;
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
     // local.toml is gitignored and per-machine — make sure one exists to edit.
     let local = dir.join("local.toml");
     if !local.exists() {
@@ -404,31 +434,67 @@ pub fn clone(url: &str, dir: &Path, timeout: Duration) -> Result<()> {
     Ok(())
 }
 
+/// Machine-local entries that live in the config dir but must never sync:
+/// per-machine config (`local.toml`, `bindings.toml`), derived state
+/// (`generated/`, `cache/`, `logs/`, studio's `run/`), the self-update
+/// timestamp (`update-check`), the shell installer's `loadout-receipt.json`
+/// (it records THIS machine's installed version/platform for the updater —
+/// synced across machines it breaks self-update), and Finder's `.DS_Store`.
+/// One list drives the managed `.gitignore`, the defensive untrack on push,
+/// and what `clone` tolerates in a not-quite-empty dir. `true` = directory
+/// (rendered with a trailing `/` in `.gitignore`).
+const MACHINE_LOCAL: &[(&str, bool)] = &[
+    ("local.toml", false),
+    ("bindings.toml", false),
+    ("generated", true),
+    ("cache", true),
+    ("logs", true),
+    ("run", true),
+    ("update-check", false),
+    ("loadout-receipt.json", false),
+    (".DS_Store", false),
+];
+
+/// Whether `name` is one of loadout's own machine-local entries.
+fn is_machine_local(name: &std::ffi::OsStr) -> bool {
+    MACHINE_LOCAL.iter().any(|(n, _)| name == *n)
+}
+
+/// Drop any machine-local entries from the git index (working copies stay put).
+/// Belt-and-suspenders on every `init` and push: versions before 0.16 didn't
+/// gitignore `loadout-receipt.json` or `run/`, and `commit_push` stages with
+/// `add -A`, so repos created back then track them — this heals such a repo the
+/// next time any machine pushes.
+fn untrack_machine_local(dir: &Path) {
+    let mut args = vec!["rm", "--cached", "-r", "--ignore-unmatch", "-q"];
+    args.extend(MACHINE_LOCAL.iter().map(|(n, _)| *n));
+    let _ = git(dir, &args, None);
+}
+
 /// The `.gitignore` for a synced config dir: track `config.toml` + `templates/`,
 /// never the private/derived files.
 pub fn ensure_gitignore(dir: &Path) -> Result<()> {
     let path = dir.join(".gitignore");
-    let want = "# load sync — keep machine-private and generated files out of the repo.\n\
-                local.toml\n\
-                bindings.toml\n\
-                generated/\n\
-                cache/\n\
-                logs/\n\
-                update-check\n";
+    let lines: Vec<String> = MACHINE_LOCAL
+        .iter()
+        .map(|(n, is_dir)| {
+            if *is_dir {
+                format!("{n}/")
+            } else {
+                (*n).to_string()
+            }
+        })
+        .collect();
+    let want = format!(
+        "# load sync — keep machine-private and generated files out of the repo.\n{}\n",
+        lines.join("\n")
+    );
     let current = std::fs::read_to_string(&path).unwrap_or_default();
-    // Only (re)write if our managed lines aren't all present. `update-check` is the
-    // once-a-day self-update timestamp (see update.rs) — machine-specific, so it
-    // must never sync, or two boxes diverge on it every day.
-    let missing = [
-        "local.toml",
-        "bindings.toml",
-        "generated/",
-        "cache/",
-        "logs/",
-        "update-check",
-    ]
-    .iter()
-    .any(|l| !current.lines().any(|c| c.trim() == *l));
+    // Only (re)write if our managed lines aren't all present — e.g. a repo
+    // created by an older version that managed a shorter list.
+    let missing = lines
+        .iter()
+        .any(|l| !current.lines().any(|c| c.trim() == l));
     if missing {
         let body = if current.trim().is_empty() {
             want.to_string()
@@ -837,7 +903,10 @@ mod tests {
             "generated/",
             "cache/",
             "logs/",
+            "run/",
             "update-check",
+            "loadout-receipt.json",
+            ".DS_Store",
         ] {
             assert!(gi.contains(line), "missing ignore: {line}");
         }
@@ -845,6 +914,187 @@ mod tests {
         ensure_gitignore(tmp.path()).unwrap();
         let gi2 = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
         assert_eq!(gi, gi2);
+    }
+
+    #[test]
+    fn clone_tolerates_machine_local_files() {
+        // The exact fresh-machine sequence: the shell installer writes
+        // loadout-receipt.json into the config dir before `load` ever runs,
+        // then the user's first command is `load sync clone`.
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(a.join("config.toml"), "a = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        init(&a, Some(url), timeout()).unwrap();
+
+        let b = tmp.path().join("b");
+        fs::create_dir_all(&b).unwrap();
+        fs::write(b.join("loadout-receipt.json"), r#"{"version":"0.15.1"}"#).unwrap();
+        fs::write(b.join("update-check"), "123").unwrap();
+        clone(url, &b, timeout()).unwrap();
+
+        // The synced content arrived and the machine-local files survived.
+        assert_eq!(
+            fs::read_to_string(b.join("config.toml")).unwrap(),
+            "a = 1\n"
+        );
+        assert_eq!(
+            fs::read_to_string(b.join("loadout-receipt.json")).unwrap(),
+            r#"{"version":"0.15.1"}"#
+        );
+        assert!(b.join(".git").exists());
+        assert!(b.join("local.toml").exists());
+        // No temp clone dir left behind.
+        assert!(!tmp.path().join(".b.clone-tmp").exists());
+        assert_eq!(
+            tmp.path()
+                .read_dir()
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_name().to_string_lossy().starts_with(".b.clone-"))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn clone_refuses_real_content() {
+        // Anything that isn't loadout's own machine-local state still blocks —
+        // an existing config.toml must not be silently mixed into a checkout.
+        let tmp = tempfile::tempdir().unwrap();
+        let b = tmp.path().join("b");
+        fs::create_dir_all(&b).unwrap();
+        fs::write(b.join("config.toml"), "x = 1\n").unwrap();
+        fs::write(b.join("loadout-receipt.json"), "{}").unwrap();
+
+        let err = clone("unused-url", &b, timeout()).unwrap_err();
+        let msg = err.to_string();
+        // Names the offender, and only the offender.
+        assert!(msg.contains("config.toml"), "unexpected: {msg}");
+        assert!(!msg.contains("loadout-receipt.json"), "unexpected: {msg}");
+        // And nothing was touched.
+        assert_eq!(
+            fs::read_to_string(b.join("config.toml")).unwrap(),
+            "x = 1\n"
+        );
+        assert!(!b.join(".git").exists());
+    }
+
+    #[test]
+    fn clone_keeps_local_receipt_over_a_synced_one() {
+        // Repos created before loadout-receipt.json was gitignored may track a
+        // receipt (add -A picked it up). The cloning machine's own receipt must
+        // win — the tracked copy describes some *other* machine's install.
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(a.join("config.toml"), "a = 1\n").unwrap();
+        fs::write(a.join("loadout-receipt.json"), r#"{"machine":"a"}"#).unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        // Simulate the old behavior: force-track the receipt despite init's
+        // gitignore, then publish it.
+        init(&a, Some(url), timeout()).unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["add", "-f", "loadout-receipt.json"])
+            .status()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["commit", "-q", "-m", "old version tracked the receipt"])
+            .status()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["push", "-q", "origin", "main"])
+            .status()
+            .unwrap();
+
+        let b = tmp.path().join("b");
+        fs::create_dir_all(&b).unwrap();
+        fs::write(b.join("loadout-receipt.json"), r#"{"machine":"b"}"#).unwrap();
+        clone(url, &b, timeout()).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(b.join("loadout-receipt.json")).unwrap(),
+            r#"{"machine":"b"}"#
+        );
+    }
+
+    #[test]
+    fn push_untracks_machine_local_files() {
+        // A repo that already synced a receipt (or studio run-state) heals on
+        // its next push: the files leave the index and the remote, but the
+        // working copies stay.
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(a.join("config.toml"), "a = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        init(&a, Some(url), timeout()).unwrap();
+        fs::create_dir_all(a.join("run")).unwrap();
+        fs::write(a.join("run/studio-1234.json"), "{}").unwrap();
+        fs::write(a.join("loadout-receipt.json"), "{}").unwrap();
+        for path in ["run/studio-1234.json", "loadout-receipt.json"] {
+            Command::new("git")
+                .arg("-C")
+                .arg(&a)
+                .args(["add", "-f", path])
+                .status()
+                .unwrap();
+        }
+        Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["commit", "-q", "-m", "old version tracked machine state"])
+            .status()
+            .unwrap();
+
+        assert!(matches!(
+            commit_push(&a, "heal", timeout()).unwrap(),
+            PushOutcome::Pushed
+        ));
+
+        let tracked = Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["ls-files"])
+            .output()
+            .unwrap();
+        let tracked = String::from_utf8_lossy(&tracked.stdout);
+        assert!(!tracked.contains("loadout-receipt.json"), "{tracked}");
+        assert!(!tracked.contains("run/"), "{tracked}");
+        // Working copies survive the untrack.
+        assert!(a.join("loadout-receipt.json").exists());
+        assert!(a.join("run/studio-1234.json").exists());
     }
 
     #[test]
