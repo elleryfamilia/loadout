@@ -656,3 +656,103 @@ fn launch(
         std::process::exit(status.code().unwrap_or(1));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::commands::Prepared;
+    use crate::config::Config;
+    use crate::context::{ProjectCommands, SystemContext};
+
+    /// A minimal `Prepared` — no profile applies (label "none"), which is all
+    /// `build_launch_args` reads from it.
+    fn prepared() -> Prepared {
+        Prepared {
+            repo_base: PathBuf::from("/repo"),
+            config: Config::defaults(),
+            context: Context {
+                cwd: PathBuf::from("/repo"),
+                repo_base: PathBuf::from("/repo"),
+                repo_name: None,
+                git: None,
+                languages: Vec::new(),
+                stacks: Vec::new(),
+                package_managers: Vec::new(),
+                custom_targets: Vec::new(),
+                commands: ProjectCommands::default(),
+                system: SystemContext {
+                    os: "test-os".to_string(),
+                    arch: "test-arch".to_string(),
+                    hostname: "test-host".to_string(),
+                    user: "test-user".to_string(),
+                    parent_process: None,
+                    host_class: None,
+                },
+                env: Default::default(),
+            },
+            composition: Default::default(),
+        }
+    }
+
+    fn descriptor(id: &str) -> AgentDescriptor {
+        adapters::builtin_agents()
+            .into_iter()
+            .find(|d| d.id == id)
+            .unwrap_or_else(|| panic!("no built-in agent '{id}'"))
+    }
+
+    fn rendered() -> ApplyResult {
+        ApplyResult {
+            files: Vec::new(),
+            warnings: Vec::new(),
+            notes: Vec::new(),
+            context_hash: "sha256:test".to_string(),
+            profile_guidance: String::new(),
+            wiring_suppressed: false,
+        }
+    }
+
+    #[test]
+    fn user_args_follow_the_injected_freshness_flag() {
+        let d = descriptor("claude");
+        let flag = d
+            .append_prompt_flag
+            .clone()
+            .expect("claude injects a prompt flag");
+        let user = vec!["agents".to_string(), "--resume".to_string()];
+        let out = build_launch_args(
+            &d,
+            &prepared(),
+            Some(&rendered()),
+            "2026-07-11T00:00:00Z",
+            &user,
+        );
+        assert_eq!(out[0], flag);
+        assert!(
+            out[1].contains("context refreshed"),
+            "expected the freshness note, got: {}",
+            out[1]
+        );
+        assert_eq!(out[2..], user[..]);
+    }
+
+    #[test]
+    fn agents_without_prompt_flag_get_pure_passthrough() {
+        let d = descriptor("codex");
+        assert!(d.append_prompt_flag.is_none());
+        let user = vec!["exec".to_string(), "--full-auto".to_string()];
+        let out = build_launch_args(&d, &prepared(), Some(&rendered()), "t", &user);
+        assert_eq!(out, user);
+    }
+
+    #[test]
+    fn skipped_render_still_passes_user_args() {
+        // `--skip-render` → no ApplyResult → no injected note, args intact.
+        let d = descriptor("claude");
+        let user = vec!["--resume".to_string()];
+        let out = build_launch_args(&d, &prepared(), None, "t", &user);
+        assert_eq!(out, user);
+    }
+}
