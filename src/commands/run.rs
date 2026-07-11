@@ -179,8 +179,12 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     };
 
     // Passive hook bootstrap (see `bootstrap_hook_registrations`): launching
-    // any agent also wires the IDE freshness hooks of installed ones.
-    for note in crate::adapters::bootstrap_hook_registrations(&prep.config, rt.dry_run) {
+    // any agent also wires the IDE freshness hooks of installed ones. Learn
+    // hooks register only while learning is active on this machine.
+    let learn_active = crate::learn::state::learn_active(&prep.config);
+    for note in
+        crate::adapters::bootstrap_hook_registrations(&prep.config, learn_active, rt.dry_run)
+    {
         println!("  {} {}", p.green("✓"), p.dim(&note));
     }
 

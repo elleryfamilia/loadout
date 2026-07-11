@@ -2048,7 +2048,9 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
     let config = Config::load(&repo_base).context("loading configuration")?;
     // Passive hook bootstrap: studio is many users' first loadout command, so
     // wire the IDE freshness hooks of installed agents (e.g. Cursor) here too.
-    for note in crate::adapters::bootstrap_hook_registrations(&config, rt.dry_run) {
+    // Learn hooks register only while learning is active on this machine.
+    let learn_active = crate::learn::state::learn_active(&config);
+    for note in crate::adapters::bootstrap_hook_registrations(&config, learn_active, rt.dry_run) {
         println!("load studio → {note}");
     }
     // Trigger fast path: never blocks, never errors outward — a disabled/

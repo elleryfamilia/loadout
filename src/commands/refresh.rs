@@ -29,8 +29,12 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
 
     // Passive hook bootstrap: any refresh registers the IDE freshness hooks of
     // agents that are installed (e.g. ~/.cursor exists), so no one ever has to
-    // run `refresh --agent cursor` just for the hook.
-    for note in crate::adapters::bootstrap_hook_registrations(&prep.config, rt.dry_run) {
+    // run `refresh --agent cursor` just for the hook. Learn hooks register only
+    // while learning is active on this machine (never re-added after `learn off`).
+    let learn_active = crate::learn::state::learn_active(&prep.config);
+    for note in
+        crate::adapters::bootstrap_hook_registrations(&prep.config, learn_active, rt.dry_run)
+    {
         println!("  note: {note}");
     }
 

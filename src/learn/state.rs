@@ -148,6 +148,22 @@ pub fn read_activation_at(dir: &Path) -> Option<Activation> {
     serde_json::from_str(&text).ok()
 }
 
+/// Whether ambient learning is active on THIS machine: the synced `[learn]`
+/// intent flag is on AND this machine carries an activation ack (`load learn on`
+/// was run here). This is the single gate the passive hook bootstrap
+/// ([`crate::adapters::bootstrap_hook_registrations`]) consults to decide
+/// whether to (re)register learn-purpose hooks. It must be `false` after
+/// `load learn off` (which clears the ack locally and, once synced, the flag)
+/// so a routine refresh can never re-add the learning hooks. Cheap: one
+/// config-field read plus, only when the flag is on, a single `stat` of the
+/// activation file.
+pub fn learn_active(cfg: &crate::config::Config) -> bool {
+    cfg.learn.enabled
+        && learn_dir()
+            .map(|dir| read_activation_at(&dir).is_some())
+            .unwrap_or(false)
+}
+
 /// Write the activation ack, replacing any prior one.
 pub fn write_activation_at(dir: &Path, a: &Activation) -> io::Result<()> {
     let path = dir.join(ACTIVATION_FILE);
