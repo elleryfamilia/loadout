@@ -35,6 +35,7 @@ pub mod context;
 pub mod dynamic;
 pub mod fragment;
 pub mod hash;
+pub mod learn;
 pub mod lint;
 pub mod markdown;
 pub mod pack;
