@@ -26,5 +26,6 @@ pub mod lock;
 pub mod readers;
 pub mod slices;
 pub mod state;
+pub mod trigger;
 pub mod watermarks;
 pub mod worker;

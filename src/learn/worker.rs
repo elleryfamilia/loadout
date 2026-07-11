@@ -47,7 +47,7 @@ use crate::learn::gate::{self, Gated};
 use crate::learn::journal::{self, Event, Observed, ProducedBy, SessionRef};
 use crate::learn::readers::{claude, codex, gemini, SessionSlice};
 use crate::learn::watermarks::Watermarks;
-use crate::learn::{agent_cli, extract, lock, slices, state};
+use crate::learn::{agent_cli, extract, lock, slices, state, trigger};
 
 /// Hard internal wall-clock deadline for one run. The lock treats a holder
 /// older than `2 * DEADLINE` as stale, and the extraction CLI call is bounded
@@ -191,10 +191,12 @@ struct Ctx {
     machine_id: String,
     now_utc: DateTime<Utc>,
     trigger: &'static str,
-    /// Session ids a session-end hook named as just-ended (they bypass the
-    /// claude reader's quiescence wait). Empty for now — the trigger tasks
-    /// (T14/T18) wire the real set through; scanned-session exclusions still
-    /// apply to hook-named sessions exactly as to scanned ones.
+    /// Seed session ids a session-end hook named as just-ended (they bypass the
+    /// claude reader's quiescence wait). Empty in production — step 3 merges this
+    /// with the on-disk eligibility hints ([`trigger::read_hints`]) into the set
+    /// actually passed to the readers; it stays a field so tests can inject
+    /// hook-named sessions directly. Scanned-session exclusions still apply to
+    /// hook-named sessions exactly as to scanned ones.
     hooked: BTreeSet<String>,
 }
 
@@ -323,9 +325,16 @@ fn run_body(
     // persisted by the step-8 save.
     wm.set_baseline_if_absent(&ctx.now_ts());
 
+    // Session-end eligibility hints: hook-named sessions bypass the readers'
+    // quiescence wait. Read them here (before the scan) into the readers'
+    // `hooked` set; the hint files are deleted only on the success path at step
+    // 8, and only while the fence still holds, so a fenced-out, failed, or
+    // no-CLI run leaves them for the next worker to retry.
+    let (hooked, hint_paths) = trigger::read_hints(&ctx.learn_dir, &ctx.hooked);
+
     let now_sys = ctx.now_sys();
     let mut scanned: Vec<SessionSlice> = Vec::new();
-    scanned.extend(claude::scan_claude(&ctx.home, &wm, now_sys, &ctx.hooked));
+    scanned.extend(claude::scan_claude(&ctx.home, &wm, now_sys, &hooked));
     scanned.extend(codex::scan_codex(&ctx.home, &wm, now_sys));
     let work_hash = gemini::gemini_project_hash(&ctx.work_dir);
     scanned.extend(gemini::scan_gemini(&ctx.home, &wm, now_sys, &work_hash));
@@ -624,6 +633,15 @@ fn run_body(
         .filter(|k| Path::new(k).exists())
         .collect();
     let _ = wm.save(&existing_files);
+
+    // Consume the eligibility hints read at step 3: this run advanced watermarks
+    // past everything scanned (drop-don't-defer, hook-named sessions included),
+    // so the hints are spent. Only reached on the success path and inside the
+    // fence (still_held checked at step 8's entry) — a fenced/failed/empty/no-CLI
+    // run leaves the hints so the just-ended session can still be retried.
+    for path in &hint_paths {
+        let _ = std::fs::remove_file(path);
+    }
 
     let candidates = journaled.len();
     let mut fields = LogFields::new(ctx, Outcome::Extracted, start.elapsed());
@@ -1367,5 +1385,59 @@ mod tests {
         let wm = Watermarks::load_from(&ctx.watermarks_path);
         let key = ctx.home.join(".claude/projects/proj/sess-1.jsonl");
         assert!(wm.mark(&key.to_string_lossy()).is_some());
+    }
+
+    // --- eligibility hint consumption (T14 wiring) ------------------------
+
+    /// Plant an eligibility hint file for `session_id` under the env's learn dir
+    /// and return its path.
+    fn plant_hint(ctx: &Ctx, session_id: &str) -> PathBuf {
+        let dir = ctx.learn_dir.join("eligible");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("claude-{session_id}"));
+        std::fs::write(&path, b"").unwrap();
+        path
+    }
+
+    #[test]
+    fn eligibility_hint_is_deleted_after_a_successful_extraction() {
+        let e = env(LearnScope::All, vec![]);
+        let ctx = &e.ctx;
+        write_claude_session(ctx, "sess-1", "Always use pnpm, never npm.");
+        let hint = plant_hint(ctx, "sess-1");
+
+        let stub = StubExtractor::new(&[valid_extraction(
+            "claude:sess-1",
+            "Always use pnpm, never npm.",
+        )]);
+        let guard = acquire(ctx);
+        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(out.outcome, Outcome::Extracted);
+        assert!(
+            !hint.exists(),
+            "a successful run advances past everything scanned and must consume the hint"
+        );
+    }
+
+    #[test]
+    fn eligibility_hint_survives_a_non_advancing_run() {
+        let e = env(LearnScope::All, vec![]);
+        let ctx = &e.ctx;
+        // No transcripts → empty scan → watermarks NOT advanced.
+        let hint = plant_hint(ctx, "ghost");
+
+        let stub = StubExtractor::new(&["unused"]);
+        let guard = acquire(ctx);
+        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(out.outcome, Outcome::Empty);
+        assert_eq!(stub.calls(), 0, "an empty scan spends nothing");
+        assert!(
+            hint.exists(),
+            "a run that advanced no watermarks must leave the hint for a later retry"
+        );
     }
 }
