@@ -134,9 +134,13 @@ pub fn upsert_claude_hook(
 
 /// Strip our SessionEnd command entry (matched by the ` <subcommand>` suffix) from
 /// the nested settings JSON, then remove any container **we emptied** — our matcher
-/// group, an otherwise-empty event array, an otherwise-empty `hooks` object —
-/// while leaving foreign siblings and every other key byte-value identical.
-/// Returns the new JSON, or `Ok(None)` when no entry of ours was present.
+/// group, an event array that became empty through our removal, and the `hooks`
+/// object when it became empty solely through those removals — while leaving
+/// foreign siblings (including a foreign *pre-existing empty* event array) and
+/// every other key byte-value identical. Returns the new JSON, or `Ok(None)` when
+/// no entry of ours was present. Deliberately ignores `disableAllHooks`:
+/// deregistration always cleans up our entry, even while hooks are globally
+/// disabled — leaving a dead entry behind would be worse.
 pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Option<String>> {
     let mut root: Value =
         serde_json::from_str(existing).context("parsing existing .claude/settings.json")?;
@@ -158,6 +162,7 @@ pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Op
         // Drop our command from each group's `hooks` array; drop a whole group only
         // when OUR removal is what emptied it (never a foreign group, never a
         // pre-existing empty one).
+        let mut removed_here = false; // did OUR removal touch this event?
         let mut kept: Vec<Value> = Vec::with_capacity(groups.len());
         for mut group in groups.drain(..) {
             let mut we_emptied = false;
@@ -166,6 +171,7 @@ pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Op
                 inner.retain(|c| !is_ours(c, &suffix));
                 if inner.len() != before {
                     removed = true;
+                    removed_here = true;
                     we_emptied = inner.is_empty();
                 }
             }
@@ -174,7 +180,10 @@ pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Op
             }
         }
         *groups = kept;
-        if groups.is_empty() {
+        // Only an event array OUR removal emptied is a loadout-created container;
+        // a foreign pre-existing empty array (e.g. `PreToolUse: []`) is not ours
+        // to delete.
+        if removed_here && groups.is_empty() {
             empty_events.push(event.clone());
         }
     }
@@ -182,13 +191,13 @@ pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Op
     if !removed {
         return Ok(None); // nothing of ours was present
     }
-    // Remove event arrays we emptied entirely, then the `hooks` object if it is now
-    // empty — the loadout-created containers, and only when we emptied them.
+    // Remove event arrays our removal emptied, then the `hooks` object — but only
+    // when dropping those events is what left it empty (any surviving foreign
+    // event, even an empty one, keeps the object alive).
     for event in &empty_events {
         hooks.remove(event);
     }
-    let hooks_now_empty = hooks.is_empty();
-    if hooks_now_empty {
+    if hooks.is_empty() {
         root_obj.remove("hooks");
     }
 
@@ -401,5 +410,99 @@ mod tests {
     fn garbage_json_errors_rather_than_clobbering() {
         assert!(upsert_claude_hook("not json", "SessionEnd", SUB, CMD).is_err());
         assert!(remove_claude_hook("not json", SUB).is_err());
+    }
+
+    // (fix 1a) Reviewer's reproduction: a FOREIGN pre-existing empty event array
+    // (`PreToolUse: []`) is not a loadout-created container — removal of our
+    // SessionEnd entry must leave it, and therefore the `hooks` object, in place.
+    #[test]
+    fn remove_keeps_foreign_preexisting_empty_event_array() {
+        let existing = json!({
+            "hooks": {
+                "SessionEnd": [
+                    { "hooks": [ { "type": "command", "command": CMD, "timeout": 10 } ] }
+                ],
+                "PreToolUse": []
+            }
+        })
+        .to_string();
+        let out = remove_claude_hook(&existing, SUB)
+            .unwrap()
+            .expect("ours present → a change");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let hooks = v.get("hooks").expect("`hooks` object survives: {v}");
+        assert!(
+            hooks.get("SessionEnd").is_none(),
+            "the event WE emptied is removed: {v}"
+        );
+        assert_eq!(
+            hooks["PreToolUse"],
+            json!([]),
+            "foreign pre-existing empty event array survives: {v}"
+        );
+    }
+
+    // (fix 1b) Same invariant with our removal emptying SessionEnd beside a
+    // foreign empty PostToolUse: SessionEnd goes, PostToolUse and `hooks` stay.
+    #[test]
+    fn remove_drops_only_the_event_we_emptied() {
+        let existing = json!({
+            "model": "keep-me",
+            "hooks": {
+                "SessionEnd": [
+                    { "hooks": [ { "type": "command", "command": CMD, "timeout": 10 } ] }
+                ],
+                "PostToolUse": []
+            }
+        })
+        .to_string();
+        let out = remove_claude_hook(&existing, SUB)
+            .unwrap()
+            .expect("ours present → a change");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v["hooks"].get("SessionEnd").is_none(), "ours removed: {v}");
+        assert_eq!(v["hooks"]["PostToolUse"], json!([]), "foreign kept: {v}");
+        assert_eq!(v["model"], "keep-me");
+        // Idempotent: nothing of ours left, foreign shape untouched.
+        assert!(remove_claude_hook(&out, SUB).unwrap().is_none());
+    }
+
+    // (fix 2) Structural type confusion: never destroy what we don't understand.
+    #[test]
+    fn hooks_not_an_object_errors_no_clobber() {
+        let existing = json!({ "hooks": "nope" }).to_string();
+        assert!(upsert_claude_hook(&existing, "SessionEnd", SUB, CMD).is_err());
+    }
+
+    #[test]
+    fn event_not_an_array_errors_no_clobber() {
+        let existing = json!({ "hooks": { "SessionEnd": {} } }).to_string();
+        assert!(upsert_claude_hook(&existing, "SessionEnd", SUB, CMD).is_err());
+    }
+
+    #[test]
+    fn non_string_command_entry_is_preserved_untouched() {
+        let weird = json!({ "type": "command", "command": 42 });
+        let existing = json!({
+            "hooks": { "SessionEnd": [ { "hooks": [ weird.clone() ] } ] }
+        })
+        .to_string();
+        // Upsert: the numeric-command entry is never mistaken for ours — it
+        // survives value-identical and ours is appended as a fresh group.
+        let out = upsert_claude_hook(&existing, "SessionEnd", SUB, CMD)
+            .unwrap()
+            .expect("ours absent → a write");
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let se = v["hooks"]["SessionEnd"].as_array().unwrap();
+        assert_eq!(se.len(), 2);
+        assert_eq!(se[0]["hooks"][0], weird, "weird entry preserved untouched");
+        // Remove from the ORIGINAL (ours not present): nothing of ours → None.
+        assert!(remove_claude_hook(&existing, SUB).unwrap().is_none());
+    }
+
+    #[test]
+    fn non_object_root_errors_on_upsert_and_noops_on_remove() {
+        assert!(upsert_claude_hook("[1, 2]", "SessionEnd", SUB, CMD).is_err());
+        assert!(remove_claude_hook("[1, 2]", SUB).unwrap().is_none());
     }
 }
