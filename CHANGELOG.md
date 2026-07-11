@@ -10,6 +10,16 @@ version and date (see [RELEASING.md](RELEASING.md)).
 
 ## Unreleased
 
+### Added
+
+- **`load studio` explains itself on headless machines.** When there's no
+  browser to open — an SSH session, or a Linux console without a display —
+  studio now says so and points at the intended workflow (run `load studio`
+  on your own machine and `load sync` the changes over, or `load edit` the
+  TOML directly), instead of silently attempting `xdg-open` and leaving a
+  dead-end URL. Detection is env-based (`SSH_CONNECTION`/`SSH_TTY`,
+  `DISPLAY`/`WAYLAND_DISPLAY`) and only ever changes what's printed.
+
 ### Fixed
 
 - **`load sync clone` works on a freshly installed machine.** The shell

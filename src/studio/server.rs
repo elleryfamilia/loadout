@@ -2072,8 +2072,10 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
                 );
                 println!("load studio → open  {url}");
                 println!("(restart that instance to pick up config changes since it started)");
-                if !args.no_open {
-                    open_browser(&url);
+                match headless_reason() {
+                    Some(reason) => print_headless_hint(reason),
+                    None if !args.no_open => open_browser(&url),
+                    None => {}
                 }
                 return Ok(());
             }
@@ -2120,8 +2122,10 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
             args.idle_timeout
         );
     }
-    if !args.no_open {
-        open_browser(&url);
+    match headless_reason() {
+        Some(reason) => print_headless_hint(reason),
+        None if !args.no_open => open_browser(&url),
+        None => {}
     }
 
     serve_loop(&server, &state, idle);
@@ -2393,9 +2397,58 @@ pub(crate) fn open_browser(url: &str) {
     let _ = url;
 }
 
+// --- headless detection: swap the browser auto-open for a workflow hint ------
+
+/// Why this session can't open a local browser, or `None` if it (probably) can.
+/// Purely a heuristic for messaging: a false positive costs two printed lines,
+/// never a behavior change beyond skipping the doomed `open`/`xdg-open` spawn.
+fn headless_reason() -> Option<&'static str> {
+    let env = |k| std::env::var_os(k).is_some();
+    headless_reason_from(
+        env("SSH_CONNECTION") || env("SSH_TTY"),
+        env("DISPLAY") || env("WAYLAND_DISPLAY"),
+        cfg!(target_os = "linux"),
+    )
+}
+
+/// Testable core of [`headless_reason`]. On macOS a GUI session is assumed
+/// unless SSH says otherwise — headless Macs are reached over SSH anyway.
+fn headless_reason_from(ssh: bool, display: bool, is_linux: bool) -> Option<&'static str> {
+    if ssh {
+        Some("SSH session")
+    } else if is_linux && !display {
+        Some("no display")
+    } else {
+        None
+    }
+}
+
+/// Studio is a browser UI, so on a headless box the URL above is a dead end —
+/// point at the intended workflow instead: run studio where the browser is and
+/// bring the changes over with sync, or edit the TOML right here.
+fn print_headless_hint(reason: &str) {
+    println!(
+        "load studio → {reason} detected — studio is a browser UI, and this machine looks headless."
+    );
+    println!(
+        "load studio → tip: run `load studio` on your own machine and sync changes here with `load sync` — or edit the config directly with `load edit`."
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headless_detection_matrix() {
+        // SSH wins on any OS; a Linux console without X/Wayland counts; a
+        // desktop session (or macOS without SSH) doesn't.
+        assert_eq!(headless_reason_from(true, true, false), Some("SSH session"));
+        assert_eq!(headless_reason_from(true, false, true), Some("SSH session"));
+        assert_eq!(headless_reason_from(false, false, true), Some("no display"));
+        assert_eq!(headless_reason_from(false, true, true), None);
+        assert_eq!(headless_reason_from(false, false, false), None);
+    }
 
     fn rust_repo() -> tempfile::TempDir {
         let d = tempfile::tempdir().unwrap();
