@@ -38,6 +38,7 @@ fn main() -> ExitCode {
         Command::Plan(args) => commands::plan::run(&rt, args),
         Command::Update(args) => commands::update::run(&rt, args),
         Command::Harvest(args) => commands::harvest::run(&rt, args),
+        Command::Learn(args) => commands::learn::run(&rt, args),
         Command::Hook(args) => commands::hook::run(&rt, args),
         Command::Use(args) => commands::bind::run(&rt, args),
         Command::List(args) => commands::introspect::list(&rt, args),

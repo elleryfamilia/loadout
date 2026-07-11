@@ -15,6 +15,7 @@ pub mod explain;
 pub mod harvest;
 pub mod hook;
 pub mod introspect;
+pub mod learn;
 pub mod plan;
 pub mod refresh;
 pub mod run;

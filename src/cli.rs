@@ -91,6 +91,11 @@ pub enum Command {
     /// call). A bare `load harvest` is a manual run; ambient triggers pass a
     /// hidden `--ambient`.
     Harvest(HarvestArgs),
+    /// Turn ambient learning on or off, show its status, or re-baseline it.
+    /// `load learn on` prints the consent block (what runs, when, the per-run
+    /// cost, and which files it edits) before enabling; bare `load learn` shows
+    /// status.
+    Learn(LearnArgs),
     /// (machine-invoked) Agent lifecycle-hook endpoint: reads the hook payload
     /// on stdin and quietly refreshes the adopted repos among its workspace
     /// roots. Registered automatically (e.g. Cursor's ~/.cursor/hooks.json);
@@ -122,6 +127,32 @@ pub struct HarvestArgs {
     /// types a bare `load harvest`, which is a manual run.
     #[arg(long, hide = true)]
     pub ambient: bool,
+}
+
+/// `learn` options. Bare `load learn` shows status.
+#[derive(Debug, Args)]
+pub struct LearnArgs {
+    /// `on`, `off`, `reset`, or status (the default).
+    #[command(subcommand)]
+    pub action: Option<LearnAction>,
+}
+
+/// `learn` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum LearnAction {
+    /// Enable ambient learning on this machine (prints the consent block first).
+    On {
+        /// Skip the y/N confirmation (also required to enable in a non-TTY).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Disable ambient learning everywhere (synced) and clean up this machine.
+    Off,
+    /// Show whether learning is on, what would run, and the review backlog.
+    Status,
+    /// Re-baseline the harvest watermarks after corruption (harvests forward
+    /// only; never touches the review inbox or evidence).
+    Reset,
 }
 
 /// `hook` options.

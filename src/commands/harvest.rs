@@ -39,8 +39,9 @@ pub fn run(rt: &super::Runtime, args: &HarvestArgs) -> Result<()> {
     Ok(())
 }
 
-/// A single, plain-language line describing the run's result.
-fn print_summary(out: &worker::RunOutcome) {
+/// A single, plain-language line describing the run's result. Shared with
+/// `load learn on`'s offered first run.
+pub fn print_summary(out: &worker::RunOutcome) {
     let p = Painter::auto();
     match out.outcome {
         Outcome::Extracted => {

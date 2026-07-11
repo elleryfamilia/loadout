@@ -3976,3 +3976,208 @@ fn studio_serve_fires_the_learn_trigger_check_then_idles_out() {
             "trigger (Studio) skipped: NoActivation",
         ));
 }
+
+// --- T19: `load learn on|off|status|reset` lifecycle ------------------------
+
+impl Fixture {
+    /// Write a file into the isolated per-machine state dir (LOADOUT_STATE_DIR).
+    fn write_state(&self, rel: &str, content: &str) {
+        let p = self.global.path().join("state").join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, content).unwrap();
+    }
+
+    /// Write a file into the isolated global config dir's inbox.
+    fn write_inbox(&self, rel: &str, content: &str) {
+        let p = self.global.path().join("empty").join("inbox").join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, content).unwrap();
+    }
+}
+
+/// `load learn on --yes` flips `enabled = true` in the global config (preserving
+/// the file's comments and other `[learn]` keys), mints a per-machine id, writes
+/// the activation ack, and registers the learning hooks in BOTH agent dotfiles.
+#[test]
+fn learn_on_yes_enables_mints_id_writes_ack_and_registers_both_hooks() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    // A hand-authored config with a comment and a pre-existing `[learn]` key we
+    // must not clobber when we set `enabled = true`.
+    fx.author("# my loadout config — keep this line\n[learn]\nscope = \"all\"\n");
+    // Both agents look installed (their hook-file parent dirs exist under $HOME).
+    fx.mkdir_home(".claude");
+    fx.mkdir_home(".cursor");
+
+    fx.cmd().args(["learn", "on", "--yes"]).assert().success();
+
+    // The flag flipped, comments and the other key survived (comment-preserving
+    // toml_edit, not a plain re-serialize).
+    let cfg = fx.read_global("config.toml");
+    assert!(
+        cfg.contains("# my loadout config — keep this line"),
+        "the config comment must survive: {cfg}"
+    );
+    assert!(cfg.contains("enabled = true"), "enabled must be set: {cfg}");
+    assert!(
+        cfg.contains("scope = \"all\""),
+        "the pre-existing scope key must survive: {cfg}"
+    );
+
+    // Per-machine id + activation ack written to the (never-synced) state dir.
+    assert!(
+        fx.state_exists("learn/machine-id"),
+        "machine id must be minted"
+    );
+    let ack = fx.read_state("learn/activation.json");
+    assert!(
+        ack.contains("machine_id"),
+        "ack must record the machine id: {ack}"
+    );
+
+    // Learn hooks land in both dotfiles, each tagged with the session-end suffix.
+    let claude = fx.read_home(".claude/settings.json");
+    assert!(
+        claude.contains("hook claude --event session-end"),
+        "claude learn hook must be registered: {claude}"
+    );
+    let cursor = fx.read_home(".cursor/hooks.json");
+    assert!(
+        cursor.contains("hook cursor --event session-end"),
+        "cursor learn hook must be registered: {cursor}"
+    );
+}
+
+/// The consent block `load learn on` prints (before the y/N confirm) must name
+/// every commitment: what runs, the per-machine ceiling, both hook files, the
+/// claim-sync disclosure, and a concrete cost figure. A non-TTY run without
+/// `--yes` prints the consent, then aborts with a hint naming `--yes` — nothing
+/// is enabled.
+#[test]
+fn learn_on_consent_names_ceiling_files_sync_and_cost_then_aborts_non_tty() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\n"); // empty learn table; nothing enabled yet
+
+    fx.cmd()
+        .args(["learn", "on"]) // no --yes, piped stdin (non-TTY)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("load harvest --ambient"))
+        .stdout(predicate::str::contains("6h"))
+        .stdout(predicate::str::contains("≤4/day"))
+        .stdout(predicate::str::contains("~/.claude/settings.json"))
+        .stdout(predicate::str::contains("~/.cursor/hooks.json"))
+        .stdout(predicate::str::contains(
+            "verbatim quotes never leave this machine",
+        ))
+        .stdout(predicate::str::contains("¢"))
+        .stdout(predicate::str::contains("--yes"));
+
+    // Aborted: no flag flip, no activation ack.
+    let cfg = fx.read_global("config.toml");
+    assert!(
+        !cfg.contains("enabled = true"),
+        "a non-TTY abort must not enable learning: {cfg}"
+    );
+    assert!(
+        !fx.state_exists("learn/activation.json"),
+        "a non-TTY abort must not write the ack"
+    );
+}
+
+/// `load learn off` reverses `on`: it flips `enabled = false` in the global
+/// config, removes the activation ack, and deregisters the learning hooks from
+/// both dotfiles (leaving foreign content intact).
+#[test]
+fn learn_off_flips_flag_removes_ack_and_deregisters_hooks() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nscope = \"all\"\n");
+    fx.mkdir_home(".claude");
+    fx.mkdir_home(".cursor");
+
+    // Turn it on first so there is something to reverse.
+    fx.cmd().args(["learn", "on", "--yes"]).assert().success();
+    assert!(fx.state_exists("learn/activation.json"));
+    assert!(fx
+        .read_home(".cursor/hooks.json")
+        .contains("hook cursor --event session-end"));
+
+    // Now off.
+    fx.cmd().args(["learn", "off"]).assert().success();
+
+    let cfg = fx.read_global("config.toml");
+    assert!(
+        cfg.contains("enabled = false"),
+        "off must flip the synced flag: {cfg}"
+    );
+    assert!(
+        !fx.state_exists("learn/activation.json"),
+        "off must remove the activation ack"
+    );
+    // The learn hook is gone from both dotfiles.
+    let claude = fx.read_home(".claude/settings.json");
+    assert!(
+        !claude.contains("hook claude --event session-end"),
+        "off must deregister the claude learn hook: {claude}"
+    );
+    let cursor = fx.read_home(".cursor/hooks.json");
+    assert!(
+        !cursor.contains("hook cursor --event session-end"),
+        "off must deregister the cursor learn hook: {cursor}"
+    );
+}
+
+/// `load learn status` surfaces the paused state after two seeded consecutive
+/// failures, and names the action that clears it.
+#[test]
+fn learn_status_reports_paused_after_seeded_failures() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    // Seed the consecutive-failure counter at the pause threshold (>= 2).
+    fx.write_state("learn/failures.json", "{\"consecutive\":2}\n");
+
+    fx.cmd()
+        .args(["learn", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paused"))
+        .stdout(predicate::str::contains("load harvest"));
+}
+
+/// `load learn reset` deletes the watermark store (re-baselining the harvest)
+/// but never touches the review inbox journals or evidence.
+#[test]
+fn learn_reset_clears_watermarks_but_keeps_journals() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    // Seed a watermark store (state, machine-local) and a journal (config, synced).
+    fx.write_state("learn/watermarks.json", "{\"version\":1,\"files\":{}}\n");
+    fx.write_inbox(
+        "journal-test-machine.jsonl",
+        "{\"type\":\"observed\",\"id\":\"x\",\"kind\":\"preference\",\"source\":\"session\",\"claim\":\"c\",\"session_refs\":[],\"produced_by\":{\"cli\":\"claude\",\"model\":\"haiku\"},\"ts\":\"2026-07-10T10:00:00Z\"}\n",
+    );
+
+    fx.cmd()
+        .args(["learn", "reset"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("14"));
+
+    assert!(
+        !fx.state_exists("learn/watermarks.json"),
+        "reset must delete the watermark store"
+    );
+    assert!(
+        fx.global
+            .path()
+            .join("empty")
+            .join("inbox")
+            .join("journal-test-machine.jsonl")
+            .exists(),
+        "reset must never touch the review inbox journals"
+    );
+}
