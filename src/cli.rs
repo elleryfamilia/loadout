@@ -441,3 +441,93 @@ pub struct CleanArgs {
     #[arg(long)]
     pub agent: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_launch_captures_everything_after_agent_verbatim() {
+        // `load claude agents --resume …`: nothing after the agent token is
+        // parsed by load — even flags that collide with RunArgs' own.
+        let cli = Cli::try_parse_from([
+            "load",
+            "claude",
+            "agents",
+            "--resume",
+            "--workflow",
+            "w",
+            "--skip-render",
+        ])
+        .unwrap();
+        let Command::Launch(argv) = cli.command else {
+            panic!("expected Command::Launch, got {:?}", cli.command);
+        };
+        assert_eq!(
+            argv,
+            [
+                "claude",
+                "agents",
+                "--resume",
+                "--workflow",
+                "w",
+                "--skip-render"
+            ]
+        );
+    }
+
+    #[test]
+    fn from_launch_splits_agent_from_passthrough_args() {
+        let args = RunArgs::from_launch(vec![
+            "claude".to_string(),
+            "agents".to_string(),
+            "--resume".to_string(),
+        ]);
+        assert_eq!(args.agent, "claude");
+        assert_eq!(args.args, ["agents", "--resume"]);
+        assert!(!args.skip_render);
+        assert!(args.workflow.is_none());
+    }
+
+    #[test]
+    fn from_launch_tolerates_empty_argv() {
+        let args = RunArgs::from_launch(Vec::new());
+        assert_eq!(args.agent, "");
+        assert!(args.args.is_empty());
+    }
+
+    #[test]
+    fn run_form_parses_own_flags_after_agent() {
+        // Unlike the bare form, `load run <agent>` still parses RunArgs flags
+        // placed after the agent id — they do NOT pass through …
+        let cli = Cli::try_parse_from(["load", "run", "claude", "--workflow", "w"]).unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected Command::Run, got {:?}", cli.command);
+        };
+        assert_eq!(args.agent, "claude");
+        assert_eq!(args.workflow.as_deref(), Some("w"));
+        assert!(args.args.is_empty());
+    }
+
+    #[test]
+    fn run_form_double_dash_forwards_colliding_flags() {
+        // … and `--` is the escape hatch that forwards them to the agent.
+        let cli = Cli::try_parse_from(["load", "run", "claude", "--", "--workflow", "w"]).unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected Command::Run, got {:?}", cli.command);
+        };
+        assert_eq!(args.agent, "claude");
+        assert!(args.workflow.is_none());
+        assert_eq!(args.args, ["--workflow", "w"]);
+    }
+
+    #[test]
+    fn run_form_passes_unknown_flags_through() {
+        // Flags load doesn't define reach the agent even without `--`.
+        let cli = Cli::try_parse_from(["load", "run", "claude", "--resume"]).unwrap();
+        let Command::Run(args) = cli.command else {
+            panic!("expected Command::Run, got {:?}", cli.command);
+        };
+        assert_eq!(args.args, ["--resume"]);
+    }
+}
