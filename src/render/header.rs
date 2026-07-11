@@ -24,6 +24,18 @@ pub struct HeaderMeta<'a> {
     pub template_source: &'a str,
     /// Config files that contributed (display strings).
     pub sources: &'a [String],
+    /// Count of `Pending` learn candidates awaiting review in the inbox
+    /// (`0` when `[learn]` is disabled or nothing is staged). Purely
+    /// decorative, like `host`/`generated_at`: it is NOT folded into the
+    /// context hash (the caller computes it independently and passes it in
+    /// after the hash is already final — see `render::render`), so a change
+    /// in pending count alone never churns the hash or forces a rewrite. The
+    /// trade this accepts, matching `host`/`generated_at`'s existing
+    /// staleness: under the hash-skip, this line only reaches the on-disk
+    /// file the next time something ELSE causes a real re-render (or
+    /// `--force`) — the live count is the `run` step line and the `refresh`
+    /// summary line, both printed fresh on every invocation.
+    pub pending_learn: usize,
 }
 
 /// Build the full header block (ends with a trailing blank line).
@@ -37,6 +49,19 @@ pub fn build(meta: &HeaderMeta) -> String {
         "(built-in defaults only)".to_string()
     } else {
         meta.sources.join(", ")
+    };
+    // The learn discovery line: at most one, present only when there's
+    // something to review. Deliberately built as a separate blockquote
+    // paragraph (its own `> \n> …`) rather than appended onto the self-heal
+    // line, so it reads as a distinct notice.
+    let learn_line = if meta.pending_learn > 0 {
+        format!(
+            "> \n\
+             > loadout: {n} staged suggestions await review — load studio\n",
+            n = meta.pending_learn,
+        )
+    } else {
+        String::new()
     };
     format!(
         "{GENERATED_MARKER} context={hash} -->\n\
@@ -61,6 +86,7 @@ pub fn build(meta: &HeaderMeta) -> String {
          > Check freshness with `load doctor`; regenerate with `load refresh`; remove with `load clean`.\n\
          > If `$LOADOUT_RUN` is unset, run `load refresh` before relying on this (it skips work when \
          nothing changed), then re-read this file.\n\
+         {learn_line}\
          \n",
         hash = meta.context_hash,
         generated_at = meta.generated_at,
@@ -69,6 +95,7 @@ pub fn build(meta: &HeaderMeta) -> String {
         profile = meta.profile,
         template = meta.template_source,
         sources = sources,
+        learn_line = learn_line,
     )
 }
 
@@ -101,6 +128,10 @@ mod tests {
     use super::*;
 
     fn sample() -> String {
+        sample_with_pending(0)
+    }
+
+    fn sample_with_pending(pending_learn: usize) -> String {
         build(&HeaderMeta {
             generated_at: "2026-05-29T13:35:56Z",
             host: "mac-air",
@@ -109,6 +140,7 @@ mod tests {
             context_hash: "sha256:abcdef1234567890",
             template_source: "embedded",
             sources: &[".loadout/config.toml".to_string()],
+            pending_learn,
         })
     }
 
@@ -148,6 +180,34 @@ mod tests {
     fn no_hash_when_absent() {
         assert_eq!(extract_context_hash("# just a file\n"), None);
         assert_eq!(extract_context_hash(""), None);
+    }
+
+    #[test]
+    fn no_learn_line_when_pending_is_zero() {
+        let h = sample_with_pending(0);
+        assert!(!h.contains("staged suggestions"));
+        assert!(!h.contains("load studio"));
+    }
+
+    #[test]
+    fn learn_line_present_and_exact_when_pending_is_nonzero() {
+        let h = sample_with_pending(3);
+        assert!(h.contains("> loadout: 3 staged suggestions await review — load studio\n"));
+    }
+
+    #[test]
+    fn learn_line_does_not_disturb_the_rest_of_the_header() {
+        // Everything else in the header (banner, self-heal instructions,
+        // provenance fields) must be unaffected by whether the learn line is
+        // present — the two headers should differ ONLY in that line.
+        let without = sample_with_pending(0);
+        let with = sample_with_pending(5);
+        assert_ne!(without, with);
+        // Splicing the exact learn-line snippet back out of `with` must
+        // reproduce `without` byte-for-byte — i.e. those are the ONLY two
+        // lines the pending count added.
+        let learn_snippet = "> \n> loadout: 5 staged suggestions await review — load studio\n";
+        assert_eq!(with.replacen(learn_snippet, "", 1), without);
     }
 
     #[test]

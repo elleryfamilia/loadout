@@ -21,7 +21,8 @@ use super::apply::{self, sync_before_render};
 use super::{prepare_live, Runtime};
 use crate::adapters::{self, ApplyOptions, HookRegistry};
 use crate::cli::HookArgs;
-use crate::config;
+use crate::config::{self, Config};
+use crate::learn::trigger::{maybe_spawn, Trigger};
 
 /// Debounce window per repo. Cursor fires more than one session event on a
 /// single window open (verified live: two ~5s apart); only the first should
@@ -46,22 +47,37 @@ pub fn run(rt: &Runtime, args: &HookArgs) -> crate::Result<()> {
     if args.remove {
         return remove(&hr, rt.dry_run);
     }
-    serve(&id, hr.auto_adopt, rt.dry_run);
+    serve(&id, hr.auto_adopt, rt.dry_run, &cfg);
     Ok(())
 }
 
 /// Serve mode: refresh (and possibly adopt) the workspace roots from the
 /// stdin payload. Infallible by design — every failure is swallowed.
-fn serve(agent: &str, auto_adopt: bool, dry_run: bool) {
+fn serve(agent: &str, auto_adopt: bool, dry_run: bool, cfg: &Config) {
     // Nothing may reach stdout (the agent parses it as the hook response) and
     // warnings would only confuse a machine caller.
     crate::report::set_quiet_warnings(true);
     let mut payload = String::new();
     // Bound the read defensively; real payloads are a few hundred bytes.
     let _ = std::io::stdin().take(1 << 20).read_to_string(&mut payload);
+    // Folded ONCE for this whole invocation, however many roots the payload
+    // names (`[learn]` is global-only, so every root sees the same count
+    // anyway) — same "one fold call per command" rule as `run`/`refresh`. Uses
+    // `cfg` as loaded at hook-command startup, before any per-root sync pull
+    // (each `refresh_root` runs its own `sync_before_render`) — the same
+    // staleness the trigger check below already accepts (Decision #4:
+    // propagation is "the next launch there"); it self-heals on this hook's
+    // very next invocation, which reloads `cfg` fresh.
+    let learn_pending = apply::learn_pending_count(cfg);
     for root in workspace_roots(&payload) {
-        refresh_root(&root, agent, auto_adopt, dry_run);
+        refresh_root(&root, agent, auto_adopt, dry_run, learn_pending);
     }
+    // Trigger fast path — still stdout-silent (never blocks, never errors
+    // outward, and prints nothing: the guard chain's diagnostics are `vlog!`
+    // only). `cfg` is the config loaded at this hook invocation's own cwd;
+    // `[learn]` is global-only (a repo layer can't override it), so it's the
+    // same value regardless of which workspace root(s) were just refreshed.
+    maybe_spawn(cfg, Trigger::HookServe);
 }
 
 /// The `workspace_roots` array of the hook payload; empty on any mismatch.
@@ -83,7 +99,8 @@ fn workspace_roots(payload: &str) -> Vec<PathBuf> {
 /// (auto-pull sync, then every agent with an existing overlay) — and, with
 /// `auto_adopt`, wiring `agent` into a repo on its first open so no prior
 /// `load refresh` is ever needed. All guards fail closed; errors are swallowed.
-fn refresh_root(root: &Path, agent: &str, auto_adopt: bool, dry_run: bool) {
+/// `learn_pending` is folded once by the caller ([`serve`]), not re-derived here.
+fn refresh_root(root: &Path, agent: &str, auto_adopt: bool, dry_run: bool, learn_pending: usize) {
     let Ok(root) = root.canonicalize() else {
         return;
     };
@@ -118,7 +135,7 @@ fn refresh_root(root: &Path, agent: &str, auto_adopt: bool, dry_run: bool) {
     if agents.is_empty() {
         return;
     }
-    let _ = apply::apply_for_agents(&rt, &prep, &agents, &ApplyOptions::default());
+    let _ = apply::apply_for_agents(&rt, &prep, &agents, &ApplyOptions::default(), learn_pending);
     if !dry_run {
         stamp(&root);
     }

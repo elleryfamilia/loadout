@@ -250,6 +250,21 @@ pub struct Fold {
     pub suppressed: BTreeSet<String>,
 }
 
+impl Fold {
+    /// Count of candidates currently `Pending` — staged, awaiting a
+    /// promote/dismiss. The single number every discovery-line surface
+    /// (the `run` step line, the rendered header's snapshot line) shows; each
+    /// caller folds once per command invocation and reuses this count rather
+    /// than re-deriving it (`fold_at` is a small file read, but repeating it
+    /// per agent/per line would multiply that cost for no reason).
+    pub fn pending_count(&self) -> usize {
+        self.candidates
+            .values()
+            .filter(|c| c.status == CandidateStatus::Pending)
+            .count()
+    }
+}
+
 /// Per-candidate accumulator while folding — the mutable working state that
 /// becomes a [`Candidate`] once every event has been processed. Kept
 /// separate from `Candidate` because `session_refs`/dedup bookkeeping has no
@@ -1122,6 +1137,58 @@ mod tests {
             "a later clean verdict clears the labels: {:?}",
             c.quarantine_labels
         );
+    }
+
+    // --- Fold::pending_count -----------------------------------------------
+
+    #[test]
+    fn pending_count_counts_only_pending_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let inbox_dir = dir.path();
+        let pending_id = candidate_id("always use pnpm");
+        let promoted_id = candidate_id("prefer rg over grep");
+        let suppressed_id = candidate_id("always use npm");
+
+        append_events_at(
+            inbox_dir,
+            "machine-a",
+            &[
+                observed(
+                    &pending_id,
+                    "always use pnpm",
+                    vec![session_ref("claude", "s1", "2026-07-10T10:00:00Z")],
+                    "2026-07-10T10:00:00Z",
+                ),
+                observed(
+                    &promoted_id,
+                    "prefer rg over grep",
+                    vec![session_ref("claude", "s2", "2026-07-10T10:00:00Z")],
+                    "2026-07-10T10:00:00Z",
+                ),
+                disposition(&promoted_id, Action::Promote, "2026-07-10T10:05:00Z"),
+                observed(
+                    &suppressed_id,
+                    "always use npm",
+                    vec![session_ref("claude", "s3", "2026-07-10T10:00:00Z")],
+                    "2026-07-10T10:00:00Z",
+                ),
+                disposition(&suppressed_id, Action::Dismiss, "2026-07-10T10:05:00Z"),
+            ],
+        )
+        .unwrap();
+
+        let fold = fold_at(inbox_dir);
+        assert_eq!(fold.candidates.len(), 3);
+        assert_eq!(
+            fold.pending_count(),
+            1,
+            "only the un-dispositioned candidate counts as pending"
+        );
+    }
+
+    #[test]
+    fn pending_count_is_zero_on_an_empty_fold() {
+        assert_eq!(Fold::default().pending_count(), 0);
     }
 
     #[test]

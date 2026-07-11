@@ -545,6 +545,9 @@ fn render_profile_in_config(
         config: cfg,
         generated_at: now_rfc3339(),
         dynamic: mode,
+        // A staged/draft preview, not an applied overlay — the learn
+        // discovery line only needs to reach the real, written files.
+        learn_pending: 0,
     })?;
     let fragment_count = composition
         .fragments

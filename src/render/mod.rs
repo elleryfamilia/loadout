@@ -71,6 +71,13 @@ pub struct RenderRequest<'a> {
     /// Whether dynamic fragments may execute (Live) or are cache-only
     /// (ReadOnly, for explain/dry-run).
     pub dynamic: DynamicMode,
+    /// Count of `Pending` learn candidates awaiting review, computed ONCE by
+    /// the caller (per command invocation, not per agent/render) and passed
+    /// through to the header's decorative snapshot line. `0` — the common
+    /// case, and always the case when `[learn]` is disabled — renders no
+    /// line. Deliberately NOT part of [`overlay_fingerprint`]: see
+    /// [`header::HeaderMeta::pending_learn`] for why that's safe.
+    pub learn_pending: usize,
 }
 
 /// Result of a render.
@@ -240,6 +247,7 @@ pub fn render(req: &RenderRequest) -> crate::Result<RenderOutput> {
         context_hash: &context_hash,
         template_source: &base.source,
         sources: &sources,
+        pending_learn: req.learn_pending,
     });
 
     // 5. Body.
@@ -525,6 +533,7 @@ mod tests {
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
+            learn_pending: 0,
         })
         .unwrap();
 
@@ -559,6 +568,7 @@ mod tests {
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
+            learn_pending: 0,
         })
         .unwrap();
 
@@ -592,6 +602,7 @@ mod tests {
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
+            learn_pending: 0,
         })
         .unwrap();
 
@@ -619,6 +630,7 @@ mod tests {
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
+            learn_pending: 0,
         })
         .unwrap();
         // Restricted to codex → absent from a claude render's guidance.
@@ -640,6 +652,7 @@ mod tests {
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
+            learn_pending: 0,
         })
         .unwrap();
         assert!(!out.content.contains("Profile guidance —"));
@@ -660,6 +673,7 @@ mod tests {
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
+            learn_pending: 0,
         })
         .unwrap();
         assert!(out.content.contains("agent context"));
@@ -686,6 +700,7 @@ mod tests {
             config: &cfg,
             generated_at: "2026-05-29T00:00:00Z".into(),
             dynamic: DynamicMode::ReadOnly,
+            learn_pending: 0,
         })
         .unwrap();
         // The section renders with its title, the ordered stages, and the handoff.
@@ -703,6 +718,57 @@ mod tests {
         let frag_at = out.profile_guidance.find("### baseline").unwrap();
         let wf_at = out.profile_guidance.find("## Workflow:").unwrap();
         assert!(frag_at < wf_at, "workflow section follows the fragments");
+    }
+
+    // --- T15: the learn discovery line must never churn the context hash ---
+
+    #[test]
+    fn learn_pending_count_never_changes_the_context_hash() {
+        // The plan's named risk: two renders differing ONLY in pending learn
+        // count must record the identical `context_hash` — the header line is
+        // decorative (like host/generated_at), not an input to the fingerprint.
+        let ctx = sample_context();
+        let cfg = Config::defaults();
+        let comp = composition(
+            "rust",
+            vec![resolved(named_cap("baseline", "Be minimal."), "rust")],
+        );
+
+        let base_req = |learn_pending: usize| RenderRequest {
+            agent: "claude",
+            template_name: "claude",
+            context: &ctx,
+            composition: &comp,
+            workflow: None,
+            config: &cfg,
+            generated_at: "2026-05-29T00:00:00Z".into(),
+            dynamic: DynamicMode::ReadOnly,
+            learn_pending,
+        };
+
+        let zero = render(&base_req(0)).unwrap();
+        let three = render(&base_req(3)).unwrap();
+
+        assert_eq!(
+            zero.context_hash, three.context_hash,
+            "pending learn count alone must not move the context hash"
+        );
+        // And the rendered CONTENT does differ (the header line actually
+        // appears) — so this isn't trivially true because nothing changed.
+        assert_ne!(zero.content, three.content);
+        assert!(!zero.content.contains("staged suggestions"));
+        assert!(three
+            .content
+            .contains("loadout: 3 staged suggestions await review — load studio"));
+        // The marker line embeds the SAME hash in both renders.
+        let hash_line = |content: &str| {
+            content
+                .lines()
+                .next()
+                .expect("header must have a first line")
+                .to_string()
+        };
+        assert_eq!(hash_line(&zero.content), hash_line(&three.content));
     }
 
     #[test]

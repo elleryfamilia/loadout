@@ -9,20 +9,43 @@ use anyhow::anyhow;
 use super::{now_rfc3339, Prepared, Runtime};
 use crate::adapters::{self, AppContext, ApplyOptions, ApplyResult};
 use crate::audit::{self, AuditEvent};
+use crate::config::Config;
 use crate::hash;
+use crate::learn::journal;
 use crate::style::Painter;
 use crate::sync::{self, SyncStatus};
 use crate::warn_user;
 use crate::writer::AtomicWriter;
 
+/// Count of `Pending` learn candidates awaiting review, folded from the
+/// shared inbox — `0` (and no file read at all) when `[learn]` is disabled,
+/// per the card's rule applied consistently everywhere this number is used
+/// (the `run` step line, the rendered header's snapshot line). Call this
+/// ONCE per command invocation (in `run`/`refresh`/`hook`, before the
+/// per-agent loop) and thread the result through [`apply_for_agents`] rather
+/// than re-deriving it per agent — `fold_at` is a small file read, but
+/// multiplying it by the agent count buys nothing.
+pub fn learn_pending_count(cfg: &Config) -> usize {
+    if !cfg.learn.enabled {
+        return 0;
+    }
+    let Some(dir) = crate::config::global_config_dir() else {
+        return 0;
+    };
+    journal::fold_at(&dir.join("inbox")).pending_count()
+}
+
 /// Render + apply for each agent id and audit each, returning the per-agent
 /// results (the caller decides how to present them — detailed for `refresh`,
-/// a concise summary for `run`).
+/// a concise summary for `run`). `learn_pending` is the ONE folded count for
+/// this whole invocation (see [`learn_pending_count`]) — every agent's header
+/// gets the same number, computed once.
 pub fn apply_for_agents(
     rt: &Runtime,
     prep: &Prepared,
     agents: &[String],
     opts: &ApplyOptions,
+    learn_pending: usize,
 ) -> crate::Result<Vec<(String, ApplyResult)>> {
     let writer = AtomicWriter::new(rt.dry_run);
     let generated_at = now_rfc3339();
@@ -37,6 +60,7 @@ pub fn apply_for_agents(
             config: &prep.config,
             generated_at: generated_at.clone(),
             writer: &writer,
+            learn_pending,
         };
         let result = adapters::apply(descriptor, &app, opts)?;
 

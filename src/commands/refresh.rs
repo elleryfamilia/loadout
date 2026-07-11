@@ -10,7 +10,9 @@ use super::apply::{self, print_sync_step, sync_before_render};
 use super::{prepare_live, resolve_agents, Prepared, Runtime};
 use crate::adapters::ApplyOptions;
 use crate::cli::RefreshArgs;
-use crate::config;
+use crate::config::{self, Config};
+use crate::learn::trigger::{maybe_spawn, Trigger};
+use crate::learn::{state as learn_state, worker as learn_worker};
 use crate::style::Painter;
 
 /// Entry point for `load refresh`.
@@ -58,10 +60,24 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
     if rt.dry_run {
         println!("dry run — no files will be written\n");
     }
-    let results = apply::apply_for_agents(rt, &prep, &agents, &opts)?;
+    // Folded ONCE for this whole invocation (zero cost when `[learn]` is
+    // disabled) — every agent's header gets the same count.
+    let learn_pending = apply::learn_pending_count(&prep.config);
+    let results = apply::apply_for_agents(rt, &prep, &agents, &opts, learn_pending)?;
     for (agent, result) in &results {
         apply::print_result(agent, prep.profile_label(), result);
     }
+
+    // Trigger fast path: never blocks, never errors outward. Skipped on
+    // dry-run — a dry run must have no side effects beyond its own output.
+    if !rt.dry_run {
+        maybe_spawn(&prep.config, Trigger::Refresh);
+    }
+
+    // Ambient-run summary: "learning: harvested N sessions via CLI (model) —
+    // M new candidates", printed at most once per new ambient run (design's
+    // "Refresh" surface).
+    print_learn_summary(&prep.config);
 
     // Fast config health pass — doctor's pure subset. Warnings only, zero
     // output when healthy, never injected into rendered context files.
@@ -71,6 +87,46 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Print, at most once per new ambient run, a summary of the latest completed
+/// **ambient** harvest: `learning: harvested N sessions via CLI (model) — M
+/// new candidates`. Compares the latest such log entry's timestamp against a
+/// `last-notified` stamp (the same on-disk stamp mechanics as the trigger's
+/// scan/spend stamps — see `crate::learn::state`), bumping the stamp after
+/// printing so the same run is never announced twice. Guarded behind
+/// `[learn] enabled` (consistent with every other reader of learn state —
+/// disabled users pay no file read here either).
+fn print_learn_summary(cfg: &Config) {
+    if !cfg.learn.enabled {
+        return;
+    }
+    let Some(learn_dir) = learn_state::learn_dir() else {
+        return;
+    };
+    let Some(entry) = learn_worker::latest_ambient_extraction(&learn_dir.join("log.jsonl")) else {
+        return;
+    };
+    let Some(entry_secs) = entry.ts_unix() else {
+        return;
+    };
+    let stamp_path = learn_dir.join("last-notified");
+    let last_secs = learn_state::read_stamp(&stamp_path)
+        .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    if let Some(last) = last_secs {
+        if entry_secs <= last {
+            return; // already notified for this (or a newer) run
+        }
+    }
+    println!(
+        "learning: harvested {} sessions via {} ({}) — {} new candidates",
+        entry.sessions,
+        entry.cli.as_deref().unwrap_or("cli"),
+        entry.model.as_deref().unwrap_or("model"),
+        entry.candidates,
+    );
+    let _ = learn_state::write_stamp(&stamp_path);
 }
 
 /// Which agents already have a generated overlay on disk. Also the adoption

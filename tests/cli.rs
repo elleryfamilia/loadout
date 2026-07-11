@@ -3488,3 +3488,283 @@ fn harvest_dry_run_makes_no_call_and_writes_nothing() {
         .join("log.jsonl")
         .exists());
 }
+
+// --- T15: entry-point triggers + discovery lines ----------------------------
+
+/// One pending (un-dispositioned) `Observed` journal line, written straight
+/// into the isolated global config dir's inbox — the shared seed for every
+/// discovery-line test below.
+fn seed_pending_candidate(fx: &Fixture, claim: &str) {
+    let inbox = fx.global.path().join("empty").join("inbox");
+    fs::create_dir_all(&inbox).unwrap();
+    // A fixed id is fine — each test uses its own isolated tmp inbox with at
+    // most one seeded candidate, so there's no cross-test collision risk.
+    let line = format!(
+        r#"{{"type":"observed","id":"test-id","kind":"preference","source":"session","claim":{claim:?},"session_refs":[{{"agent":"claude","session_id":"s1","ts":"2026-07-10T10:00:00Z"}}],"produced_by":{{"cli":"claude","model":"haiku"}},"ts":"2026-07-10T10:00:00Z"}}"#
+    );
+    fs::write(
+        inbox.join("journal-test-machine.jsonl"),
+        format!("{line}\n"),
+    )
+    .unwrap();
+}
+
+/// Extract the `context=sha256:…` value from a generated overlay's first
+/// (marker) line.
+fn header_context_hash(content: &str) -> &str {
+    content
+        .lines()
+        .next()
+        .expect("generated overlay must have a header line")
+        .split("context=")
+        .nth(1)
+        .expect("marker line must carry context=")
+        .trim_end_matches(" -->")
+}
+
+#[test]
+fn run_dry_run_shows_learn_discovery_line_when_pending_candidates_exist() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    seed_pending_candidate(&fx, "Always use pnpm, never npm.");
+
+    fx.cmd()
+        .args(["--dry-run", "run", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "learn   1 staged suggestions await review — load studio",
+        ));
+}
+
+#[test]
+fn run_dry_run_omits_learn_discovery_line_when_nothing_pending() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    // Enabled, but the inbox is empty — the line must be absent.
+    fx.author("[learn]\nenabled = true\n");
+
+    fx.cmd()
+        .args(["--dry-run", "run", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("staged suggestions").not());
+}
+
+#[test]
+fn run_dry_run_omits_learn_discovery_line_when_learn_disabled() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    // `[learn]` unset (default disabled) — even a seeded inbox must not print
+    // the line, and must not even be read (guarded behind `enabled`).
+    seed_pending_candidate(&fx, "Always use pnpm, never npm.");
+
+    fx.cmd()
+        .args(["--dry-run", "run", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("staged suggestions").not());
+}
+
+#[test]
+fn refresh_header_shows_pending_learn_line_without_changing_context_sha() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[learn]\nenabled = true\n\
+         \n\
+         [[fragments]]\n\
+         id = \"rust-conventions\"\n\
+         description = \"Rust conventions\"\n\
+         guidance = \"Rust project. Build with cargo, lint with clippy.\"\n\
+         \n\
+         [[loadouts]]\n\
+         name = \"rust\"\n\
+         targets = [\"rust\"]\n\
+         fragments = [\"rust-conventions\"]\n",
+    );
+
+    fx.cmd()
+        .args(["refresh", "--agent", "claude"])
+        .assert()
+        .success();
+    let before = fx.read(".loadout/generated/claude.md");
+    assert!(
+        !before.contains("staged suggestions"),
+        "no pending candidates yet"
+    );
+    let sha_before = header_context_hash(&before).to_string();
+
+    seed_pending_candidate(&fx, "Always use pnpm, never npm.");
+
+    // `--force`: context/composition/workflow are unchanged, so without it
+    // the write would hash-skip and the on-disk file would stay exactly as
+    // it was — this forces a real rewrite so the new header can be inspected.
+    fx.cmd()
+        .args(["refresh", "--agent", "claude", "--force"])
+        .assert()
+        .success();
+    let after = fx.read(".loadout/generated/claude.md");
+    assert!(after.contains("loadout: 1 staged suggestions await review — load studio"));
+    let sha_after = header_context_hash(&after).to_string();
+
+    assert_eq!(
+        sha_before, sha_after,
+        "the context sha must be identical — the pending count alone must never move it"
+    );
+}
+
+#[test]
+fn refresh_prints_ambient_harvest_summary_exactly_once() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+
+    // Seed a run-log entry for a completed AMBIENT extraction.
+    let learn_dir = fx.global.path().join("state").join("learn");
+    fs::create_dir_all(&learn_dir).unwrap();
+    let entry = r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","model":"haiku","sessions":3,"dropped_over_cap":0,"candidates":2,"quarantined":0,"duration_ms":100,"outcome":"extracted","usage":null,"skipped":[]}"#;
+    fs::write(learn_dir.join("log.jsonl"), format!("{entry}\n")).unwrap();
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "learning: harvested 3 sessions via claude (haiku) — 2 new candidates",
+        ));
+
+    // A second refresh must NOT reprint the same ambient run.
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("learning: harvested").not());
+}
+
+#[test]
+fn refresh_omits_ambient_summary_for_manual_runs_and_non_extracted_outcomes() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+
+    let learn_dir = fx.global.path().join("state").join("learn");
+    fs::create_dir_all(&learn_dir).unwrap();
+    let entries = [
+        r#"{"ts":"2026-07-10T09:00:00Z","trigger":"manual","cli":"claude","model":"haiku","sessions":9,"dropped_over_cap":0,"candidates":9,"quarantined":0,"duration_ms":10,"outcome":"extracted","usage":null,"skipped":[]}"#,
+        r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":null,"model":null,"sessions":0,"dropped_over_cap":0,"candidates":0,"quarantined":0,"duration_ms":10,"outcome":"empty","usage":null,"skipped":[]}"#,
+    ];
+    fs::write(learn_dir.join("log.jsonl"), entries.join("\n") + "\n").unwrap();
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("learning: harvested").not());
+}
+
+/// The entry-point wiring itself: each of the four sites calls
+/// `learn::trigger::maybe_spawn`, visible (only under `--verbose`) as a
+/// guard-chain skip line — here `NoActivation` (`[learn] enabled = true` but
+/// this machine never ran `load learn on`). Proves the call sites exist and
+/// never block/fail their host command.
+#[test]
+fn run_dry_run_still_checks_the_learn_trigger_but_never_blocks() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+
+    // `--dry-run` short-circuits before the trigger check (it never launches
+    // anything), so this only proves dry-run stays side-effect-free; the
+    // real-exec variant below proves the check itself fires.
+    fx.cmd()
+        .args(["--verbose", "--dry-run", "run", "claude"])
+        .assert()
+        .success();
+}
+
+#[cfg(unix)]
+#[test]
+fn run_real_exec_fires_the_learn_trigger_check_before_launch() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    let bin = fx.global.path().join("stub-bin");
+    fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("codex");
+    fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+
+    fx.cmd()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .args(["--verbose", "run", "codex"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "trigger (Run) skipped: NoActivation",
+        ));
+}
+
+#[test]
+fn refresh_fires_the_learn_trigger_check() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+
+    fx.cmd()
+        .args(["--verbose", "refresh"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "trigger (Refresh) skipped: NoActivation",
+        ));
+}
+
+#[test]
+fn hook_serve_fires_the_learn_trigger_check_and_stays_stdout_silent() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    let payload = format!(
+        r#"{{ "workspace_roots": ["{}"] }}"#,
+        fx.repo_path().display()
+    );
+
+    fx.cmd()
+        .args(["--verbose", "hook", "cursor"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains(
+            "trigger (HookServe) skipped: NoActivation",
+        ));
+}
+
+#[test]
+fn studio_serve_fires_the_learn_trigger_check_then_idles_out() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+
+    fx.cmd()
+        .args([
+            "--verbose",
+            "studio",
+            "--port",
+            "0",
+            "--no-open",
+            "--idle-timeout",
+            "1s",
+        ])
+        .timeout(std::time::Duration::from_secs(20))
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "trigger (Studio) skipped: NoActivation",
+        ));
+}

@@ -40,7 +40,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context as _, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Config, LearnScope};
 use crate::learn::gate::{self, Gated};
@@ -874,6 +874,67 @@ fn log_run(ctx: &Ctx, f: &LogFields) {
     }
 }
 
+// --- reading the run log back (the refresh discovery line) -----------------
+//
+// [`LogEntry`] above is write-only (borrowed fields, no `Deserialize` derive —
+// a deliberate zero-copy shape for appends). [`LogRecord`] is its owned,
+// read-back counterpart: the refresh summary line (T15) needs to find the
+// latest successful ambient run without re-implementing the wire shape. Only
+// the fields that line needs are declared; extra keys on the wire (`error`,
+// `usage`, `skipped`, …) are ignored rather than rejected, so this reader
+// never breaks on a log written by a newer or older loadout.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LogRecord {
+    pub ts: String,
+    pub trigger: String,
+    #[serde(default)]
+    pub cli: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    pub sessions: usize,
+    pub candidates: usize,
+    pub outcome: String,
+}
+
+impl LogRecord {
+    /// This entry's `ts` as unix seconds, or `None` if it doesn't parse as
+    /// RFC 3339 (a corrupt/foreign line — treated as unusable, not fatal).
+    pub fn ts_unix(&self) -> Option<i64> {
+        DateTime::parse_from_rfc3339(&self.ts)
+            .ok()
+            .map(|dt| dt.timestamp())
+    }
+}
+
+/// Parse every line of `log_path` into a [`LogRecord`], in on-disk (oldest
+/// first) order. Malformed lines are skipped, not fatal — mirrors
+/// [`crate::learn::journal::fold_at`]'s resilience over the sibling store. A
+/// missing file (nothing harvested yet) yields an empty vec, not an error.
+pub fn read_log(log_path: &Path) -> Vec<LogRecord> {
+    let Ok(content) = std::fs::read_to_string(log_path) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter_map(|l| serde_json::from_str::<LogRecord>(l.trim()).ok())
+        .collect()
+}
+
+/// The most recent **ambient**, successfully **extracted** run in the log —
+/// the refresh discovery line's data source (design doc's "Refresh" surface).
+/// Manual (`load harvest`) runs and non-extracted outcomes (`empty`,
+/// `failed`, `no_cli`, …) are not summarized: the line's wording
+/// ("harvested N sessions via CLI (model) — M new candidates") only has
+/// content to show for a completed extraction, and the card scopes the line
+/// to ambient runs specifically (a manual run's outcome is already visible in
+/// that same terminal).
+pub fn latest_ambient_extraction(log_path: &Path) -> Option<LogRecord> {
+    read_log(log_path)
+        .into_iter()
+        .rev()
+        .find(|r| r.trigger == "ambient" && r.outcome == Outcome::Extracted.label())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1439,5 +1500,97 @@ mod tests {
             hint.exists(),
             "a run that advanced no watermarks must leave the hint for a later retry"
         );
+    }
+
+    // --- LogRecord / read_log / latest_ambient_extraction (T15) -----------
+
+    fn write_log_lines(log_path: &Path, lines: &[&str]) {
+        if let Some(parent) = log_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(log_path, lines.join("\n") + "\n").unwrap();
+    }
+
+    #[test]
+    fn read_log_skips_malformed_lines_and_parses_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("log.jsonl");
+        write_log_lines(
+            &log_path,
+            &[
+                r#"{"ts":"2026-07-10T10:00:00Z","trigger":"manual","cli":"claude","model":"haiku","sessions":1,"dropped_over_cap":0,"candidates":1,"quarantined":0,"duration_ms":10,"outcome":"extracted","usage":null,"skipped":[]}"#,
+                "not json at all",
+                r#"{"ts":"2026-07-10T11:00:00Z","trigger":"ambient","cli":"claude","model":"haiku","sessions":2,"dropped_over_cap":0,"candidates":2,"quarantined":0,"duration_ms":10,"outcome":"extracted","usage":null,"skipped":[]}"#,
+            ],
+        );
+
+        let records = read_log(&log_path);
+        assert_eq!(records.len(), 2, "the malformed line must be skipped");
+        assert_eq!(records[0].trigger, "manual");
+        assert_eq!(records[1].trigger, "ambient");
+        assert_eq!(records[1].sessions, 2);
+        assert_eq!(records[1].candidates, 2);
+    }
+
+    #[test]
+    fn read_log_missing_file_is_empty_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_log(&dir.path().join("nope.jsonl")).is_empty());
+    }
+
+    #[test]
+    fn latest_ambient_extraction_ignores_manual_runs_and_non_extracted_outcomes() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("log.jsonl");
+        write_log_lines(
+            &log_path,
+            &[
+                // A manual run must never surface as an ambient summary.
+                r#"{"ts":"2026-07-10T09:00:00Z","trigger":"manual","cli":"claude","model":"haiku","sessions":9,"dropped_over_cap":0,"candidates":9,"quarantined":0,"duration_ms":10,"outcome":"extracted","usage":null,"skipped":[]}"#,
+                // An ambient run that found nothing — not a completed extraction.
+                r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":null,"model":null,"sessions":0,"dropped_over_cap":0,"candidates":0,"quarantined":0,"duration_ms":10,"outcome":"empty","usage":null,"skipped":[]}"#,
+                // The real one.
+                r#"{"ts":"2026-07-10T11:00:00Z","trigger":"ambient","cli":"claude","model":"haiku","sessions":3,"dropped_over_cap":0,"candidates":2,"quarantined":0,"duration_ms":10,"outcome":"extracted","usage":null,"skipped":[]}"#,
+            ],
+        );
+
+        let latest = latest_ambient_extraction(&log_path).expect("one qualifying entry");
+        assert_eq!(latest.ts, "2026-07-10T11:00:00Z");
+        assert_eq!(latest.sessions, 3);
+        assert_eq!(latest.candidates, 2);
+        assert_eq!(latest.cli.as_deref(), Some("claude"));
+        assert_eq!(latest.model.as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn latest_ambient_extraction_none_when_no_qualifying_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("log.jsonl");
+        write_log_lines(
+            &log_path,
+            &[
+                r#"{"ts":"2026-07-10T09:00:00Z","trigger":"manual","cli":"claude","model":"haiku","sessions":1,"dropped_over_cap":0,"candidates":1,"quarantined":0,"duration_ms":10,"outcome":"extracted","usage":null,"skipped":[]}"#,
+            ],
+        );
+        assert!(latest_ambient_extraction(&log_path).is_none());
+        assert!(latest_ambient_extraction(&dir.path().join("missing.jsonl")).is_none());
+    }
+
+    #[test]
+    fn ts_unix_parses_rfc3339_and_rejects_garbage() {
+        let good = LogRecord {
+            ts: "2026-07-10T11:00:00Z".to_string(),
+            trigger: "ambient".to_string(),
+            cli: None,
+            model: None,
+            sessions: 0,
+            candidates: 0,
+            outcome: "extracted".to_string(),
+        };
+        assert!(good.ts_unix().is_some());
+
+        let mut bad = good.clone();
+        bad.ts = "not a timestamp".to_string();
+        assert!(bad.ts_unix().is_none());
     }
 }
