@@ -72,12 +72,15 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
     // dry-run — a dry run must have no side effects beyond its own output.
     if !rt.dry_run {
         maybe_spawn(&prep.config, Trigger::Refresh);
-    }
 
-    // Ambient-run summary: "learning: harvested N sessions via CLI (model) —
-    // M new candidates", printed at most once per new ambient run (design's
-    // "Refresh" surface).
-    print_learn_summary(&prep.config);
+        // Ambient-run summary: "learning: harvested N sessions via CLI
+        // (model) — M new candidates", printed at most once per new ambient
+        // run (design's "Refresh" surface). Behind the same dry-run gate as
+        // the trigger: it writes the `last-notified` stamp when it prints, and
+        // a dry run must neither leave that file behind nor consume the real
+        // refresh's one-time notification.
+        print_learn_summary(&prep.config);
+    }
 
     // Fast config health pass — doctor's pure subset. Warnings only, zero
     // output when healthy, never injected into rendered context files.
@@ -96,7 +99,10 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
 /// scan/spend stamps — see `crate::learn::state`), bumping the stamp after
 /// printing so the same run is never announced twice. Guarded behind
 /// `[learn] enabled` (consistent with every other reader of learn state —
-/// disabled users pay no file read here either).
+/// disabled users pay no file read here either). The CALLER must gate this
+/// behind `!rt.dry_run`: printing bumps the stamp, so a dry run reaching here
+/// would both leave a file behind and steal the real refresh's one-time
+/// notification.
 fn print_learn_summary(cfg: &Config) {
     if !cfg.learn.enabled {
         return;

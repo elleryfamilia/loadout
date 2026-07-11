@@ -3645,6 +3645,43 @@ fn refresh_prints_ambient_harvest_summary_exactly_once() {
 }
 
 #[test]
+fn refresh_dry_run_neither_prints_nor_consumes_the_ambient_summary() {
+    // The summary bumps the `last-notified` stamp when it prints, so a dry
+    // run reaching it would both leave a state file behind and steal the real
+    // refresh's one-time notification. Dry-run must do neither: no summary
+    // line, no stamp file — and the following REAL refresh still prints the
+    // summary exactly once.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+
+    let learn_dir = fx.global.path().join("state").join("learn");
+    fs::create_dir_all(&learn_dir).unwrap();
+    let entry = r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","model":"haiku","sessions":3,"dropped_over_cap":0,"candidates":2,"quarantined":0,"duration_ms":100,"outcome":"extracted","usage":null,"skipped":[]}"#;
+    fs::write(learn_dir.join("log.jsonl"), format!("{entry}\n")).unwrap();
+
+    fx.cmd()
+        .args(["--dry-run", "refresh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("learning: harvested").not());
+    assert!(
+        !learn_dir.join("last-notified").exists(),
+        "a dry run must not write the last-notified stamp"
+    );
+
+    // The real refresh still gets its one-time summary.
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "learning: harvested 3 sessions via claude (haiku) — 2 new candidates",
+        ));
+    assert!(learn_dir.join("last-notified").exists());
+}
+
+#[test]
 fn refresh_omits_ambient_summary_for_manual_runs_and_non_extracted_outcomes() {
     let fx = Fixture::new();
     fx.rust_project();
@@ -3671,7 +3708,7 @@ fn refresh_omits_ambient_summary_for_manual_runs_and_non_extracted_outcomes() {
 /// this machine never ran `load learn on`). Proves the call sites exist and
 /// never block/fail their host command.
 #[test]
-fn run_dry_run_still_checks_the_learn_trigger_but_never_blocks() {
+fn run_dry_run_is_side_effect_free_and_never_blocks() {
     let fx = Fixture::new();
     fx.rust_project();
     fx.author("[learn]\nenabled = true\n");
