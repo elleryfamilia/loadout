@@ -27,3 +27,4 @@ pub mod readers;
 pub mod slices;
 pub mod state;
 pub mod watermarks;
+pub mod worker;

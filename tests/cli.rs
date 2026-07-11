@@ -3382,3 +3382,109 @@ fn claude_verify_command_carries_native_review_commands() {
     assert!(verify.contains("/code-review"));
     assert!(verify.contains("/security-review"));
 }
+
+/// End-to-end `load harvest` against a stub `claude` on PATH: a real detached
+/// worker run (lock → stamps → readers → assemble → prompt → CLI spawn → parse
+/// → gate → journal → evidence → watermarks → log). Proves the CLI wiring and
+/// the real subprocess extraction path, complementing the deterministic
+/// in-module worker unit tests. Unix-only (uses a `sh` stub + `touch`).
+#[cfg(unix)]
+#[test]
+fn harvest_full_cycle_with_stub_claude_writes_inbox_and_log() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fx = Fixture::new();
+    // Global `[learn]`: pin the (stub) claude CLI and widen scope so cwd
+    // adoption doesn't gate the fixture session out.
+    fx.author("[learn]\nenabled = true\ncli = \"claude\"\nscope = \"all\"\n");
+
+    // A claude transcript under the isolated $HOME. The message timestamp is
+    // far-future so the 14-day age cutoff never drops it regardless of the
+    // wall-clock date; the file's mtime is backdated well past the 20-minute
+    // quiescence window so the reader treats the session as finished.
+    let home = fx.global.path().join("home");
+    let proj = home.join(".claude/projects/proj");
+    fs::create_dir_all(&proj).unwrap();
+    let session = proj.join("sess-1.jsonl");
+    let line = r#"{"type":"user","userType":"external","entrypoint":"cli","cwd":"/work/repo","timestamp":"2126-01-01T00:00:00.000Z","message":{"content":"Always use pnpm, never npm."}}"#;
+    fs::write(&session, format!("{line}\n")).unwrap();
+    std::process::Command::new("touch")
+        .args(["-t", "202601010000"])
+        .arg(&session)
+        .status()
+        .unwrap();
+
+    // Stub `claude`: answers `--version` (for the install probe), and on the
+    // extraction call drains the prompt and prints the claude JSON envelope
+    // whose `result` string is the strict extraction JSON.
+    let bin = fx.global.path().join("stub-bin");
+    fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("claude");
+    let script = r#"#!/bin/sh
+case "$1" in
+  --version) echo "claude 9.9.9"; exit 0 ;;
+esac
+cat >/dev/null
+printf '%s' '{"result": "{\"candidates\":[{\"claim\":\"Always use pnpm, never npm.\",\"kind\":\"preference\",\"evidence\":[{\"session_ref\":\"claude:sess-1\",\"quote\":\"pnpm\"}]}]}", "usage": {"input_tokens": 1}}'
+exit 0
+"#;
+    fs::write(&stub, script).unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+
+    fx.cmd()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .timeout(std::time::Duration::from_secs(30))
+        .arg("harvest")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("harvested 1 session"));
+
+    // A journal appeared under the isolated config dir's inbox…
+    let inbox = fx.global.path().join("empty").join("inbox");
+    let journal = fs::read_dir(&inbox)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("journal-") && n.ends_with(".jsonl"))
+        })
+        .expect("a per-machine journal file must exist");
+    let jc = fs::read_to_string(&journal).unwrap();
+    assert!(jc.contains("\"type\":\"observed\""));
+    assert!(jc.contains("Always use pnpm, never npm."));
+
+    // …and the run log recorded one successful, attributable entry.
+    let log = fx
+        .global
+        .path()
+        .join("state")
+        .join("learn")
+        .join("log.jsonl");
+    let lc = fs::read_to_string(&log).unwrap();
+    assert!(lc.contains("\"outcome\":\"extracted\""));
+    assert!(lc.contains("\"cli\":\"claude\""));
+    assert!(lc.contains("\"trigger\":\"manual\""));
+}
+
+#[test]
+fn harvest_dry_run_makes_no_call_and_writes_nothing() {
+    // `--dry-run` on a spend-and-write command must do neither.
+    let fx = Fixture::new();
+    fx.author("[learn]\nenabled = true\ncli = \"claude\"\nscope = \"all\"\n");
+    fx.cmd()
+        .args(["--dry-run", "harvest"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dry run"));
+    // No inbox and no run log were created.
+    assert!(!fx.global.path().join("empty").join("inbox").exists());
+    assert!(!fx
+        .global
+        .path()
+        .join("state")
+        .join("learn")
+        .join("log.jsonl")
+        .exists());
+}

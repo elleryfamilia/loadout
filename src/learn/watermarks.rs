@@ -146,6 +146,46 @@ impl Watermarks {
         entry.mtime_seen = entry.mtime_seen.max(mtime);
     }
 
+    /// Shrink-recovery exception to the monotonic-advance rule
+    /// ([`Watermarks::advance`]): set `file`'s mark to exactly
+    /// `(offset, mtime)`, allowing it to move **backwards**. This is the ONE
+    /// sanctioned way a mark regresses, and it exists for a single scenario
+    /// (cross-task contract C8): a reader re-read a file from byte 0 because
+    /// the recorded offset was past the current end (the file shrank, was
+    /// truncated, or was rotated out and replaced by a shorter one — the
+    /// reader reports this via [`crate::learn::readers::SessionSlice::rewound`]).
+    /// Without this, monotonic `advance` would keep the old, too-large offset;
+    /// every future run would then see `recorded > len`, rewind to 0, and
+    /// re-harvest — and re-pay for — the whole shrunk file forever. Resetting
+    /// the mark down to the freshly-observed end offset stops that unbounded
+    /// paid re-harvest.
+    ///
+    /// Used ONLY on the reader's shrink signal; ordinary advances still go
+    /// through [`Watermarks::advance`] and can never regress. Refused (no-op)
+    /// while the store is corrupt, for the same reason as `advance`.
+    pub fn reset_file(&mut self, file: &str, offset: u64, mtime: i64) {
+        if self.corrupt {
+            return;
+        }
+        self.file.files.insert(
+            file.to_string(),
+            FileMark {
+                bytes_processed: offset,
+                mtime_seen: mtime,
+            },
+        );
+    }
+
+    /// Every append-only file key currently recorded (claude/codex). The
+    /// harvest worker uses this to build the `existing_files` set passed to
+    /// [`Watermarks::save`]: it checks each known key for on-disk existence
+    /// and keeps only the survivors, which is how marks for deleted files get
+    /// pruned (critic MINOR-4) without the worker having to re-walk every
+    /// transcript store itself.
+    pub fn known_files(&self) -> Vec<String> {
+        self.file.files.keys().cloned().collect()
+    }
+
     /// Whether a gemini session id has already been harvested.
     pub fn gemini_seen(&self, session_id: &str) -> bool {
         self.file.gemini_sessions.contains(session_id)
@@ -258,6 +298,56 @@ mod tests {
                 mtime_seen: 2_000
             })
         );
+    }
+
+    #[test]
+    fn reset_file_moves_a_mark_backwards_for_shrink_recovery() {
+        // Contract C8: a file that shrank (recorded offset past the new end)
+        // must be able to move DOWN to the freshly-observed end, or every
+        // future run rewinds-to-0 and re-harvests the shrunk file forever.
+        let dir = tempfile::tempdir().unwrap();
+        let mut wm = Watermarks::load_from(&dir.path().join("watermarks.json"));
+
+        wm.advance("a.jsonl", 500, 1_000);
+        // A plain advance refuses to regress (monotonic backstop)…
+        wm.advance("a.jsonl", 200, 900);
+        assert_eq!(wm.mark("a.jsonl").unwrap().bytes_processed, 500);
+        // …but reset_file is the sanctioned shrink exception: it moves down.
+        wm.reset_file("a.jsonl", 200, 900);
+        assert_eq!(
+            wm.mark("a.jsonl"),
+            Some(&FileMark {
+                bytes_processed: 200,
+                mtime_seen: 900
+            }),
+            "reset_file must set the mark to exactly the new (smaller) offset"
+        );
+    }
+
+    #[test]
+    fn reset_file_is_a_no_op_on_a_corrupt_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("watermarks.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        let mut wm = Watermarks::load_from(&path);
+        assert!(wm.corrupt());
+        wm.reset_file("a.jsonl", 10, 10);
+        assert!(
+            wm.mark("a.jsonl").is_none(),
+            "reset_file on a corrupt store must not fabricate a mark"
+        );
+    }
+
+    #[test]
+    fn known_files_lists_recorded_append_only_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wm = Watermarks::load_from(&dir.path().join("watermarks.json"));
+        assert!(wm.known_files().is_empty());
+        wm.advance("a.jsonl", 10, 10);
+        wm.advance("b.jsonl", 20, 20);
+        let mut keys = wm.known_files();
+        keys.sort();
+        assert_eq!(keys, vec!["a.jsonl".to_string(), "b.jsonl".to_string()]);
     }
 
     #[test]

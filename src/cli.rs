@@ -86,6 +86,11 @@ pub enum Command {
     Plan(PlanArgs),
     /// Update loadout to the latest release (installer-based installs only).
     Update(UpdateArgs),
+    /// Mine your recent agent sessions for durable preferences and stage them
+    /// as candidates in the review inbox (one bounded, cheap-model extraction
+    /// call). A bare `load harvest` is a manual run; ambient triggers pass a
+    /// hidden `--ambient`.
+    Harvest(HarvestArgs),
     /// (machine-invoked) Agent lifecycle-hook endpoint: reads the hook payload
     /// on stdin and quietly refreshes the adopted repos among its workspace
     /// roots. Registered automatically (e.g. Cursor's ~/.cursor/hooks.json);
@@ -107,6 +112,16 @@ pub enum Command {
     /// the rest pass through to the agent.
     #[command(external_subcommand)]
     Launch(Vec<String>),
+}
+
+/// `harvest` options.
+#[derive(Debug, Args)]
+pub struct HarvestArgs {
+    /// Marks a throttled, trigger-driven ambient run (the triggers pass this;
+    /// it only changes how the run is labelled in the log). Hidden: a user
+    /// types a bare `load harvest`, which is a manual run.
+    #[arg(long, hide = true)]
+    pub ambient: bool,
 }
 
 /// `hook` options.

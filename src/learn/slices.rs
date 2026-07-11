@@ -240,6 +240,7 @@ mod tests {
             messages: messages.iter().map(|m| m.to_string()).collect(),
             source_file: PathBuf::from(format!("/tmp/{session_id}.jsonl")),
             end_offset: 0,
+            rewound: false,
         }
     }
 

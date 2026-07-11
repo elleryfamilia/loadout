@@ -250,6 +250,9 @@ fn scan_file(logs: &Path, marks: &Watermarks, now: SystemTime) -> Vec<SessionSli
             messages: msgs.into_iter().map(|m| m.text).collect(),
             source_file: logs.to_path_buf(),
             end_offset: 0,
+            // Gemini has no byte offsets (it resumes by the processed-session
+            // set), so it can never shrink-rewind — always false.
+            rewound: false,
         });
     }
     slices

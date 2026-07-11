@@ -183,6 +183,7 @@ fn scan_one(path: &Path, marks: &Watermarks, now: SystemTime) -> Option<SessionS
     let key = path.to_string_lossy();
     let mark = marks.mark(&key).copied().unwrap_or_default();
     let start = resume_start(mark.bytes_processed, meta.len());
+    let rewound = super::was_rewound(mark.bytes_processed, meta.len());
 
     // Seek discards the BufReader buffer and repositions the underlying file at
     // the absolute offset; read the tail (or, when start == 0, the whole file —
@@ -227,6 +228,7 @@ fn scan_one(path: &Path, marks: &Watermarks, now: SystemTime) -> Option<SessionS
         messages,
         source_file: path.to_path_buf(),
         end_offset: start + consumed as u64,
+        rewound,
     })
 }
 

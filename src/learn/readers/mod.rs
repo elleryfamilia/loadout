@@ -67,6 +67,16 @@ pub struct SessionSlice {
     /// Always `0` for gemini, which has no byte offsets: it resumes by the
     /// processed-`sessionId` set ([`crate::learn::watermarks::Watermarks::gemini_record`]).
     pub end_offset: u64,
+    /// Whether this slice was produced by re-reading the file **from byte 0**
+    /// because the recorded watermark offset was past the current end — i.e.
+    /// the file shrank, was truncated, or was rotated out and replaced by a
+    /// shorter one (see [`resume_start`]). The worker keys the shrink-recovery
+    /// path (cross-task contract C8) on this: a `rewound` slice's `end_offset`
+    /// is written with [`crate::learn::watermarks::Watermarks::reset_file`]
+    /// (which may move the mark *down*), where a normal slice uses the
+    /// monotonic [`crate::learn::watermarks::Watermarks::advance`]. Always
+    /// `false` for gemini, which has no byte offsets and cannot shrink-rewind.
+    pub rewound: bool,
 }
 
 /// The result of one whole scan pass across every enabled store. The
@@ -104,6 +114,15 @@ pub(crate) fn resume_start(recorded_offset: u64, file_len: u64) -> u64 {
     } else {
         0
     }
+}
+
+/// Whether [`resume_start`] rewound to byte 0 because the recorded offset was
+/// past the current end — the shrink signal the worker threads through
+/// [`SessionSlice::rewound`] into the watermark shrink-recovery path
+/// (cross-task contract C8). The exact complement of the `recorded <= len`
+/// branch above, kept beside it so the two can never drift apart.
+pub(crate) fn was_rewound(recorded_offset: u64, file_len: u64) -> bool {
+    recorded_offset > file_len
 }
 
 /// Whether a transcript file is too fresh to read: modified within

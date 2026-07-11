@@ -139,6 +139,7 @@ fn scan_one(
     // (`mark.mtime_seen` is corroborating context recorded by the worker; the
     // length comparison is the authoritative, unambiguous trigger.)
     let start = resume_start(mark.bytes_processed, meta.len());
+    let rewound = super::was_rewound(mark.bytes_processed, meta.len());
 
     let mut file = fs::File::open(path).ok()?;
     file.seek(SeekFrom::Start(start)).ok()?;
@@ -201,6 +202,7 @@ fn scan_one(
         messages,
         source_file: path.to_path_buf(),
         end_offset: start + consumed as u64,
+        rewound,
     })
 }
 
