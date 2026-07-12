@@ -2275,7 +2275,8 @@ pub fn onboarding_review(summary: &crate::studio::state::StagedSummary) -> Strin
 
 /// Beat 3 of the guided first-run: after Apply, confirm the setup is live and —
 /// the piece that was missing — name the one command that actually uses it
-/// (`load run <agent>`) plus how to reopen the studio.
+/// (`load <agent>`, the advertised short form of `run`) plus how to reopen the
+/// studio.
 pub fn onboarding_done(summary: &crate::studio::state::StagedSummary, agent: &str) -> String {
     let targets: Vec<&String> = summary
         .profiles
@@ -2302,7 +2303,7 @@ pub fn onboarding_done(summary: &crate::studio::state::StagedSummary, agent: &st
             }
             div class="cmd-block" {
                 span class="muted small" { "Use it in any agent session:" }
-                code { "load run " (agent) }
+                code { "load " (agent) }
             }
             div class="cmd-block" {
                 span class="muted small" { "Reopen this studio anytime:" }

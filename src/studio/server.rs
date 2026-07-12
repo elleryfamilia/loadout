@@ -1954,7 +1954,7 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
     match result {
         Ok(written) => {
             // Guided first-run: a profile actually landed → show the "you're set"
-            // finish card (names `load run <agent>`), then disarm the flow. If
+            // finish card (names `load <agent>`), then disarm the flow. If
             // nothing composed a profile, fall through to the normal flash.
             if let Some(summary) = onboarding {
                 state.lock().unwrap().onboarding_active = false;
@@ -2162,9 +2162,22 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
         None => {}
     }
 
+    install_shutdown_handler();
     serve_loop(&server, &state, idle);
     remove_runtime_file(port);
+    print_next_steps();
     Ok(())
+}
+
+/// The terminal is the first thing a user sees after closing the studio; say
+/// what to type next so setup doesn't dead-end at an empty prompt.
+fn print_next_steps() {
+    println!();
+    println!("Your loadout is saved. Launch an agent with it from any project:");
+    println!();
+    println!("  load claude    (also: load cursor, load codex, load gemini, load opencode)");
+    println!();
+    println!("Reopen the studio anytime: load studio");
 }
 
 // --- runtime file: re-attach to an already-running instance ------------------
@@ -2317,30 +2330,50 @@ fn probe_studio(port: u16, token: &str) -> bool {
     status_ok && sets_cookie
 }
 
-/// The request loop. With a zero `idle` window it blocks until Ctrl-C; otherwise
-/// it polls so it can notice inactivity and shut the server down on its own. Any
+/// Set by the SIGINT/SIGTERM handler and polled by [`serve_loop`], so Ctrl-C
+/// exits through the normal path — runtime-file cleanup and the next-steps
+/// epilogue — instead of killing the process mid-request.
+static SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_shutdown_signal(sig: libc::c_int) {
+    SHUTDOWN.store(true, std::sync::atomic::Ordering::SeqCst);
+    // Restore the default disposition so a second Ctrl-C force-kills rather
+    // than being swallowed. Both calls here are async-signal-safe.
+    unsafe { libc::signal(sig, libc::SIG_DFL) };
+}
+
+/// Route Ctrl-C (and `kill`) through [`SHUTDOWN`]. Only [`serve`] installs
+/// this — tests drive [`serve_loop`]'s internals directly and must not have
+/// their signal dispositions changed.
+fn install_shutdown_handler() {
+    let handler = on_shutdown_signal as *const () as libc::sighandler_t;
+    unsafe {
+        libc::signal(libc::SIGINT, handler);
+        libc::signal(libc::SIGTERM, handler);
+    }
+}
+
+/// The request loop. Wakes about once a second — often enough that a Ctrl-C
+/// (which only sets [`SHUTDOWN`]; the handler can't do the cleanup itself) is
+/// noticed promptly, cheap enough to not matter — and, when an `idle` window is
+/// set, shuts the server down on its own after that much inactivity. Any
 /// handled request resets the clock — there's no background browser polling, so
 /// "no requests" genuinely means the user has stepped away.
 fn serve_loop(server: &tiny_http::Server, state: &Arc<Mutex<StudioState>>, idle: Duration) {
+    use std::sync::atomic::Ordering;
     use std::time::Instant;
     let handle = |request: &mut tiny_http::Request| {
         let req = read_request(request);
         route(state, &req)
     };
 
-    if idle.is_zero() {
-        for mut request in server.incoming_requests() {
-            let resp = handle(&mut request);
-            let _ = respond(request, resp);
-        }
-        return;
-    }
-
-    // Wake at least once a minute (and never coarser than the window itself) so a
-    // 30-minute timeout fires within ~a minute of the deadline.
-    let poll = idle.min(Duration::from_secs(60));
+    let poll = Duration::from_secs(1);
     let mut last = Instant::now();
     loop {
+        if SHUTDOWN.load(Ordering::SeqCst) {
+            println!("\nload studio: stopped.");
+            return;
+        }
         match server.recv_timeout(poll) {
             Ok(Some(mut request)) => {
                 last = Instant::now();
@@ -2348,13 +2381,19 @@ fn serve_loop(server: &tiny_http::Server, state: &Arc<Mutex<StudioState>>, idle:
                 let _ = respond(request, resp);
             }
             Ok(None) => {
-                if last.elapsed() >= idle {
+                if !idle.is_zero() && last.elapsed() >= idle {
                     println!("load studio: idle — shutting down.");
                     return;
                 }
             }
-            // A receive error means the listener is unusable; stop rather than spin.
+            // A receive error normally means the listener is unusable — but the
+            // shutdown signal itself can interrupt the receive, and that's a
+            // clean exit, not a failure.
             Err(e) => {
+                if SHUTDOWN.load(Ordering::SeqCst) {
+                    println!("\nload studio: stopped.");
+                    return;
+                }
                 eprintln!("load studio: server error ({e}); shutting down.");
                 return;
             }
