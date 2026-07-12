@@ -298,7 +298,7 @@ Prebuilt binary — no Rust toolchain needed (macOS and Linux; on Windows use WS
 curl -LsSf https://github.com/elleryfamilia/loadout/releases/latest/download/loadout-installer.sh | sh
 ```
 
-Via npm — [`@ellery/loadout`](https://www.npmjs.com/package/@ellery/loadout) is a thin bootstrapper that runs the same installer after showing you what it will do and asking for consent, then hands off to the `load` CLI (so `npx @ellery/loadout studio` on a machine that already has loadout just opens the studio):
+Via npm — [`@ellery/loadout`](https://www.npmjs.com/package/@ellery/loadout) is a thin bootstrapper that runs the same installer after showing you what it will do and asking for consent, then hands off to the `load` CLI. On a machine that already has loadout it checks for a newer release and offers to update (again asking first), then runs your command:
 
 ```bash
 npx @ellery/loadout studio

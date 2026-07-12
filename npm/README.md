@@ -8,12 +8,16 @@ Gemini, opencode).
 npx @ellery/loadout studio
 ```
 
-If the `load` binary is already installed, this delegates to it directly. If it
-isn't, it explains what the official installer will do — download the prebuilt
-`load` binary from GitHub Releases, place it in `~/.cargo/bin`, add that
-directory to your PATH if needed, and write an install receipt so `load update`
-works — and asks for consent before doing anything. In non-interactive
-terminals it installs nothing and prints the manual `curl` command instead.
+If the `load` binary is already installed, this checks the latest release
+first and, when yours is older, offers to run `load update` before delegating —
+so running npx means you're on the latest, but never without being asked. If
+`load` isn't installed, it explains what the official installer will do —
+download the prebuilt `load` binary from GitHub Releases, place it in
+`~/.cargo/bin`, add that directory to your PATH if needed, and write an install
+receipt so `load update` works — and asks for consent before doing anything.
+In non-interactive terminals it never installs or updates: it prints the manual
+`curl` command (or a one-line update hint) instead. The version check times out
+after a couple of seconds and is skipped entirely when offline.
 
 After the one-time install, use `load` directly — no npx needed:
 

@@ -1,7 +1,7 @@
 {
   "name": "@ellery/loadout",
-  "version": "0.1.0",
-  "description": "Installer and launcher for loadout — the adaptive context layer for AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode). Asks before installing the `load` binary, then delegates to it.",
+  "version": "0.2.0",
+  "description": "Installer and launcher for loadout — the adaptive context layer for AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode). Asks before installing (or updating) the `load` binary, then delegates to it.",
   "bin": {
     "loadout": "bin/loadout.js"
   },
