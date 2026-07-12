@@ -8,7 +8,7 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased
+## 0.16.0 — 2026-07-12
 
 Loadout can now learn from your own agent sessions. **Ambient learning** is
 opt-in, mines only sessions you already had, and stages every result in a
