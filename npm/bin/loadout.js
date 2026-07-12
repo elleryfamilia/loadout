@@ -48,18 +48,19 @@ const UPDATE_CHECK_TIMEOUT_MS = 2500;
 // Resolved from the release page's redirect (…/releases/latest → …/tag/vX.Y.Z)
 // rather than the GitHub API, which is rate-limited per IP.
 async function latestVersion() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), UPDATE_CHECK_TIMEOUT_MS);
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), UPDATE_CHECK_TIMEOUT_MS);
     const res = await fetch('https://github.com/elleryfamilia/loadout/releases/latest', {
       redirect: 'manual',
       signal: ctrl.signal,
     });
-    clearTimeout(timer);
     const m = (res.headers.get('location') || '').match(/\/tag\/v?(\d+\.\d+\.\d+)/);
     return m ? m[1] : null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
