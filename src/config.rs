@@ -63,6 +63,8 @@ pub struct Config {
     pub host_classes: BTreeMap<String, Vec<String>>,
     /// Cross-machine sync settings (`[sync]`).
     pub sync: SyncConfig,
+    /// Ambient learning settings (`[learn]`).
+    pub learn: LearnConfig,
     /// Config files that actually contributed, in load order.
     pub sources: Vec<PathBuf>,
 }
@@ -92,6 +94,39 @@ impl Default for SyncConfig {
             timeout: std::time::Duration::from_secs(5),
         }
     }
+}
+
+/// Ambient learning of durable preferences from your own agent sessions
+/// (`[learn]`). Global-only, gated exactly like `[sync]`: a repo layer that
+/// declares it is stripped, so a cloned checkout can never toggle learning on.
+/// `enabled` records intent only — a per-machine activation ack and the
+/// harvest worker itself are later work; this struct is the schema they'll
+/// read.
+#[derive(Debug, Clone, Serialize)]
+pub struct LearnConfig {
+    /// Whether ambient harvesting is on. Default `false` (opt-in).
+    pub enabled: bool,
+    /// Minimum spacing between harvest runs on one machine. Default 6h.
+    pub interval: std::time::Duration,
+    /// Which sessions are eligible for mining. Default `Adopted`.
+    pub scope: LearnScope,
+    /// Pin the one-shot extraction CLI (e.g. `"claude"`), overriding the
+    /// probe order. Unset by default.
+    pub cli: Option<String>,
+    /// Pin the model id passed to the extraction CLI, overriding the
+    /// per-CLI cheap-model default. Unset by default.
+    pub model: Option<String>,
+}
+
+/// Which sessions `[learn]` is eligible to mine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LearnScope {
+    /// Only sessions whose cwd resolves to a repo loadout has adopted/rendered.
+    #[default]
+    Adopted,
+    /// All sessions, regardless of cwd.
+    All,
 }
 
 /// Environment-variable exposure policy. Allowlist-only, with a name denylist
@@ -313,10 +348,13 @@ fn strip_global_only(layer: crate::fragment::Layer, parsed: &mut RawConfig) {
         //   - `[env]` widens which environment variables are surfaced into the
         //     overlay; since the loader *appends* allowlists, a repo could
         //     otherwise add names (e.g. `DATABASE_URL`) to leak their values.
+        //   - `[learn]` toggles ambient harvesting from your agent sessions;
+        //     a cloned repo must never be able to flip it on.
         parsed.defaults = None;
         parsed.sync = None;
         parsed.codex = None;
         parsed.env = None;
+        parsed.learn = None;
     }
     if !layer.contributes_profiles() {
         parsed.profiles.clear();
@@ -345,6 +383,7 @@ struct RawConfig {
     env: Option<RawEnv>,
     codex: Option<RawCodex>,
     sync: Option<RawSync>,
+    learn: Option<RawLearn>,
     // The user-authored loadouts. Canonical TOML key is `[[loadouts]]`; the old
     // `[[loadouts]]` key is still accepted (legacy alias) so existing configs
     // keep loading. The Rust field stays `profiles` — it's internal and renaming
@@ -400,6 +439,19 @@ struct RawSync {
     timeout: Option<String>,      // duration string, e.g. "5s"
 }
 
+// Deliberately NOT `deny_unknown_fields`, matching `RawSync`/the top-level
+// `RawConfig`: a `[learn]` table written by a newer loadout must not brick an
+// older binary. Unknown subkeys are tolerated and surfaced via
+// `warn_unknown_config_keys`.
+#[derive(Debug, Default, Deserialize)]
+struct RawLearn {
+    enabled: Option<bool>,
+    interval: Option<String>, // duration string, e.g. "6h"
+    scope: Option<String>,    // "adopted" (default) | "all"
+    cli: Option<String>,
+    model: Option<String>,
+}
+
 /// Every top-level key [`RawConfig`] models. A key outside this set is from a
 /// newer loadout (forward-compat) or a typo — tolerated, but warned about.
 const KNOWN_TOP_LEVEL: &[&str] = &[
@@ -407,6 +459,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "env",
     "codex",
     "sync",
+    "learn",
     "loadouts",
     "profiles",
     "fragments",
@@ -442,6 +495,10 @@ fn warn_unknown_config_keys(text: &str, path: &Path) {
         (
             "sync",
             &["auto_pull", "auto_push", "pull_max_age", "timeout"][..],
+        ),
+        (
+            "learn",
+            &["enabled", "interval", "scope", "cli", "model"][..],
         ),
     ] {
         if let Some(sub) = table.get(section).and_then(|v| v.as_table()) {
@@ -520,6 +577,24 @@ impl RawConfig {
                 slot.timeout = s.timeout;
             }
         }
+        if let Some(l) = other.learn {
+            let slot = self.learn.get_or_insert_with(Default::default);
+            if l.enabled.is_some() {
+                slot.enabled = l.enabled;
+            }
+            if l.interval.is_some() {
+                slot.interval = l.interval;
+            }
+            if l.scope.is_some() {
+                slot.scope = l.scope;
+            }
+            if l.cli.is_some() {
+                slot.cli = l.cli;
+            }
+            if l.model.is_some() {
+                slot.model = l.model;
+            }
+        }
         // Later-layer profiles replace earlier ones of the same name.
         for p in other.profiles {
             match self.profiles.iter_mut().find(|e| e.name == p.name) {
@@ -574,6 +649,7 @@ impl RawConfig {
         let env = self.env.unwrap_or_default();
         let codex = self.codex.unwrap_or_default();
         let sync = self.sync.unwrap_or_default();
+        let learn = self.learn.unwrap_or_default();
 
         // No shipped profiles and no auto-injected fragments: both are
         // entirely user-authored (already merged by name/id across layers in
@@ -626,6 +702,23 @@ impl RawConfig {
                     .as_deref()
                     .and_then(crate::providers::parse_duration)
                     .unwrap_or_else(|| std::time::Duration::from_secs(5)),
+            },
+            learn: LearnConfig {
+                enabled: learn.enabled.unwrap_or(false),
+                interval: learn
+                    .interval
+                    .as_deref()
+                    .and_then(crate::providers::parse_duration)
+                    .unwrap_or_else(|| std::time::Duration::from_secs(6 * 3600)),
+                // An unrecognized value (a newer scope this binary doesn't know)
+                // falls back to the default rather than failing the load — the
+                // same forward-compat posture as unknown subkeys.
+                scope: match learn.scope.as_deref() {
+                    Some("all") => LearnScope::All,
+                    _ => LearnScope::Adopted,
+                },
+                cli: learn.cli,
+                model: learn.model,
             },
             sources,
         }
@@ -813,6 +906,72 @@ mod tests {
         assert!(c.fragments.is_empty());
         // Same for workflows — the built-in catalog is separate, not merged in.
         assert!(c.workflows.is_empty());
+        // Learning is opt-in and defaults to a 6h tick over adopted repos only.
+        assert!(!c.learn.enabled, "[learn] must default to disabled");
+        assert_eq!(c.learn.interval, std::time::Duration::from_secs(6 * 3600));
+        assert_eq!(c.learn.scope, LearnScope::Adopted);
+        assert_eq!(c.learn.cli, None);
+        assert_eq!(c.learn.model, None);
+    }
+
+    #[test]
+    fn learn_enabled_true_parses() {
+        use crate::fragment::Layer;
+        let c = Config::from_layer_strs(vec![(
+            Layer::Global,
+            PathBuf::from("/g/config.toml"),
+            "[learn]\nenabled = true\n".to_string(),
+        )])
+        .unwrap();
+        assert!(c.learn.enabled);
+        // Unset fields still resolve to their defaults alongside the one set field.
+        assert_eq!(c.learn.interval, std::time::Duration::from_secs(6 * 3600));
+        assert_eq!(c.learn.scope, LearnScope::Adopted);
+    }
+
+    #[test]
+    fn learn_later_layer_wins_on_merge() {
+        // Mirrors `repo_layer_overrides_and_extends`'s partial-field merge for
+        // [sync]: only the fields a later layer actually sets are overridden;
+        // fields it omits keep the earlier layer's value.
+        let mut base: RawConfig = toml::from_str(
+            r#"
+            [learn]
+            enabled = true
+            interval = "1h"
+            "#,
+        )
+        .unwrap();
+        let overlay: RawConfig = toml::from_str(
+            r#"
+            [learn]
+            enabled = false
+            model = "sonnet"
+            "#,
+        )
+        .unwrap();
+        base.merge(overlay);
+        let c = base.finalize(vec![]);
+
+        // Later layer's `enabled` and `model` win outright.
+        assert!(!c.learn.enabled, "later layer must win");
+        assert_eq!(c.learn.model.as_deref(), Some("sonnet"));
+        // The earlier layer's `interval` survives — the overlay never set it.
+        assert_eq!(c.learn.interval, std::time::Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn unknown_learn_subkey_is_tolerated_for_forward_compat() {
+        // A newer loadout's [learn] subkey must warn, never fail the load —
+        // same forward-compat contract as [sync]/[defaults].
+        use crate::fragment::Layer;
+        let c = Config::from_layer_strs(vec![(
+            Layer::Global,
+            PathBuf::from("/g/config.toml"),
+            "[learn]\nenabled = true\nfuture_knob = \"x\"\n".to_string(),
+        )])
+        .expect("an unknown [learn] subkey must not fail the load");
+        assert!(c.learn.enabled);
     }
 
     #[test]
@@ -1097,6 +1256,9 @@ mod tests {
 
         [env]
         allowlist = ["DATABASE_URL"]
+
+        [learn]
+        enabled = true
     "#;
 
     fn assert_operational_tables_stripped(c: &Config) {
@@ -1113,6 +1275,10 @@ mod tests {
         assert!(
             !c.env.allowlist.iter().any(|n| n == "DATABASE_URL"),
             "repo must not widen the env allowlist"
+        );
+        assert!(
+            !c.learn.enabled,
+            "repo must not enable [learn] — a cloned repo must never toggle learning"
         );
     }
 
@@ -1188,6 +1354,7 @@ mod tests {
         assert!(!c.sync.auto_push);
         assert!(!c.codex.write_override);
         assert!(c.env.allowlist.iter().any(|n| n == "DATABASE_URL"));
+        assert!(c.learn.enabled, "the global layer owns [learn]");
     }
 
     #[test]

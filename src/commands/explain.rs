@@ -118,6 +118,9 @@ fn build_report(prep: &Prepared, agents: &[String]) -> crate::Result<ExplainRepo
                 config: &prep.config,
                 generated_at: generated_at.clone(),
                 writer: &writer,
+                // `explain` is a read-only preview, not one of the four learn
+                // entry points; its header preview never shows the line.
+                learn_pending: 0,
             };
             let result = adapters::apply(descriptor, &app, &ApplyOptions::default())?;
             plan.push(AgentPlan {

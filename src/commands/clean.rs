@@ -35,6 +35,9 @@ pub fn run(rt: &Runtime, args: &CleanArgs) -> crate::Result<()> {
             config: &prep.config,
             generated_at: now_rfc3339(),
             writer: &writer,
+            // `clean` never renders (it only removes existing artifacts), so
+            // the learn discovery line is moot here.
+            learn_pending: 0,
         };
         let result = adapters::clean(descriptor, &app)?;
 

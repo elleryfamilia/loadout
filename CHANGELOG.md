@@ -8,6 +8,75 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+Loadout can now learn from your own agent sessions. **Ambient learning** is
+opt-in, mines only sessions you already had, and stages every result in a
+review inbox — nothing reaches a fragment without an explicit promote. There
+is no daemon: the harvest runs as a plain, throttled background process,
+capped at a small number of calls per day per machine, with every part of
+that cap stated up front before you turn it on.
+
+### Added
+
+- **`load learn on`** — turns on ambient learning for this machine. Prints an
+  honest consent block first: exactly what runs (`load harvest --ambient`, a
+  normal process you can see in `ps`, never a daemon), when (after your agent
+  sessions end, and at loadout's own commands, at most once per 6-hour tick),
+  the ceiling (at most one extraction call per tick — four a day at most, per
+  machine, at default settings — plus any `load harvest` you run by hand), the
+  files it edits (a session-end hook in `~/.claude/settings.json` and one in
+  `~/.cursor/hooks.json`, each backed up once before its first edit), the sync
+  disclosure (distilled claim text travels in your synced config; the
+  verbatim quote behind it never leaves the machine that observed it), and a
+  concrete cost estimate (typically 1-3¢ on a metered API key, $0 marginal on
+  a subscription-backed CLI). `load learn off` reverses all of it everywhere
+  it's synced; `load learn status` shows what's on, the CLI a run would use,
+  and the review backlog; `load learn reset` re-baselines the harvest
+  watermarks after a corrupted store (your reviewed candidates are untouched).
+- **Session-end hooks for Claude Code and Cursor** — a `SessionEnd` hook in
+  Claude's nested `~/.claude/settings.json`, and a `stop` hook in Cursor's
+  `~/.cursor/hooks.json`, wake the harvest worker right after a session ends
+  instead of waiting for your next `load` command. Registration only happens
+  while learning is active, is purpose-tagged so `load learn off` removes
+  exactly loadout's own entries (any other tool's hooks, and Cursor's
+  freshness hook, are left byte-identical), and loadout's existing
+  entry-point triggers (`run`/`refresh`/`studio`) still catch a quiet stretch
+  where no hook fired. Gemini's hook surface turned out to have no reliable
+  trigger point — its transcripts are still read, just not hooked.
+- **The harvest worker** (`load harvest`) — one fenced, single-writer,
+  detached background pass per machine: reads new session transcripts since
+  the last watermark (Claude Code, Codex, and Gemini CLI — interactive
+  sessions only), redacts secrets before anything is measured or sent
+  anywhere, bounds the input (20 sessions / 400KB per run), asks a cheap model
+  to extract durable preferences, and stages the results. Self-throttled at
+  both the trigger and the worker layer, with a fencing-token lock and
+  monotonic watermarks, so a crash loop or a stray manual run can never push
+  past the consented ceiling.
+- **Per-machine inbox journals** — each machine appends only to its own
+  append-only journal file inside the synced config directory, so `load sync`
+  merges cleanly with no file two machines ever write to at once. Journals
+  fold into one deduplicated candidate view: a dismiss or a promote is
+  permanent (a later observation of the same claim can't reopen it), and a
+  candidate whose text trips the injection lint is quarantined until an edit
+  actually clears the flag.
+- **Studio Inbox tab** — review staged candidates: promote one into a
+  fragment (new, or merged into an existing one, through the same
+  stage-then-apply diff every other studio edit uses), dismiss it, or bring a
+  dismissed one back. A quarantined claim can only be promoted after an edit
+  that clears the injection lint.
+- **`load doctor` Learning section** — activation state (synced intent vs.
+  this machine), hook registration health per agent, the last run's outcome,
+  next eligibility, a paused-after-repeated-failures warning, and a
+  corrupt-watermark-store warning.
+- `load run`'s header and step line print a one-line nudge naming how many
+  candidates are staged and waiting for review, whenever there's at least one.
+
+Not in this release: hook registration for Gemini, Copilot, Codex, or
+opencode; transcript readers for Cursor or opencode; auto-promotion; and the
+audit trail that would show why a claim was suggested — deferred to a future
+release.
+
 ## 0.15.2 — 2026-07-11
 
 ### Added

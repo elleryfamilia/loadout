@@ -94,7 +94,11 @@ fn stamp_path() -> Option<PathBuf> {
 }
 
 /// Read the last-check time (unix seconds), or `None` if unset/unreadable.
-fn read_stamp(path: &Path) -> Option<SystemTime> {
+///
+/// `pub(crate)`: `learn::state::read_stamp` delegates to this exact parsing —
+/// same on-disk format (unix-seconds text), kept in one place rather than
+/// duplicated.
+pub(crate) fn read_stamp(path: &Path) -> Option<SystemTime> {
     let secs: u64 = std::fs::read_to_string(path).ok()?.trim().parse().ok()?;
     Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
 }
@@ -113,7 +117,10 @@ fn write_stamp(path: &Path, at: SystemTime) -> std::io::Result<()> {
 
 /// Whether a check is due: never checked, or `interval` has elapsed. A clock that
 /// went backwards (`now` < `last`) also counts as due.
-fn is_due(last: Option<SystemTime>, now: SystemTime, interval: Duration) -> bool {
+///
+/// `pub(crate)`: `learn::state::is_due` delegates to this exact semantics
+/// rather than duplicating it.
+pub(crate) fn is_due(last: Option<SystemTime>, now: SystemTime, interval: Duration) -> bool {
     match last {
         None => true,
         Some(t) => now.duration_since(t).map(|d| d >= interval).unwrap_or(true),

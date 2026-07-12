@@ -1,0 +1,8 @@
+[
+  {"sessionId":"11111111-aaaa-4bbb-8ccc-000000000001","messageId":2,"type":"user","message":"Run the linter before every commit, no exceptions.","timestamp":"2026-06-01T10:10:00.000Z"},
+  {"sessionId":"22222222-aaaa-4bbb-8ccc-000000000002","messageId":0,"type":"user","message":"Just this one message, like a headless -p one-shot.","timestamp":"2026-06-01T09:00:00.000Z"},
+  {"sessionId":"11111111-aaaa-4bbb-8ccc-000000000001","messageId":0,"type":"user","message":"Always use tabs, not spaces, for indentation in this project.","timestamp":"2026-06-01T10:00:00.000Z"},
+  {"sessionId":"33333333-aaaa-4bbb-8ccc-000000000003","messageId":1,"type":"user","message":"Keep functions under fifty lines.","timestamp":"2026-06-01T08:30:00.000Z"},
+  {"sessionId":"11111111-aaaa-4bbb-8ccc-000000000001","messageId":1,"type":"user","message":"Prefer pnpm over npm for every install.","timestamp":"2026-06-01T10:05:00.000Z"},
+  {"sessionId":"33333333-aaaa-4bbb-8ccc-000000000003","messageId":0,"type":"user","message":"Write a test for every bug fix.","timestamp":"2026-06-01T08:20:00.000Z"}
+]

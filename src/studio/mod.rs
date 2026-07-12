@@ -18,6 +18,7 @@
 
 pub mod assets;
 pub mod edit;
+pub mod inbox;
 pub mod server;
 pub mod state;
 pub mod views;

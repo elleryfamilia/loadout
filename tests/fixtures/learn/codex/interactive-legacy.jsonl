@@ -1,0 +1,4 @@
+{"timestamp": "2026-05-01T09:00:00.000Z", "type": "session_meta", "payload": {"id": "synthetic-legacy-0002", "timestamp": "2026-05-01T09:00:00.000Z", "cwd": "/home/dev/legacy-cli", "originator": "codex_cli_rs", "cli_version": "0.63.0", "instructions": null, "source": "cli", "model_provider": "openai"}}
+{"timestamp": "2026-05-01T09:00:01.000Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions for /home/dev/legacy-cli\n\nSynthetic placeholder."}]}}
+{"timestamp": "2026-05-01T09:02:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "Keep commit messages in imperative mood.", "images": []}}
+{"timestamp": "2026-05-01T09:05:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "Never commit directly to the main branch.", "images": []}}

@@ -1,0 +1,4 @@
+{"timestamp": "2026-06-03T07:00:00.000Z", "type": "session_meta", "payload": {"id": "synthetic-malformed-0006", "timestamp": "2026-06-03T07:00:00.000Z", "cwd": "/home/dev/malformed-proj", "originator": "codex-tui", "cli_version": "0.142.0", "source": "cli", "model_provider": "openai", "base_instructions": {"text": "You are Codex, a coding agent. (synthetic placeholder)"}, "git": {"commit_hash": "0000000000000000000000000000000000000000", "branch": "main", "repository_url": "https://example.invalid/synthetic.git"}}}
+{"timestamp": "2026-06-03T07:01:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "Keep functions under fifty lines.", "images": [], "local_images": [], "text_elements": []}}
+{ this is not valid json
+{"timestamp": "2026-06-03T07:03:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "Write a test for every bug fix.", "images": [], "local_images": [], "text_elements": []}}

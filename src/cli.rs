@@ -86,6 +86,16 @@ pub enum Command {
     Plan(PlanArgs),
     /// Update loadout to the latest release (installer-based installs only).
     Update(UpdateArgs),
+    /// Mine your recent agent sessions for durable preferences and stage them
+    /// as candidates in the review inbox (one bounded, cheap-model extraction
+    /// call). A bare `load harvest` is a manual run; ambient triggers pass a
+    /// hidden `--ambient`.
+    Harvest(HarvestArgs),
+    /// Turn ambient learning on or off, show its status, or re-baseline it.
+    /// `load learn on` prints the consent block (what runs, when, the per-run
+    /// cost, and which files it edits) before enabling; bare `load learn` shows
+    /// status.
+    Learn(LearnArgs),
     /// (machine-invoked) Agent lifecycle-hook endpoint: reads the hook payload
     /// on stdin and quietly refreshes the adopted repos among its workspace
     /// roots. Registered automatically (e.g. Cursor's ~/.cursor/hooks.json);
@@ -109,6 +119,42 @@ pub enum Command {
     Launch(Vec<String>),
 }
 
+/// `harvest` options.
+#[derive(Debug, Args)]
+pub struct HarvestArgs {
+    /// Marks a throttled, trigger-driven ambient run (the triggers pass this;
+    /// it only changes how the run is labelled in the log). Hidden: a user
+    /// types a bare `load harvest`, which is a manual run.
+    #[arg(long, hide = true)]
+    pub ambient: bool,
+}
+
+/// `learn` options. Bare `load learn` shows status.
+#[derive(Debug, Args)]
+pub struct LearnArgs {
+    /// `on`, `off`, `reset`, or status (the default).
+    #[command(subcommand)]
+    pub action: Option<LearnAction>,
+}
+
+/// `learn` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum LearnAction {
+    /// Enable ambient learning on this machine (prints the consent block first).
+    On {
+        /// Skip the y/N confirmation (also required to enable in a non-TTY).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Disable ambient learning everywhere (synced) and clean up this machine.
+    Off,
+    /// Show whether learning is on, what would run, and the review backlog.
+    Status,
+    /// Re-baseline the harvest watermarks after corruption (harvests forward
+    /// only; never touches the review inbox or evidence).
+    Reset,
+}
+
 /// `hook` options.
 #[derive(Debug, Args)]
 pub struct HookArgs {
@@ -117,6 +163,12 @@ pub struct HookArgs {
     /// Deregister loadout's entries from the agent's user-level hooks file.
     #[arg(long)]
     pub remove: bool,
+    /// Which lifecycle event fired. `session-end` takes the ambient-learning
+    /// serve path (mark the just-ended session eligible + wake the harvest
+    /// worker); absent is the freshness serve path. Set by the registered hook
+    /// command, never typed by hand.
+    #[arg(long)]
+    pub event: Option<String>,
 }
 
 /// `skill` options. Bare `load skill` shows status.

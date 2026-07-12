@@ -1,6 +1,7 @@
 //! `load doctor` — diagnose environment, config, and generated state.
 
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::checks::{self, Status};
 use super::{prepare, Runtime};
@@ -165,6 +166,14 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
     println!("\nAgent skills (~/.agents/skills)");
     check_skills(&mut c);
 
+    // Ambient learning (opt-in): activation/hook health, last run, pause and
+    // corruption conditions, and a 14-day silence nudge. Reads the per-machine
+    // state dir and $HOME hook files directly — outside checks.rs's
+    // config-and-repo-only purity contract — so it lives here rather than in
+    // checks.rs. Read-only: doctor never spawns the harvest worker.
+    println!("\nLearning");
+    report(&mut c, check_learn(&prep.config));
+
     print_summary(&c);
     Ok(())
 }
@@ -264,6 +273,278 @@ fn check_skills(c: &mut Checks) {
                 }
             }
         }
+    }
+}
+
+/// 14-day silence threshold for the "no trigger fired" nudge (design doc's
+/// Error-handling section: a machine that's been on this long with nothing
+/// logged is worth a nudge — not a failure, just possibly-forgotten).
+const LEARN_STALE: std::time::Duration = std::time::Duration::from_secs(14 * 24 * 60 * 60);
+
+/// Ambient-learning diagnostics: intent vs. per-machine activation, hook
+/// registration/health per agent (both dialects — Cursor's flat `hooks.json`
+/// and Claude's nested `.claude/settings.json` schema), last run + next
+/// eligibility, paused-after-failures, a corrupt watermark store, and a
+/// 14-day no-trigger nudge. Reads the per-machine state dir and `$HOME` hook
+/// files (outside checks.rs's config-and-repo-only purity contract) — the
+/// reason this lives in doctor.rs rather than checks.rs. Never spawns the
+/// harvest worker: every read here is passive.
+fn check_learn(cfg: &config::Config) -> Vec<checks::Finding> {
+    // Same convention as `check_skills`: an unresolvable $HOME/state dir gets
+    // a visible skip line, never a silently empty section.
+    let Some(learn_dir) = crate::learn::state::learn_dir() else {
+        return vec![checks::Finding::warn(
+            "cannot resolve the learning state dir (no home) — learning checks skipped",
+        )];
+    };
+    let Some(home) = config::home_dir() else {
+        return vec![checks::Finding::warn(
+            "cannot resolve $HOME — learning checks skipped",
+        )];
+    };
+    check_learn_at(cfg, &learn_dir, &home, SystemTime::now())
+}
+
+/// Path-explicit core of [`check_learn`] (the `_at` seam used throughout
+/// `crate::learn`), so unit tests can inject fixture dirs instead of the real
+/// per-machine state dir / `$HOME`.
+fn check_learn_at(
+    cfg: &config::Config,
+    learn_dir: &Path,
+    home: &Path,
+    now: SystemTime,
+) -> Vec<checks::Finding> {
+    use checks::Finding;
+    let mut out = Vec::new();
+
+    let activation = crate::learn::state::read_activation_at(learn_dir);
+    let activated = activation.is_some();
+    let enabled = cfg.learn.enabled;
+    let active = enabled && activated;
+
+    // Intent (synced) vs. this machine's activation ack.
+    match (enabled, activated) {
+        (false, _) => out.push(Finding::ok("learning is off — `load learn on` to enable")),
+        (true, false) => out.push(Finding::warn(
+            "learning is enabled (synced) but not activated on this machine — \
+             run `load learn on` on this machine",
+        )),
+        (true, true) => out.push(Finding::ok(format!(
+            "learning is on and activated ({})",
+            activation
+                .as_ref()
+                .map(|a| a.hostname.as_str())
+                .unwrap_or("this machine")
+        ))),
+    }
+    // A local activation ack surviving a synced disable (Decision #4: `off`
+    // is only *eventually* effective on other machines) — distinct from the
+    // per-hook orphan check below, since the ack itself is what needs
+    // cleaning even if no hook was ever registered here.
+    if activated && !enabled {
+        out.push(Finding::warn(
+            "this machine is still activated for learning even though it's disabled \
+             (synced) — run `load learn off` here to clean up",
+        ));
+    }
+
+    // Hook registration/health, per agent, per dialect.
+    for agent in &cfg.agents {
+        for hr in &agent.learn_hooks {
+            check_learn_hook_at(&mut out, &agent.id, hr, home, active);
+        }
+    }
+
+    // Last run + outcome (log/stamps), shown once there's history or while
+    // learning is on and waiting for a first run.
+    let log = crate::learn::worker::read_log(&learn_dir.join("log.jsonl"));
+    if enabled || !log.is_empty() {
+        match log.last() {
+            Some(r) => out.push(Finding::ok(format!(
+                "last run: {} — {} ({}), {} session{}, {} candidate{}",
+                r.ts,
+                r.outcome,
+                r.cli.as_deref().unwrap_or("?"),
+                r.sessions,
+                plural(r.sessions),
+                r.candidates,
+                plural(r.candidates),
+            ))),
+            None => out.push(Finding::ok("last run: none yet")),
+        }
+    }
+
+    // Next eligibility — the trigger module's own guard-6/7 math
+    // ([`crate::learn::trigger::eligibility_at`]), so this can never drift
+    // from what a real trigger would decide (or from `load learn status`).
+    if enabled {
+        let e = crate::learn::trigger::eligibility_at(learn_dir, cfg.learn.interval, now);
+        out.push(Finding::ok(format!(
+            "next eligibility: {}",
+            eligibility_note(&e)
+        )));
+    }
+
+    // Paused after repeated failures.
+    if crate::learn::state::paused_at(learn_dir) {
+        out.push(Finding::warn(
+            "learning paused after repeated failures — a successful `load harvest` \
+             or `load learn on` clears it",
+        ));
+    }
+
+    // Corrupt watermark store — loud, never silently reset.
+    let wm = crate::learn::watermarks::Watermarks::load_from(&learn_dir.join("watermarks.json"));
+    if wm.corrupt() {
+        out.push(Finding::warn(
+            "learning watermark store is corrupt — run `load learn reset` to re-baseline",
+        ));
+    }
+
+    // 14-day no-trigger nudge: newest log entry (any trigger) vs. now; an
+    // empty/unparseable log counts as stale too (it never ran).
+    if enabled {
+        let stale = match log.last().and_then(|r| r.ts_unix()) {
+            Some(ts) => {
+                let now_secs = now
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                now_secs - ts > LEARN_STALE.as_secs() as i64
+            }
+            None => true,
+        };
+        if stale {
+            out.push(Finding::warn(
+                "learning is on but no trigger has fired in 14+ days — \
+                 run `load harvest` or open `load studio` to check in",
+            ));
+        }
+    }
+
+    out
+}
+
+/// One agent's learn-hook health: malformed JSON, Claude's `disableAllHooks`
+/// carve-out (informational, not a warning, per the T17/T18 carry-note), and
+/// otherwise registered-vs-expected across both hook-file dialects.
+fn check_learn_hook_at(
+    out: &mut Vec<checks::Finding>,
+    agent_id: &str,
+    hr: &crate::adapters::HookRegistry,
+    home: &Path,
+    active: bool,
+) {
+    use checks::Finding;
+    let path = home.join(&hr.hooks_file);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => {
+            // Absent entirely. Only worth a word when learning is active here
+            // AND the agent shows signs of being installed (the same signal
+            // `register_if_installed` uses) — otherwise this is just "the
+            // tool isn't on this machine," not a health problem.
+            let installed = path.parent().map(|p| p.is_dir()).unwrap_or(false);
+            if active && installed {
+                out.push(Finding::warn(format!(
+                    "{agent_id}: {} learning hook not registered in {} — \
+                     run `load refresh` to register it",
+                    hr.event, hr.hooks_file
+                )));
+            }
+            return;
+        }
+    };
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => {
+            out.push(Finding::warn(format!(
+                "{agent_id}: {} is not valid JSON — can't verify the learning hook; fix it by hand",
+                hr.hooks_file
+            )));
+            return;
+        }
+    };
+
+    // Claude's global kill switch: every hook (ours included) is inert, so
+    // its absence here is expected, not a fault — say why instead of warning,
+    // in the exact sentence hook registration already prints (the shared
+    // constant, so the two surfaces can never drift).
+    if hr.format == crate::adapters::HookFormat::ClaudeNested
+        && json
+            .get("disableAllHooks")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    {
+        if active {
+            out.push(Finding::ok(crate::adapters::DISABLE_ALL_HOOKS_NOTE));
+        }
+        return;
+    }
+
+    let suffix = format!(" {}", hr.subcommand);
+    let present = json_has_command_suffix(&json, &suffix);
+    match (active, present) {
+        (true, true) => out.push(Finding::ok(format!(
+            "{agent_id}: {} learning hook registered",
+            hr.event
+        ))),
+        (true, false) => out.push(Finding::warn(format!(
+            "{agent_id}: {} learning hook not registered in {} — run `load refresh` to register it",
+            hr.event, hr.hooks_file
+        ))),
+        (false, true) => out.push(Finding::warn(format!(
+            "{agent_id}: {} learning hook still registered in {} but learning is inactive here — \
+             run `load learn off` here to clean up",
+            hr.event, hr.hooks_file
+        ))),
+        (false, false) => {} // nothing registered, learning inactive — expected, silent
+    }
+}
+
+/// Whether any `"command"` string value anywhere in `v` ends with `suffix`.
+/// Deliberately dialect-agnostic rather than hand-rolled per dialect: Cursor's
+/// flat `{ hooks: { <event>: [ {command} ] } }` and Claude's nested
+/// `{ hooks: { <event>: [ { hooks: [ {command} ] } ] } }` both nest a
+/// `"command"` key somewhere, so one recursive walk finds either.
+fn json_has_command_suffix(v: &serde_json::Value, suffix: &str) -> bool {
+    match v {
+        serde_json::Value::Object(map) => {
+            if let Some(cmd) = map.get("command").and_then(serde_json::Value::as_str) {
+                if cmd.ends_with(suffix) {
+                    return true;
+                }
+            }
+            map.values().any(|v| json_has_command_suffix(v, suffix))
+        }
+        serde_json::Value::Array(arr) => arr.iter().any(|v| json_has_command_suffix(v, suffix)),
+        _ => false,
+    }
+}
+
+/// A short "eligible now" / "in ~Xh" note from the trigger module's
+/// guard-6/7 view ([`crate::learn::trigger::eligibility_at`] — the one source
+/// of truth for next-eligibility, shared with `load learn status`).
+fn eligibility_note(e: &crate::learn::trigger::Eligibility) -> String {
+    if e.now() {
+        "eligible now".to_string()
+    } else {
+        let secs = e.wait.as_secs();
+        if secs >= 3600 {
+            format!("in ~{}h{}m", secs / 3600, (secs % 3600) / 60)
+        } else if secs >= 60 {
+            format!("in ~{}m", secs / 60)
+        } else {
+            format!("in ~{secs}s")
+        }
+    }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
     }
 }
 
@@ -500,5 +781,473 @@ fn check_overlays(c: &mut Checks, prep: &super::Prepared) {
             Status::Warn,
             "no overlays generated yet (run `load refresh`)",
         );
+    }
+}
+
+#[cfg(test)]
+mod learn_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::learn::state::Activation;
+    use checks::Status;
+    use std::time::Duration;
+
+    /// A fresh learn dir + home dir under one tempdir, plus the guard kept
+    /// alive so the paths stay valid for the test's lifetime.
+    struct Env {
+        _tmp: tempfile::TempDir,
+        learn_dir: std::path::PathBuf,
+        home: std::path::PathBuf,
+    }
+
+    fn env() -> Env {
+        let tmp = tempfile::tempdir().unwrap();
+        let learn_dir = tmp.path().join("state/learn");
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&learn_dir).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        Env {
+            _tmp: tmp,
+            learn_dir,
+            home,
+        }
+    }
+
+    fn activate(learn_dir: &Path) {
+        crate::learn::state::write_activation_at(
+            learn_dir,
+            &Activation {
+                machine_id: "test-machine".into(),
+                hostname: "test.local".into(),
+                activated_at: "2026-07-10T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+    }
+
+    /// A far-future instant so stamp/log-age math never accidentally lands in
+    /// the past relative to "now" unless a test backdates something itself.
+    fn now() -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000)
+    }
+
+    fn find<'a>(findings: &'a [checks::Finding], needle: &str) -> Option<&'a checks::Finding> {
+        findings.iter().find(|f| f.message.contains(needle))
+    }
+
+    /// Fetch a built-in agent's learn-hook descriptor by agent id (from the
+    /// real `builtin_agents()` table via `Config::defaults()`), so fixtures
+    /// write hook files matched by the descriptor's actual subcommand suffix
+    /// rather than a hand-duplicated string that could drift.
+    fn learn_hook<'a>(cfg: &'a Config, agent_id: &str) -> &'a crate::adapters::HookRegistry {
+        cfg.agents
+            .iter()
+            .find(|a| a.id == agent_id)
+            .and_then(|a| a.learn_hooks.first())
+            .unwrap_or_else(|| panic!("no learn hook registered for agent '{agent_id}'"))
+    }
+
+    // --- healthy / quiet ----------------------------------------------------
+
+    /// A totally vanilla install (learning never touched) must produce exactly
+    /// one quiet `Ok` line naming the enabling command — no warnings, no
+    /// per-hook noise, no log/eligibility clutter.
+    #[test]
+    fn healthy_quiet_when_learning_untouched() {
+        let e = env();
+        let cfg = Config::defaults(); // learn.enabled = false by default
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        assert_eq!(findings.len(), 1, "expected exactly one line: {findings:?}");
+        assert_eq!(findings[0].status, Status::Ok);
+        assert!(findings[0].message.contains("load learn on"));
+    }
+
+    // --- enabled but not activated here --------------------------------------
+
+    #[test]
+    fn enabled_but_not_activated_warns_with_clearing_action() {
+        let e = env();
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "not activated on this machine").expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(
+            f.message.contains("load learn on"),
+            "must name the clearing action: {}",
+            f.message
+        );
+    }
+
+    // --- activated but the synced intent flipped off -------------------------
+
+    #[test]
+    fn ack_surviving_a_synced_disable_warns_here_with_learn_off() {
+        let e = env();
+        activate(&e.learn_dir); // this machine was activated…
+        let cfg = Config::defaults(); // …but `enabled` is false (default)
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "still activated for learning").expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.message.contains("load learn off"));
+    }
+
+    // --- orphaned hooks, both dialects ---------------------------------------
+
+    /// Cursor's flat `hooks.json` dialect: a learn hook left registered after
+    /// learning went inactive here must be flagged with the Decision #4
+    /// clearing action.
+    #[test]
+    fn orphaned_cursor_flat_hook_warns_to_clean_up() {
+        let e = env();
+        let cfg = Config::defaults(); // not enabled, not activated → inactive
+        let hr = learn_hook(&cfg, "cursor");
+        let path = e.home.join(&hr.hooks_file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"version":1,"hooks":{{"{}":[{{"command":"\"/usr/local/bin/load\" {}"}}]}}}}"#,
+                hr.event, hr.subcommand
+            ),
+        )
+        .unwrap();
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "cursor: stop learning hook still registered")
+            .expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.message.contains("load learn off"));
+    }
+
+    /// Claude's nested `.claude/settings.json` matcher schema: same orphan
+    /// condition, different on-disk dialect — the check must handle both.
+    #[test]
+    fn orphaned_claude_nested_hook_warns_to_clean_up() {
+        let e = env();
+        let cfg = Config::defaults();
+        let hr = learn_hook(&cfg, "claude");
+        let path = e.home.join(&hr.hooks_file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"hooks":{{"{}":[{{"hooks":[{{"type":"command","command":"\"/usr/local/bin/load\" {}","timeout":10}}]}}]}}}}"#,
+                hr.event, hr.subcommand
+            ),
+        )
+        .unwrap();
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(
+            &findings,
+            "claude: SessionEnd learning hook still registered",
+        )
+        .expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.message.contains("load learn off"));
+    }
+
+    /// While learning IS active here, a correctly registered hook is quiet
+    /// (`Ok`), not a warning — the orphan message only fires the other way.
+    #[test]
+    fn registered_hook_while_active_is_ok_not_warn() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        let hr = learn_hook(&cfg, "cursor");
+        let path = e.home.join(&hr.hooks_file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"version":1,"hooks":{{"{}":[{{"command":"\"/usr/local/bin/load\" {}"}}]}}}}"#,
+                hr.event, hr.subcommand
+            ),
+        )
+        .unwrap();
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "cursor: stop learning hook registered").expect("must be present");
+        assert_eq!(f.status, Status::Ok);
+        assert!(
+            find(&findings, "still registered").is_none(),
+            "must not also fire the orphan warning: {findings:?}"
+        );
+    }
+
+    // --- hook expected but missing, while active ------------------------------
+
+    /// Learning is active and the agent looks installed (its dotfile dir
+    /// exists), but the hooks file is absent entirely — the file-absent early
+    /// return must still warn with the `load refresh` clearing action.
+    #[test]
+    fn active_with_hooks_file_absent_warns_not_registered() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        // The agent's dotfile dir exists (installed signal) but no hooks file.
+        std::fs::create_dir_all(e.home.join(".cursor")).unwrap();
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "cursor: stop learning hook not registered")
+            .expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(
+            f.message.contains("load refresh"),
+            "must name the clearing action: {}",
+            f.message
+        );
+    }
+
+    /// Learning is active and the hooks file exists, but carries no entry with
+    /// our subcommand suffix (only a foreign hook) — the `(active, !present)`
+    /// arm must warn with the `load refresh` clearing action.
+    #[test]
+    fn active_with_file_present_but_our_entry_absent_warns_not_registered() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        let hr = learn_hook(&cfg, "claude");
+        let path = e.home.join(&hr.hooks_file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Valid JSON, foreign hook only — nothing carrying our suffix.
+        std::fs::write(
+            &path,
+            r#"{"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"\"/opt/other\" wrapup"}]}]}}"#,
+        )
+        .unwrap();
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "claude: SessionEnd learning hook not registered")
+            .expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(
+            f.message.contains("load refresh"),
+            "must name the clearing action: {}",
+            f.message
+        );
+    }
+
+    // --- disableAllHooks: informational, not a warning -----------------------
+
+    #[test]
+    fn claude_disable_all_hooks_is_informational_while_active() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        let hr = learn_hook(&cfg, "claude");
+        let path = e.home.join(&hr.hooks_file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"disableAllHooks":true}"#).unwrap();
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "disableAllHooks").expect("must note it: {findings:?}");
+        assert_eq!(
+            f.status,
+            Status::Ok,
+            "absence under disableAllHooks is informational, not a warning"
+        );
+        // The exact sentence is the shared constant hook registration prints
+        // too — one source of truth, no drift between the two surfaces.
+        assert_eq!(f.message, crate::adapters::DISABLE_ALL_HOOKS_NOTE);
+        assert!(
+            find(&findings, "not registered").is_none(),
+            "must not ALSO warn 'not registered': {findings:?}"
+        );
+    }
+
+    // --- malformed hook JSON --------------------------------------------------
+
+    #[test]
+    fn malformed_hook_json_is_flagged() {
+        let e = env();
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        activate(&e.learn_dir);
+        let hr = learn_hook(&cfg, "claude");
+        let path = e.home.join(&hr.hooks_file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{ not json").unwrap();
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "not valid JSON").expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+    }
+
+    // --- paused after repeated failures ---------------------------------------
+
+    #[test]
+    fn paused_after_failures_names_the_clearing_action() {
+        let e = env();
+        crate::learn::state::record_failure_at(&e.learn_dir);
+        crate::learn::state::record_failure_at(&e.learn_dir); // 2 → paused
+        let cfg = Config::defaults();
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "paused after repeated failures").expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.message.contains("load harvest") && f.message.contains("load learn on"));
+    }
+
+    // --- corrupt watermarks -----------------------------------------------------
+
+    #[test]
+    fn corrupt_watermarks_are_flagged_loudly() {
+        let e = env();
+        std::fs::write(e.learn_dir.join("watermarks.json"), "{ not json").unwrap();
+        let cfg = Config::defaults();
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let f = find(&findings, "watermark store is corrupt").expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.message.contains("load learn reset"));
+    }
+
+    // --- 14-day no-trigger nudge -----------------------------------------------
+
+    fn log_line(ts: &str) -> String {
+        format!(
+            r#"{{"ts":"{ts}","trigger":"ambient","cli":"claude","model":"haiku","sessions":1,"candidates":1,"outcome":"extracted"}}"#
+        )
+    }
+
+    #[test]
+    fn stale_14_day_nudge_fires_when_enabled_and_last_run_is_old() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+
+        let old_ts = "2020-01-01T00:00:00Z";
+        let old_unix = chrono::DateTime::parse_from_rfc3339(old_ts)
+            .unwrap()
+            .timestamp();
+        std::fs::write(e.learn_dir.join("log.jsonl"), log_line(old_ts) + "\n").unwrap();
+        // 20 days after the last run.
+        let now =
+            SystemTime::UNIX_EPOCH + Duration::from_secs((old_unix + 20 * 24 * 60 * 60) as u64);
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now);
+        let f =
+            find(&findings, "no trigger has fired in 14+ days").expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(f.message.contains("load harvest") || f.message.contains("load studio"));
+    }
+
+    /// Enabled with no run ever logged also nudges (never ran is stale too).
+    #[test]
+    fn stale_14_day_nudge_fires_when_never_run() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        assert!(
+            find(&findings, "no trigger has fired in 14+ days").is_some(),
+            "never having run must also nudge: {findings:?}"
+        );
+    }
+
+    /// A recent run inside the 14-day window must NOT nudge.
+    #[test]
+    fn no_stale_nudge_when_last_run_is_recent() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+
+        let recent_ts = "2020-01-01T00:00:00Z";
+        let recent_unix = chrono::DateTime::parse_from_rfc3339(recent_ts)
+            .unwrap()
+            .timestamp();
+        std::fs::write(e.learn_dir.join("log.jsonl"), log_line(recent_ts) + "\n").unwrap();
+        // Only 1 day later — well inside the 14-day window.
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs((recent_unix + 24 * 60 * 60) as u64);
+
+        let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now);
+        assert!(
+            find(&findings, "no trigger has fired in 14+ days").is_none(),
+            "a recent run must not nudge: {findings:?}"
+        );
+        // And the last-run line reflects it.
+        assert!(find(&findings, "last run:").is_some());
+    }
+
+    // --- doctor never triggers a harvest ---------------------------------------
+
+    /// Running the check must be side-effect-free on the state dir: no new
+    /// eligible-hint files, no log growth, no stamp writes. `check_learn_at`
+    /// only reads; the real spawn seam (`trigger::maybe_spawn`) is never
+    /// called from doctor at all — this snapshots the state dir before/after
+    /// to prove it, rather than merely asserting by code inspection.
+    #[test]
+    fn check_learn_never_mutates_the_state_dir() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+
+        let snapshot = |dir: &Path| -> Vec<(std::path::PathBuf, u64)> {
+            fn walk(dir: &Path, out: &mut Vec<(std::path::PathBuf, u64)>) {
+                let Ok(entries) = std::fs::read_dir(dir) else {
+                    return;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        walk(&path, out);
+                    } else if let Ok(meta) = entry.metadata() {
+                        out.push((path, meta.len()));
+                    }
+                }
+            }
+            let mut out = Vec::new();
+            walk(dir, &mut out);
+            out.sort();
+            out
+        };
+
+        let before = snapshot(&e.learn_dir);
+        let _ = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
+        let after = snapshot(&e.learn_dir);
+        assert_eq!(
+            before, after,
+            "check_learn_at must not write anything to the state dir"
+        );
+    }
+
+    // --- eligibility_note format ---------------------------------------------
+
+    /// Lock the note's concrete text for one branch each: eligible-now, and a
+    /// waiting duration in the hours (and minutes) form.
+    #[test]
+    fn eligibility_note_formats_now_and_wait_branches() {
+        use crate::learn::trigger::Eligibility;
+        let eligible = Eligibility {
+            scan_due: true,
+            spend_due: true,
+            hint: false,
+            wait: Duration::ZERO,
+        };
+        assert_eq!(eligibility_note(&eligible), "eligible now");
+
+        let waiting = Eligibility {
+            scan_due: true,
+            spend_due: false,
+            hint: false,
+            wait: Duration::from_secs(2 * 3600 + 5 * 60), // 2h05m
+        };
+        assert_eq!(eligibility_note(&waiting), "in ~2h5m");
+
+        let waiting_minutes = Eligibility {
+            scan_due: false,
+            spend_due: false,
+            hint: false,
+            wait: Duration::from_secs(90),
+        };
+        assert_eq!(eligibility_note(&waiting_minutes), "in ~1m");
     }
 }

@@ -38,6 +38,12 @@ use crate::workflow::Workflow;
 use crate::writer::{self, WriteAction, Writer, WrittenFile};
 
 pub mod commands;
+mod hooks_claude;
+
+// The one sentence both surfaces (hook registration notes and doctor's
+// Learning section) print for Claude's `disableAllHooks: true` state — a
+// single constant so the wording can never drift between them.
+pub use hooks_claude::DISABLE_ALL_HOOKS_NOTE;
 
 /// A declarative description of how to deliver the overlay to one agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -129,6 +135,14 @@ pub struct AgentDescriptor {
     /// synced config can never brick an older binary.
     #[serde(skip)]
     pub review_commands: Vec<String>,
+    /// Session-end hooks that drive ambient learning, registered by the passive
+    /// bootstrap ONLY while learning is active on this machine and removed by
+    /// [`remove_learn_hooks`] on `load learn off`. Kept separate from
+    /// [`hook_registry`](Self::hook_registry) (the always-on freshness hook) so
+    /// a routine refresh can never re-add them once learning is off. Descriptor
+    /// data only (`#[serde(skip)]`), like [`review_commands`](Self::review_commands).
+    #[serde(skip)]
+    pub learn_hooks: Vec<HookRegistry>,
 }
 
 fn default_template() -> String {
@@ -160,13 +174,48 @@ pub struct ImporterRegistry {
     pub value: Option<String>,
 }
 
+/// What a registered hook is *for*, so the passive bootstrap and the removal
+/// path can tell loadout's two hook families apart. Freshness hooks keep the
+/// overlay current in IDE sessions and register on every refresh; learn hooks
+/// drive ambient harvesting and register only while learning is active on this
+/// machine (`load learn on`). Code-side descriptor data only (`#[serde(skip)]`,
+/// the `review_commands` precedent) — never a config-schema key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HookPurpose {
+    /// Keeps the overlay fresh for sessions loadout doesn't launch (the IDE).
+    #[default]
+    Freshness,
+    /// Fires ambient learning at session end.
+    Learn,
+}
+
+/// The on-disk shape of an agent's hooks file, so registration writes the right
+/// dialect. `Flat` is the single-array-of-`{command}` layout Cursor uses;
+/// `ClaudeNested` is Claude Code's nested matcher schema in `.claude/settings.json`,
+/// written by [`hooks_claude`]. Both [`apply_hook_registry_at`] and
+/// [`remove_learn_hooks_at`] route on this so a flat `{command}` line is never
+/// written into the nested file (which would corrupt it). Code-side descriptor
+/// data only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HookFormat {
+    /// Flat `{ hooks: { <event>: [ { command } ] } }` (Cursor's `hooks.json`).
+    #[default]
+    Flat,
+    /// Claude Code's nested matcher schema in `.claude/settings.json`
+    /// (`hooks.<event>: [{ matcher?, hooks: [{ type, command, timeout? }] }]`).
+    ClaudeNested,
+}
+
 /// Registration of a loadout freshness hook in an agent's **user-level** hooks
 /// file (e.g. Cursor's `~/.cursor/hooks.json`): the agent then re-renders the
 /// overlay itself on its own lifecycle events — the freshness path for IDE
 /// sessions, which never go through `load run`. Registration is global and
 /// idempotent; loadout's entry is matched by the `subcommand` suffix (so a
 /// moved binary is re-pointed, not duplicated) and every other tool's entry is
-/// preserved byte-for-byte.
+/// preserved value-identically. (Preservation is semantic, not byte-exact: the
+/// file is parsed to a `serde_json::Value` and re-emitted, which sorts each
+/// object's keys — a rich foreign entry keeps all its fields and values but may
+/// see its keys reordered.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HookRegistry {
@@ -177,6 +226,14 @@ pub struct HookRegistry {
     /// The `load` subcommand the hook runs (e.g. `hook cursor`). The registered
     /// command is `"<current load binary>" <subcommand>`; the suffix also
     /// identifies our entry for updates and `--remove`.
+    ///
+    /// CAUTION: entries are matched by `command.ends_with(" <subcommand>")`, so
+    /// this discrimination is safe only while no subcommand's ` <subcommand>`
+    /// string is a suffix of another subcommand's full command line. Today it
+    /// holds — `hook cursor` is NOT a suffix of `hook cursor --event
+    /// session-end` (which ends in `session-end`), and vice versa. Adding a
+    /// subcommand like `session-end` (a trailing substring of an existing one)
+    /// would break it: prefer distinct, mutually non-suffixing tails.
     pub subcommand: String,
     /// Whether the hook may **adopt** a repo on first open — wiring this agent
     /// into a git repo some loadout applies to, with no prior `load refresh`
@@ -184,6 +241,16 @@ pub struct HookRegistry {
     /// adopted by hand.
     #[serde(default = "default_true")]
     pub auto_adopt: bool,
+    /// Whether this hook keeps the overlay fresh (`Freshness`) or drives ambient
+    /// learning (`Learn`). Descriptor data only — never serialized, so a synced
+    /// `[[agents]]` override can't set it (the `review_commands` precedent).
+    /// Defaults to `Freshness`.
+    #[serde(skip)]
+    pub purpose: HookPurpose,
+    /// The hooks-file dialect this entry writes (`Flat` vs `ClaudeNested`).
+    /// Descriptor data only; defaults to `Flat`.
+    #[serde(skip)]
+    pub format: HookFormat,
 }
 
 fn default_true() -> bool {
@@ -221,6 +288,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             commands_dir: None,
             command_format: None,
             review_commands: Vec::new(),
+            learn_hooks: Vec::new(),
         }
     }
     vec![
@@ -233,6 +301,17 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             // subdir namespaces them as `/loadout:<stage>`.
             commands_dir: Some(".claude/commands".into()),
             review_commands: vec!["/code-review".into(), "/security-review".into()],
+            // Ambient learning: a SessionEnd hook fires the harvest fast path when
+            // a Claude session ends. Written in the nested matcher schema of
+            // `.claude/settings.json` (`format: ClaudeNested`) by `hooks_claude`.
+            learn_hooks: vec![HookRegistry {
+                hooks_file: ".claude/settings.json".into(),
+                event: "SessionEnd".into(),
+                subcommand: "hook claude --event session-end".into(),
+                auto_adopt: false,
+                purpose: HookPurpose::Learn,
+                format: HookFormat::ClaudeNested,
+            }],
             ..d("claude", "claude.md")
         },
         AgentDescriptor {
@@ -342,7 +421,21 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
                 event: "sessionStart".into(),
                 subcommand: "hook cursor".into(),
                 auto_adopt: true,
+                purpose: HookPurpose::Freshness,
+                format: HookFormat::Flat,
             }),
+            // Ambient learning: Cursor's `stop` event fires the harvest fast path
+            // when a session ends. Flat dialect (same `hooks.json` as the freshness
+            // hook), but a distinct `--event session-end` subcommand suffix so the
+            // two are never confused during registration or removal.
+            learn_hooks: vec![HookRegistry {
+                hooks_file: ".cursor/hooks.json".into(),
+                event: "stop".into(),
+                subcommand: "hook cursor --event session-end".into(),
+                auto_adopt: false,
+                purpose: HookPurpose::Learn,
+                format: HookFormat::Flat,
+            }],
             wire_hint: Some(
                 "Cursor reads .cursor/rules/*.mdc; loadout writes the overlay to a \
                  gitignored .cursor/rules/loadout.mdc (alwaysApply: true)."
@@ -407,6 +500,12 @@ pub struct AppContext<'a> {
     pub generated_at: String,
     /// The writer (apply or dry-run).
     pub writer: &'a dyn Writer,
+    /// Count of `Pending` learn candidates awaiting review — computed ONCE
+    /// per command invocation by the caller (see
+    /// `commands::apply::learn_pending_count`) and threaded through to the
+    /// rendered header's discovery line. `0` for callers outside the four
+    /// learn entry points (`explain`, `clean`) that don't need it.
+    pub learn_pending: usize,
 }
 
 impl AppContext<'_> {
@@ -883,6 +982,7 @@ fn render_overlay(
         config: app.config,
         generated_at: app.generated_at.clone(),
         dynamic,
+        learn_pending: app.learn_pending,
     })
 }
 
@@ -1109,34 +1209,142 @@ fn apply_importer_registry(
 /// installed (the hooks file's parent dir exists under `$HOME`, e.g.
 /// `~/.cursor/`), so loadout never writes config for a product the user
 /// doesn't have. Explicitly rendering the agent (`refresh --agent cursor`)
-/// still registers unconditionally via [`apply`]. Idempotent and cheap after
-/// the first time; returns human notes for anything actually written.
-pub fn bootstrap_hook_registrations(config: &Config, dry_run: bool) -> Vec<String> {
+/// still registers the freshness hook unconditionally via [`apply`].
+///
+/// Learn hooks (ambient harvesting) register here ONLY when `learn_active` — the
+/// caller passes `learn::state::learn_active(cfg)` (`[learn] enabled` in config
+/// AND a per-machine activation ack). Gating the learn hooks in bootstrap rather
+/// than in [`apply`] is the safety property: a routine refresh can never re-add
+/// them after `load learn off` cleared the ack, and [`apply`] never touches
+/// them. Idempotent and cheap after the first time; returns human notes for
+/// anything actually written.
+pub fn bootstrap_hook_registrations(
+    config: &Config,
+    learn_active: bool,
+    dry_run: bool,
+) -> Vec<String> {
+    let Some(home) = config::home_dir() else {
+        return Vec::new();
+    };
+    bootstrap_hook_registrations_at(config, learn_active, &home, dry_run)
+}
+
+/// Home-explicit core of [`bootstrap_hook_registrations`] (the `_at` test seam,
+/// following the rest of the learn module). Unit tests point `home` at a
+/// tempdir so they never touch the real `$HOME`.
+fn bootstrap_hook_registrations_at(
+    config: &Config,
+    learn_active: bool,
+    home: &Path,
+    dry_run: bool,
+) -> Vec<String> {
     let writer = crate::writer::AtomicWriter::new(dry_run);
     let mut notes = Vec::new();
     let mut warnings = Vec::new(); // silent path: bootstrap never nags
-    let Some(home) = config::home_dir() else {
-        return notes;
-    };
     for d in &config.agents {
-        let Some(hr) = &d.hook_registry else { continue };
-        let installed = Path::new(&hr.hooks_file)
-            .parent()
-            .map(|p| home.join(p).is_dir())
-            .unwrap_or(false);
-        if !installed {
-            continue;
+        // Freshness hook: registered on every bootstrap, as before.
+        if let Some(hr) = &d.hook_registry {
+            register_if_installed(&writer, home, hr, &mut notes, &mut warnings);
         }
-        let mut files = Vec::new();
-        let _ = apply_hook_registry(&writer, hr, &mut files, &mut notes, &mut warnings);
+        // Learn hooks: registered ONLY while learning is active on this machine.
+        if learn_active {
+            for hr in &d.learn_hooks {
+                register_if_installed(&writer, home, hr, &mut notes, &mut warnings);
+            }
+        }
     }
     notes
 }
 
-/// Ensure loadout's freshness hook is registered in the agent's user-level
-/// hooks file. A pre-existing file gets a one-time `.loadout-bak` backup before
-/// its first modification. Degrades to a warning (never corrupts) on any
-/// read/parse failure, exactly like the importer registries.
+/// Register `hr` when the host agent shows evidence of being installed (its
+/// hooks file's parent dir exists under `home`), so loadout never writes config
+/// for a product the user doesn't have. Shared by the freshness and learn
+/// bootstrap loops.
+fn register_if_installed(
+    writer: &dyn Writer,
+    home: &Path,
+    hr: &HookRegistry,
+    notes: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    let installed = Path::new(&hr.hooks_file)
+        .parent()
+        .map(|p| home.join(p).is_dir())
+        .unwrap_or(false);
+    if !installed {
+        return;
+    }
+    let mut files = Vec::new();
+    let _ = apply_hook_registry_at(writer, home, hr, &mut files, notes, warnings);
+}
+
+/// Deregister every agent's ambient-learning hooks — called by `load learn off`.
+/// Strips only entries whose command carries a learn subcommand's ` <subcommand>`
+/// suffix, so Cursor's freshness hook (`… hook cursor`, a *different* suffix) and
+/// every other tool's entries survive. Routes on [`HookRegistry::format`]: `Flat`
+/// entries via [`remove_hook_command`], `ClaudeNested` via
+/// [`hooks_claude::remove_claude_hook`] (which also drops the loadout-created
+/// containers it emptied). A one-time `.loadout-bak` backup precedes the first
+/// edit of a pre-existing file. Returns human notes for each file actually cleaned.
+pub fn remove_learn_hooks(config: &Config, dry_run: bool) -> Vec<String> {
+    let Some(home) = config::home_dir() else {
+        return Vec::new();
+    };
+    remove_learn_hooks_at(config, &home, dry_run)
+}
+
+/// Home-explicit core of [`remove_learn_hooks`] (the `_at` test seam).
+fn remove_learn_hooks_at(config: &Config, home: &Path, dry_run: bool) -> Vec<String> {
+    let mut notes = Vec::new();
+    for d in &config.agents {
+        for hr in &d.learn_hooks {
+            let path = home.join(&hr.hooks_file);
+            let Ok(existing) = std::fs::read_to_string(&path) else {
+                continue; // absent/unreadable → nothing to remove (never clobber)
+            };
+            // Route on dialect: Cursor's flat array vs Claude Code's nested schema.
+            let removed = match hr.format {
+                HookFormat::Flat => remove_hook_command(&existing, &hr.subcommand),
+                HookFormat::ClaudeNested => {
+                    hooks_claude::remove_claude_hook(&existing, &hr.subcommand)
+                }
+            };
+            match removed {
+                Ok(Some(updated)) => {
+                    if dry_run {
+                        notes.push(format!(
+                            "would deregister the {} learning hook from {}",
+                            hr.event,
+                            path.display()
+                        ));
+                    } else {
+                        // One-time backup before we first edit a pre-existing file.
+                        let bak = path.with_extension("json.loadout-bak");
+                        if !bak.exists() {
+                            let _ = std::fs::copy(&path, &bak);
+                        }
+                        if crate::writer::atomic_write(&path, &updated).is_ok() {
+                            notes.push(format!(
+                                "deregistered the {} learning hook from {}",
+                                hr.event,
+                                path.display()
+                            ));
+                        }
+                    }
+                }
+                Ok(None) => {} // no learn entry present — nothing to do
+                Err(_) => {}   // corrupt JSON → leave it untouched (never clobber)
+            }
+        }
+    }
+    notes
+}
+
+/// Ensure loadout's hook is registered in the agent's user-level hooks file.
+/// Resolves `$HOME`, then delegates to [`apply_hook_registry_at`]. A pre-existing
+/// file gets a one-time `.loadout-bak` backup before its first modification.
+/// Degrades to a warning (never corrupts) on any read/parse failure, exactly
+/// like the importer registries.
 fn apply_hook_registry(
     writer: &dyn Writer,
     hr: &HookRegistry,
@@ -1151,6 +1359,24 @@ fn apply_hook_registry(
         ));
         return Ok(());
     };
+    apply_hook_registry_at(writer, &home, hr, files, notes, warnings)
+}
+
+/// Home-explicit core of [`apply_hook_registry`] (the `_at` test seam). Routes on
+/// [`HookRegistry::format`]: `Flat` writes Cursor's single-array dialect;
+/// `ClaudeNested` writes Claude Code's nested matcher schema in
+/// `.claude/settings.json` via [`hooks_claude`]. Both share the read → backup →
+/// atomic-write → note path; only the JSON transform differs. Claude Code's
+/// top-level `disableAllHooks: true` short-circuits (register nothing) and
+/// surfaces [`hooks_claude::DISABLE_ALL_HOOKS_NOTE`].
+fn apply_hook_registry_at(
+    writer: &dyn Writer,
+    home: &Path,
+    hr: &HookRegistry,
+    files: &mut Vec<WrittenFile>,
+    notes: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> crate::Result<()> {
     let path = home.join(&hr.hooks_file);
     let existing = match std::fs::read_to_string(&path) {
         Ok(s) => Some(s),
@@ -1164,13 +1390,35 @@ fn apply_hook_registry(
             return Ok(());
         }
     };
+
+    // Claude Code disables every hook when this top-level flag is set — our entry
+    // would be inert, so we register nothing and tell the user learning falls back
+    // to entry-point triggers.
+    if hr.format == HookFormat::ClaudeNested
+        && hooks_claude::hooks_disabled(existing.as_deref().unwrap_or(""))
+    {
+        notes.push(hooks_claude::DISABLE_ALL_HOOKS_NOTE.to_string());
+        return Ok(());
+    }
+
     let Ok(exe) = std::env::current_exe() else {
         warnings.push("could not resolve the load binary path for hook registration".into());
         return Ok(());
     };
     let command = format!("\"{}\" {}", exe.display(), hr.subcommand);
 
-    match upsert_hook_command(existing.as_deref(), &hr.event, &hr.subcommand, &command) {
+    let updated = match hr.format {
+        HookFormat::Flat => {
+            upsert_hook_command(existing.as_deref(), &hr.event, &hr.subcommand, &command)
+        }
+        HookFormat::ClaudeNested => hooks_claude::upsert_claude_hook(
+            existing.as_deref().unwrap_or(""),
+            &hr.event,
+            &hr.subcommand,
+            &command,
+        ),
+    };
+    match updated {
         Ok(Some(updated)) => {
             // One-time backup of a pre-existing file we're about to modify.
             if existing.is_some() && !writer.is_dry_run() {
@@ -1180,11 +1428,19 @@ fn apply_hook_registry(
                 }
             }
             files.push(writer.write(&path, &updated)?);
-            notes.push(format!(
-                "registered the {} hook in {} (keeps the overlay fresh in the IDE)",
-                hr.event,
-                path.display()
-            ));
+            let note = match hr.purpose {
+                HookPurpose::Freshness => format!(
+                    "registered the {} hook in {} (keeps the overlay fresh in the IDE)",
+                    hr.event,
+                    path.display()
+                ),
+                HookPurpose::Learn => format!(
+                    "registered the {} learning hook in {}",
+                    hr.event,
+                    path.display()
+                ),
+            };
+            notes.push(note);
         }
         Ok(None) => {} // already registered with the current binary — no churn
         Err(e) => warnings.push(format!(
@@ -1197,8 +1453,11 @@ fn apply_hook_registry(
 }
 
 /// Ensure an entry running `command` exists under `hooks.<event>` in the hooks
-/// file JSON, preserving every other field and entry byte-for-byte (the file is
-/// shared with other tools). An existing loadout entry — identified by the
+/// file JSON, preserving every other field and entry value-identically (the file
+/// is shared with other tools). Preservation is semantic, not byte-exact: the
+/// JSON is parsed and re-emitted, so a foreign object's keys may be reordered
+/// (serde_json sorts them) — every field and value survives, the byte layout
+/// need not. An existing loadout entry — identified by the
 /// ` <subcommand>` suffix — is updated in place when the binary moved. Returns
 /// the new pretty-printed JSON, or `None` when already current (no churn).
 fn upsert_hook_command(
@@ -1375,7 +1634,11 @@ fn register_context_name(
 
 #[cfg(test)]
 mod hook_registry_tests {
-    use super::{remove_hook_command, upsert_hook_command};
+    use super::{
+        bootstrap_hook_registrations_at, remove_hook_command, remove_learn_hooks_at,
+        upsert_hook_command,
+    };
+    use crate::config::Config;
 
     const CMD: &str = "\"/usr/local/bin/load\" hook cursor";
 
@@ -1409,7 +1672,7 @@ mod hook_registry_tests {
             .unwrap()
             .expect("should write");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        // Other tools' entries survive byte-for-byte…
+        // Other tools' entries survive value-identically…
         assert_eq!(
             v["hooks"]["beforeSubmitPrompt"].as_array().unwrap().len(),
             1
@@ -1477,6 +1740,239 @@ mod hook_registry_tests {
     fn garbage_json_errors_rather_than_clobbering() {
         assert!(upsert_hook_command(Some("not json"), "sessionStart", "hook cursor", CMD).is_err());
         assert!(remove_hook_command("not json", "hook cursor").is_err());
+    }
+
+    // --- purpose ids: freshness vs learn suffixes never cross-match ---------
+
+    /// The suffix distinction, direction 1: registering the FRESHNESS hook
+    /// (`hook cursor`) must never repoint loadout's LEARN entry
+    /// (`hook cursor --event session-end`). Both entries share one event array so
+    /// the freshness upsert actually scans the learn entry while hunting for
+    /// "its own" (the ` hook cursor` suffix) — and, because the learn command
+    /// ends in `session-end`, it is left byte-identical and the freshness entry
+    /// is appended fresh.
+    #[test]
+    fn freshness_registration_never_repoints_a_learn_entry() {
+        let learn_cmd = "\"/usr/local/bin/load\" hook cursor --event session-end";
+        let existing = serde_json::json!({
+            "version": 1,
+            "hooks": { "sessionStart": [ { "command": learn_cmd } ] }
+        })
+        .to_string();
+        let out = upsert_hook_command(Some(&existing), "sessionStart", "hook cursor", CMD)
+            .unwrap()
+            .expect("freshness suffix ≠ learn suffix → a fresh append, not a repoint");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = v["hooks"]["sessionStart"].as_array().unwrap();
+        assert_eq!(
+            arr.len(),
+            2,
+            "learn entry kept, freshness appended (not repointed)"
+        );
+        assert_eq!(arr[0]["command"], learn_cmd, "learn entry byte-identical");
+        assert_eq!(arr[1]["command"], CMD);
+    }
+
+    /// The suffix distinction, direction 2: removing loadout's LEARN entry
+    /// (`hook cursor --event session-end`) must never touch the freshness hook
+    /// (`hook cursor`) nor any foreign entry — all in the same event array.
+    #[test]
+    fn learn_removal_never_touches_freshness_or_foreign() {
+        let freshness = "\"/usr/local/bin/load\" hook cursor";
+        let learn_cmd = "\"/usr/local/bin/load\" hook cursor --event session-end";
+        let foreign = "\"/opt/bun\" worker.cjs hook cursor summarize";
+        let existing = serde_json::json!({
+            "version": 1,
+            "hooks": { "stop": [
+                { "command": freshness },
+                { "command": learn_cmd },
+                { "command": foreign },
+            ] }
+        })
+        .to_string();
+        let out = remove_hook_command(&existing, "hook cursor --event session-end")
+            .unwrap()
+            .expect("the learn entry is present → a change");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = v["hooks"]["stop"].as_array().unwrap();
+        assert_eq!(arr.len(), 2, "only the learn entry removed");
+        assert_eq!(
+            arr[0]["command"], freshness,
+            "freshness survives value-identical"
+        );
+        assert_eq!(
+            arr[1]["command"], foreign,
+            "foreign survives value-identical"
+        );
+        // Reverse: with the learn entry gone, removing it again is a no-op — the
+        // freshness `hook cursor` suffix is NOT mistaken for the learn suffix.
+        assert!(remove_hook_command(&out, "hook cursor --event session-end")
+            .unwrap()
+            .is_none());
+    }
+
+    // --- bootstrap gating: learn hooks register only while active -----------
+
+    /// A tempdir `$HOME` where both host agents look installed (their hook-file
+    /// parent dirs exist). `Config::defaults()` carries the built-in cursor +
+    /// claude learn hooks.
+    fn installed_home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".cursor")).unwrap();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        home
+    }
+
+    #[test]
+    fn bootstrap_registers_no_learn_hooks_when_inactive() {
+        let home = installed_home();
+        bootstrap_hook_registrations_at(&Config::defaults(), false, home.path(), false);
+
+        let cursor: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.path().join(".cursor/hooks.json")).unwrap(),
+        )
+        .unwrap();
+        // Cursor's FRESHNESS hook still registers (bootstrap always does that)…
+        let ss = cursor["hooks"]["sessionStart"].as_array().unwrap();
+        assert_eq!(ss.len(), 1);
+        assert!(ss[0]["command"].as_str().unwrap().ends_with(" hook cursor"));
+        // …but the learn event ("stop") was never created while inactive.
+        assert!(
+            cursor["hooks"].get("stop").is_none(),
+            "no learn hook while learning is inactive: {cursor}"
+        );
+        // Claude has only a learn hook → its settings file is never written.
+        assert!(
+            !home.path().join(".claude/settings.json").exists(),
+            "no claude write while inactive"
+        );
+    }
+
+    #[test]
+    fn bootstrap_registers_both_learn_dialects_when_active() {
+        let home = installed_home();
+        bootstrap_hook_registrations_at(&Config::defaults(), true, home.path(), false);
+
+        let cursor: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.path().join(".cursor/hooks.json")).unwrap(),
+        )
+        .unwrap();
+        // Freshness (sessionStart) AND the Flat learn hook (stop) are both present.
+        assert!(cursor["hooks"]["sessionStart"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["command"].as_str().unwrap().ends_with(" hook cursor")));
+        let stop = cursor["hooks"]["stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1);
+        assert!(
+            stop[0]["command"]
+                .as_str()
+                .unwrap()
+                .ends_with(" hook cursor --event session-end"),
+            "cursor's Flat learn hook is registered: {stop:?}"
+        );
+        // Claude's learn hook is ClaudeNested → written in the nested matcher schema
+        // of .claude/settings.json by the dedicated writer (Task 17).
+        let claude: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(home.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let groups = claude["hooks"]["SessionEnd"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        let inner = groups[0]["hooks"].as_array().unwrap();
+        assert_eq!(inner[0]["type"], "command");
+        assert!(inner[0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with(" hook claude --event session-end"));
+        assert_eq!(inner[0]["timeout"], 10);
+    }
+
+    // --- remove_learn_hooks at the descriptor level -------------------------
+
+    #[test]
+    fn remove_learn_hooks_leaves_freshness_and_foreign_value_identical() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".cursor")).unwrap();
+        let freshness = "\"/usr/local/bin/load\" hook cursor";
+        let learn_cmd = "\"/usr/local/bin/load\" hook cursor --event session-end";
+        let foreign = "\"/opt/bun\" worker.cjs hook cursor summarize";
+        // A cursor hooks file with the freshness hook (sessionStart), loadout's
+        // learn hook (stop), and a foreign tool's entry (stop).
+        let contents = serde_json::to_string_pretty(&serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "sessionStart": [ { "command": freshness } ],
+                "stop": [ { "command": learn_cmd }, { "command": foreign } ]
+            }
+        }))
+        .unwrap();
+        let path = home.path().join(".cursor/hooks.json");
+        std::fs::write(&path, &contents).unwrap();
+
+        let notes = remove_learn_hooks_at(&Config::defaults(), home.path(), false);
+        assert!(!notes.is_empty(), "removal reported an action");
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // Freshness hook untouched.
+        assert_eq!(v["hooks"]["sessionStart"][0]["command"], freshness);
+        // Learn hook gone; foreign hook survives value-identical.
+        let stop = v["hooks"]["stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 1);
+        assert_eq!(stop[0]["command"], foreign);
+        // A one-time backup of the pre-existing file was written before the edit.
+        assert!(
+            path.with_extension("json.loadout-bak").exists(),
+            "backup written before edit"
+        );
+        // Idempotent: a second removal finds nothing left and writes nothing new.
+        let again = remove_learn_hooks_at(&Config::defaults(), home.path(), false);
+        assert!(again.is_empty(), "second removal is a no-op");
+    }
+
+    /// `remove_learn_hooks_at` dispatches the ClaudeNested dialect to the nested
+    /// writer: our SessionEnd group is stripped, a foreign sibling group and every
+    /// foreign key survive, a `.loadout-bak` backup is written, and it is idempotent.
+    #[test]
+    fn remove_learn_hooks_strips_claude_nested_keeps_foreign() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        let ours = "\"/usr/local/bin/load\" hook claude --event session-end";
+        let foreign = "\"/opt/other\" wrapup";
+        let contents = serde_json::to_string_pretty(&serde_json::json!({
+            "model": "keep-me",
+            "hooks": {
+                "SessionEnd": [
+                    { "hooks": [ { "type": "command", "command": foreign } ] },
+                    { "hooks": [ { "type": "command", "command": ours, "timeout": 10 } ] }
+                ]
+            }
+        }))
+        .unwrap();
+        let path = home.path().join(".claude/settings.json");
+        std::fs::write(&path, &contents).unwrap();
+
+        let notes = remove_learn_hooks_at(&Config::defaults(), home.path(), false);
+        assert!(!notes.is_empty(), "removal reported an action");
+
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let se = v["hooks"]["SessionEnd"].as_array().unwrap();
+        assert_eq!(
+            se.len(),
+            1,
+            "our emptied group dropped, foreign sibling kept"
+        );
+        assert_eq!(se[0]["hooks"][0]["command"], foreign);
+        assert_eq!(v["model"], "keep-me", "foreign key preserved");
+        assert!(
+            path.with_extension("json.loadout-bak").exists(),
+            "backup written before edit"
+        );
+        let again = remove_learn_hooks_at(&Config::defaults(), home.path(), false);
+        assert!(again.is_empty(), "second removal is a no-op");
     }
 }
 

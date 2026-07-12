@@ -531,6 +531,34 @@ fn output_with_timeout(
     cmd: &mut Command,
     timeout: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {
+    output_bounded(cmd, timeout, None)
+}
+
+/// Like [`output_with_timeout`], but feeds `input` to the child's stdin (in a
+/// dedicated writer thread, so writing a large payload can't deadlock against a
+/// filling, undrained stdout pipe) instead of nulling stdin. The learning
+/// worker's one-shot agent-CLI runner uses this to pass a multi-KB extraction
+/// prompt on stdin. Same process-group kill + deadline-bounded pipe drain as
+/// [`output_with_timeout`]; both share [`output_bounded`].
+pub(crate) fn output_with_timeout_stdin(
+    cmd: &mut Command,
+    timeout: Duration,
+    input: &[u8],
+) -> std::io::Result<Option<std::process::Output>> {
+    output_bounded(cmd, timeout, Some(input))
+}
+
+/// Shared core of [`output_with_timeout`] and [`output_with_timeout_stdin`].
+/// `input`: `None` nulls stdin (the probe/command path — a CLI that prompts
+/// gets EOF, not a wait); `Some(bytes)` pipes those bytes to stdin. Behavior is
+/// otherwise identical, so the delegating [`output_with_timeout`] preserves its
+/// original contract byte-for-byte.
+fn output_bounded(
+    cmd: &mut Command,
+    timeout: Duration,
+    input: Option<&[u8]>,
+) -> std::io::Result<Option<std::process::Output>> {
+    use std::io::Write as _;
     use std::process::Stdio;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
@@ -543,10 +571,28 @@ fn output_with_timeout(
         cmd.process_group(0);
     }
     let mut child = cmd
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+
+    // Feed stdin from a dedicated thread so writing a large prompt can't
+    // deadlock against a filling, undrained stdout pipe (the readers below
+    // drain stdout/stderr concurrently). The thread ends when the bytes are
+    // written (dropping the handle sends EOF) or the child dies (broken pipe);
+    // on the deadline path the process-group kill reaps it if it wedges.
+    if let Some(bytes) = input {
+        if let Some(mut si) = child.stdin.take() {
+            let owned = bytes.to_vec();
+            std::thread::spawn(move || {
+                let _ = si.write_all(&owned);
+            });
+        }
+    }
 
     fn drain<R: std::io::Read + Send + 'static>(
         pipe: Option<R>,
