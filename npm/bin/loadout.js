@@ -123,10 +123,23 @@ function fail(msg) {
 function confirm(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
+    let answered = false;
     rl.question(question, (answer) => {
+      answered = true;
       rl.close();
       const a = answer.trim().toLowerCase();
       resolve(a === '' || a === 'y' || a === 'yes');
+    });
+    // Ctrl-C or Ctrl-D at a consent prompt is a cancellation, never consent.
+    // Without these, readline swallows SIGINT, the promise never resolves,
+    // and the wrapper exits 0 having silently done nothing. Abort the whole
+    // run instead, 130 like a shell would.
+    rl.on('SIGINT', () => rl.close());
+    rl.on('close', () => {
+      if (!answered) {
+        process.stdout.write('\n');
+        process.exit(130);
+      }
     });
   });
 }
