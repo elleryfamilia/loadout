@@ -8,6 +8,17 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Changed
+
+- **npm bootstrapper 0.2.0** — running `npx @ellery/loadout …` with `load`
+  already installed now checks the latest GitHub release and, when yours is
+  older, offers to run `load update` before delegating (consent-prompted, like
+  the install; non-interactive runs get a one-line hint on stderr instead).
+  The check times out after 2.5s and is skipped when offline — it never blocks
+  the run. npm-package-only change; the `load` CLI itself is unchanged.
+
 ## 0.17.0 — 2026-07-12
 
 ### Added

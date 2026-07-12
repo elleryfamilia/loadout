@@ -39,6 +39,74 @@ function findLoad() {
   return null;
 }
 
+// "npx gets me the latest" is a basic expectation, so before delegating to an
+// existing install, check the newest release tag and offer (never force) the
+// update. The check must never block the run: short timeout, and any failure —
+// offline, rate-limited, unparseable — means "skip it".
+const UPDATE_CHECK_TIMEOUT_MS = 2500;
+
+// Resolved from the release page's redirect (…/releases/latest → …/tag/vX.Y.Z)
+// rather than the GitHub API, which is rate-limited per IP.
+async function latestVersion() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), UPDATE_CHECK_TIMEOUT_MS);
+  try {
+    const res = await fetch('https://github.com/elleryfamilia/loadout/releases/latest', {
+      redirect: 'manual',
+      signal: ctrl.signal,
+    });
+    const m = (res.headers.get('location') || '').match(/\/tag\/v?(\d+\.\d+\.\d+)/);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function installedVersion(bin) {
+  const r = spawnSync(bin, ['--version'], { encoding: 'utf8' });
+  const m = r.status === 0 ? (r.stdout || '').match(/(\d+\.\d+\.\d+)/) : null;
+  return m ? m[1] : null;
+}
+
+function isNewer(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i += 1) {
+    if (pa[i] !== pb[i]) return pa[i] > pb[i];
+  }
+  return false;
+}
+
+// The update itself is `load update` — the CLI's own receipt-based updater —
+// so this stays a launcher and never reimplements install logic. Declining,
+// failing, or a non-interactive terminal all fall through to delegation.
+async function maybeOfferUpdate(bin, args) {
+  if (args[0] === 'update') return; // already updating explicitly
+  const current = installedVersion(bin);
+  if (!current) return;
+  const latest = await latestVersion();
+  if (!latest || !isNewer(latest, current)) return;
+
+  const msg = `loadout ${latest} is available (installed: ${current}).`;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    process.stderr.write(`${msg} Run \`load update\` to update.\n`);
+    return;
+  }
+  const ok = await confirm(`${msg} Update now? [Y/n] `);
+  if (!ok) return;
+  // Same contract as delegate(): Ctrl-C must reach only the child, so the
+  // wrapper survives to report and fall through to delegation. Registered
+  // only now — a global listener would swallow Ctrl-C at the consent prompts.
+  process.on('SIGINT', () => {});
+  const r = spawnSync(bin, ['update'], { stdio: 'inherit' });
+  if (r.status !== 0) {
+    process.stderr.write('Update did not complete; continuing with the installed version.\n');
+  }
+  process.stdout.write('\n');
+}
+
 // Hand off to the real binary. SIGINT must reach only the child (e.g. Ctrl-C
 // stopping `load studio` prints its exit message); a no-op listener keeps this
 // wrapper alive until the child exits, then the child's status is mirrored.
@@ -56,10 +124,23 @@ function fail(msg) {
 function confirm(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
+    let answered = false;
     rl.question(question, (answer) => {
+      answered = true;
       rl.close();
       const a = answer.trim().toLowerCase();
       resolve(a === '' || a === 'y' || a === 'yes');
+    });
+    // Ctrl-C or Ctrl-D at a consent prompt is a cancellation, never consent.
+    // Without these, readline swallows SIGINT, the promise never resolves,
+    // and the wrapper exits 0 having silently done nothing. Abort the whole
+    // run instead, 130 like a shell would.
+    rl.on('SIGINT', () => rl.close());
+    rl.on('close', () => {
+      if (!answered) {
+        process.stdout.write('\n');
+        process.exit(130);
+      }
     });
   });
 }
@@ -73,7 +154,10 @@ async function main() {
   }
 
   const existing = findLoad();
-  if (existing) delegate(existing, args);
+  if (existing) {
+    await maybeOfferUpdate(existing, args);
+    delegate(existing, args);
+  }
 
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     fail(
