@@ -1,0 +1,40 @@
+{
+  "name": "@ellery/loadout",
+  "version": "0.1.0",
+  "description": "Installer and launcher for loadout — the adaptive context layer for AI coding agents (Claude Code, Cursor, Codex, Gemini, opencode). Asks before installing the `load` binary, then delegates to it.",
+  "bin": {
+    "loadout": "bin/loadout.js"
+  },
+  "files": [
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elleryfamilia/loadout.git",
+    "directory": "npm"
+  },
+  "homepage": "https://github.com/elleryfamilia/loadout#readme",
+  "bugs": {
+    "url": "https://github.com/elleryfamilia/loadout/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cursor",
+    "codex",
+    "gemini",
+    "opencode",
+    "ai-agents",
+    "context",
+    "agents-md",
+    "claude-md",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

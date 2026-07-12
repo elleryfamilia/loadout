@@ -21,13 +21,19 @@ Works with **Claude, Codex, Gemini, Cursor, opencode, and Copilot**. Your contex
 
 ## Quick start
 
-Install the prebuilt binary — no Rust toolchain needed:
+If you have Node, one command installs the CLI (it asks first) and opens the studio:
+
+```bash
+npx @ellery/loadout studio
+```
+
+Or install the prebuilt binary directly — no Rust toolchain needed:
 
 ```bash
 curl -LsSf https://github.com/elleryfamilia/loadout/releases/latest/download/loadout-installer.sh | sh
 ```
 
-Open the studio and equip a **starter pack** — it detects your stack and recommends one, so you have a working loadout before you've written a word:
+In the studio, equip a **starter pack** — it detects your stack and recommends one, so you have a working loadout before you've written a word. Reopen it anytime:
 
 ```bash
 load studio
@@ -292,6 +298,12 @@ Prebuilt binary — no Rust toolchain needed (macOS and Linux; on Windows use WS
 curl -LsSf https://github.com/elleryfamilia/loadout/releases/latest/download/loadout-installer.sh | sh
 ```
 
+Via npm — [`@ellery/loadout`](https://www.npmjs.com/package/@ellery/loadout) is a thin bootstrapper that runs the same installer after showing you what it will do and asking for consent, then hands off to the `load` CLI (so `npx @ellery/loadout studio` on a machine that already has loadout just opens the studio):
+
+```bash
+npx @ellery/loadout studio
+```
+
 Installer-based installs update in place with `load update`. From source:
 
 ```bash
@@ -302,8 +314,9 @@ cargo install --git https://github.com/elleryfamilia/loadout
 
 - **GitHub releases** — <https://github.com/elleryfamilia/loadout/releases>: the prebuilt binaries and the installer script above, built by cargo-dist from tagged commits of this repo.
 - **This repo, from source** — the `cargo install --git …` line above, or a clone and `cargo build`.
+- **npm** — [`@ellery/loadout`](https://www.npmjs.com/package/@ellery/loadout): contains no binaries; with your consent it runs the installer script from the GitHub releases above, then delegates to the installed `load`.
 
-An npm installer is planned and will be announced here when it ships. There is no official Homebrew tap or third-party package today.
+There is no official Homebrew tap or other third-party package today.
 
 ---
 

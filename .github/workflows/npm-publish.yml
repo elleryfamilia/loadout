@@ -1,0 +1,46 @@
+# Publishes the @ellery/loadout npx bootstrapper when npm/ changes on main.
+# The package is version-independent of the CLI (it always installs the latest
+# release via the shell installer), so it only needs republishing when the
+# bootstrapper itself changes — bump npm/package.json's version to trigger it.
+# Publishing is idempotent: an already-published version is skipped, not an error.
+name: npm-publish
+
+on:
+  push:
+    branches: [main]
+    paths: ["npm/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Smoke-test the bootstrapper
+        working-directory: npm
+        run: |
+          node --check bin/loadout.js
+          # Non-interactive + not installed must refuse politely (exit 1) and
+          # point at the manual curl command — never attempt a silent install.
+          if HOME="$(mktemp -d)" CARGO_HOME="$(mktemp -d)" node bin/loadout.js studio </dev/null; then
+            echo "expected a refusal in non-interactive mode" && exit 1
+          fi
+      - name: Publish if this version is not on the registry yet
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          PKG="$(node -p "require('./package.json').name")"
+          VER="$(node -p "require('./package.json').version")"
+          if npm view "$PKG@$VER" version >/dev/null 2>&1; then
+            echo "$PKG@$VER is already published — skipping."
+          else
+            npm publish
+          fi

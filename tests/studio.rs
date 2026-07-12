@@ -392,9 +392,10 @@ fn studio_first_run_lands_on_profiles_and_guides_through_pack() {
         "review summarizes the staged profile; got:\n{review}"
     );
 
-    // Beat 3: the finish card with the run command.
+    // Beat 3: the finish card with the launch command (the short form, which is
+    // the one spelling advertised everywhere: `load <agent>`, not `load run`).
     assert!(
-        done.contains("You're set") && done.contains("load run"),
+        done.contains("You're set") && done.contains("load claude") && !done.contains("load run"),
         "apply lands on the you're-set finish card; got:\n{done}"
     );
 

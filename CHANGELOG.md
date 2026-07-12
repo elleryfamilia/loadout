@@ -8,6 +8,28 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Added
+
+- **`npx @ellery/loadout`** — a new npm bootstrapper package (in `npm/`). One
+  command tries loadout without a prior install: if the `load` binary is
+  present it delegates straight to it; if not, it states exactly what the
+  official installer will do (binary into `~/.cargo/bin`, PATH entry, update
+  receipt) and asks for consent before installing — never silently, and never
+  in non-interactive terminals, where it prints the manual `curl` command
+  instead. `npx @ellery/loadout studio` is the advertised one-liner: install
+  (with consent) and open the studio in one step.
+- **Studio exit epilogue** — stopping the studio (Ctrl-C or idle timeout) now
+  prints what to type next (`load claude`, and how to reopen the studio)
+  instead of dead-ending at an empty prompt. Ctrl-C is now a clean shutdown:
+  the per-port runtime file is removed instead of leaked.
+
+### Changed
+
+- The studio's guided-onboarding finish card now shows the short launch form
+  (`load claude`) instead of `load run claude` — one spelling everywhere.
+
 ## 0.16.0 — 2026-07-12
 
 Loadout can now learn from your own agent sessions. **Ambient learning** is
