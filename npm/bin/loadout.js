@@ -95,6 +95,10 @@ async function maybeOfferUpdate(bin, args) {
   }
   const ok = await confirm(`${msg} Update now? [Y/n] `);
   if (!ok) return;
+  // Same contract as delegate(): Ctrl-C must reach only the child, so the
+  // wrapper survives to report and fall through to delegation. Registered
+  // only now — a global listener would swallow Ctrl-C at the consent prompts.
+  process.on('SIGINT', () => {});
   const r = spawnSync(bin, ['update'], { stdio: 'inherit' });
   if (r.status !== 0) {
     process.stderr.write('Update did not complete; continuing with the installed version.\n');
