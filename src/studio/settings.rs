@@ -69,6 +69,8 @@ pub(crate) fn render_page(state: &Arc<Mutex<StudioState>>, notice: Option<(bool,
             agents,
             log_records,
             suppressed,
+            env_allowlist: cfg.env.allowlist.clone(),
+            env_deny: cfg.env.deny_name_patterns.clone(),
         },
         notice,
     );
@@ -86,6 +88,8 @@ struct SettingsView {
     log_records: Vec<LogRecord>,
     /// `(candidate_id, claim)` for every currently-`Suppressed` candidate.
     suppressed: Vec<(String, String)>,
+    env_allowlist: Vec<String>,
+    env_deny: Vec<String>,
 }
 
 fn page_fragment(v: &SettingsView, notice: Option<(bool, String)>) -> String {
@@ -100,7 +104,7 @@ fn page_fragment(v: &SettingsView, notice: Option<(bool, String)>) -> String {
             }
             (learning_section(v.learn_enabled, v.activated_here, &v.log_records, &v.suppressed))
             (agent_section(&v.default_agent, &v.agents))
-            div id="settings-env" { } // Task 8 fills this section
+            (env_section(&v.env_allowlist, &v.env_deny))
         }
     }
     .into_string()
@@ -231,6 +235,56 @@ pub fn set_agent(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
             agent,
         });
     respond_after_stage(state, staged, "staged the default agent — Apply to save")
+}
+
+/// The env policy. Allowlist-only exposure with a name denylist that wins —
+/// shown as two line-separated lists because that's exactly what the config
+/// stores (no cleverness between the UI and the TOML).
+fn env_section(allowlist: &[String], deny: &[String]) -> Markup {
+    html! {
+        section class="settings-section" id="settings-env" {
+            h3 { "Environment variables" }
+            p class="muted" {
+                "Variables your rendered context is allowed to mention. Only names on the "
+                "allowlist are ever surfaced; the deny patterns win even over the allowlist."
+            }
+            form hx-post="/settings/env" hx-target="#main" {
+                label class="field" {
+                    span class="field-label" { "allowlist" span class="field-hint" { "exact names, one per line" } }
+                    textarea name="allowlist" rows="4" { (allowlist.join("\n")) }
+                }
+                label class="field" {
+                    span class="field-label" { "deny patterns" span class="field-hint" { "advanced — regexes over names, one per line; matches are always dropped" } }
+                    textarea name="deny" rows="3" { (deny.join("\n")) }
+                }
+                button type="submit" class="btn btn-primary btn-sm" { "Save" }
+            }
+        }
+    }
+}
+
+/// `POST /settings/env` — stage the `[env]` policy from the two textareas.
+pub fn set_env(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
+    let pairs = state::parse_pairs(&req.body);
+    let lines = |key: &str| -> Vec<String> {
+        pairs
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| {
+                v.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let staged = state.lock().unwrap().session.stage(StagedOp::SetEnvPolicy {
+        layer: crate::fragment::Layer::Global,
+        allowlist: lines("allowlist"),
+        deny_name_patterns: lines("deny"),
+    });
+    respond_after_stage(state, staged, "staged the env policy — Apply to save")
 }
 
 /// `POST /settings/learn/enable` — write this machine's activation ack (inert

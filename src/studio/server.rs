@@ -172,6 +172,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/settings/agent") => settings::set_agent(state, req),
         ("POST", "/settings/learn/enable") => settings::learn_enable(state),
         ("POST", "/settings/learn/disable") => settings::learn_disable(state),
+        ("POST", "/settings/env") => settings::set_env(state, req),
         (_, p) if p.starts_with("/inbox/") => handle_inbox_param(state, req),
         ("GET", p) if p.starts_with("/artifacts/") => {
             handle_artifact(state, p.strip_prefix("/artifacts/").unwrap_or(""))
@@ -5598,5 +5599,42 @@ mod tests {
             body.contains("hx-get=\"/settings\""),
             "drawer footer links to settings: {body}"
         );
+    }
+
+    #[test]
+    fn env_section_renders_current_policy() {
+        let d = rust_repo();
+        let st = state_for(
+            d.path(),
+            Some("[env]\nallowlist = [\"CI\"]\ndeny_name_patterns = [\"(?i)token\"]\n"),
+        );
+        let r = route(&st, &req("GET", "/settings", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Environment variables"));
+        assert!(body.contains("CI"));
+        assert!(body.contains("(?i)token"));
+    }
+
+    #[test]
+    fn set_env_stages_policy_from_line_separated_lists() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/settings/env",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "allowlist=CI%0AHOME%0A%0A&deny=%28%3Fi%29token",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(st.lock().unwrap().session.ops().len(), 1);
+        // The staged doc must contain both lists (blank lines dropped).
+        let texts = st.lock().unwrap().session.staged_layer_texts();
+        let global = texts.iter().find(|(l, _, _)| *l == Layer::Global).unwrap();
+        assert!(global.2.contains("allowlist = [\"CI\", \"HOME\"]"));
+        assert!(global.2.contains("(?i)token"));
     }
 }
