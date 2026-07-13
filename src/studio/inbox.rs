@@ -495,7 +495,12 @@ pub fn unsuppress(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         );
     }
     match append_disposition(&paths, id, Action::Unsuppress) {
-        Ok(()) => render_drawer(state, Some((false, "restored to the inbox".to_string()))),
+        Ok(()) => {
+            let mut resp = render_drawer(state, Some((false, "restored to the inbox".to_string())));
+            resp.body
+                .extend_from_slice(views::inbox_badge_loader().as_bytes());
+            resp
+        }
         Err(e) => Resp::html(views::error_fragment(&format!("could not un-dismiss: {e}"))),
     }
 }

@@ -4840,6 +4840,38 @@ mod tests {
     }
 
     #[test]
+    fn inbox_drawer_empty_state_reflects_learning_toggle() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        // No candidates, learning off (the default fixture state): the
+        // empty-state copy should point at turning learning on.
+        let body = body_of(route(
+            &st,
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("Learning is off"),
+            "empty + learning off shows the off copy: {body}"
+        );
+
+        // Seed a candidate: the empty-state copy — either variant — must not
+        // render alongside a real card.
+        seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+        let body = body_of(route(
+            &st,
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            !body.contains("Learning is off"),
+            "candidate present: off-copy should be absent: {body}"
+        );
+        assert!(
+            !body.contains("You're all caught up"),
+            "candidate present: caught-up copy should be absent: {body}"
+        );
+    }
+
+    #[test]
     fn inbox_badge_fragment_counts_pending_and_hides_at_zero() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
@@ -4960,6 +4992,10 @@ mod tests {
         assert!(
             staged.contains("staged promotion"),
             "promote staged: {staged}"
+        );
+        assert!(
+            staged.contains("hx-get=\"/inbox/badge\""),
+            "promote response refreshes the inbox badge: {staged}"
         );
         // Not yet promoted — the disposition is queued, flushed only on apply.
         assert_eq!(
