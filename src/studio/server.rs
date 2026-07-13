@@ -32,6 +32,7 @@ use crate::profile::LoadoutConfig;
 use crate::studio::assets;
 use crate::studio::edit::{Session, StagedOp};
 use crate::studio::inbox;
+use crate::studio::settings;
 use crate::studio::state::{self, LibraryView, PreviewOutcome, StudioState};
 use crate::studio::views;
 
@@ -168,6 +169,10 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/drawer/inbox") => inbox::drawer(state),
         ("GET", "/inbox/badge") => handle_inbox_badge(state),
         ("GET", "/inbox/history") => inbox::history(state),
+        ("GET", "/settings") => settings::page(state),
+        ("POST", "/settings/agent") => settings::set_agent(state, req),
+        ("POST", "/settings/learn/enable") => settings::learn_enable(state),
+        ("POST", "/settings/learn/disable") => settings::learn_disable(state),
         (_, p) if p.starts_with("/inbox/") => handle_inbox_param(state, req),
         ("GET", p) if p.starts_with("/artifacts/") => {
             handle_artifact(state, p.strip_prefix("/artifacts/").unwrap_or(""))
@@ -1956,11 +1961,33 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
         s.onboarding_active
             .then(|| state::staged_summary(&s.session))
     };
+    // A learn toggle is about to be applied — captured before apply() clears
+    // the staged ops, so the post-write bootstrap below knows whether to run.
+    let touched_learn = state
+        .lock()
+        .unwrap()
+        .session
+        .ops()
+        .iter()
+        .any(|op| matches!(op, crate::studio::edit::StagedOp::SetLearnEnabled { .. }));
     // Apply mutates + writes atomically; it's the one serialized operation, so
     // holding the lock across its (brief, small-file) I/O is correct here.
     let result = state.lock().unwrap().session.apply();
     match result {
         Ok(written) => {
+            // A learn toggle landed: (de)register the learning hooks to match
+            // the new two-part gate (synced flag AND this machine's ack) — the
+            // same bootstrap `load learn on|off` runs. Best-effort: a hook
+            // hiccup must not fail an applied config write.
+            if touched_learn {
+                if let Ok(cfg) = config::Config::load(&state.lock().unwrap().repo_base) {
+                    let _ = crate::adapters::bootstrap_hook_registrations(
+                        &cfg,
+                        crate::learn::state::learn_active(&cfg),
+                        false,
+                    );
+                }
+            }
             // Guided first-run: a profile actually landed → show the "you're set"
             // finish card (names `load <agent>`), then disarm the flow. If
             // nothing composed a profile, fall through to the normal flash.
@@ -5386,5 +5413,108 @@ mod tests {
             .find(|(k, _)| k == "HX-Retarget")
             .expect("promote error must set HX-Retarget");
         assert_eq!(target, "#inbox-drawer-msg");
+    }
+
+    // --- Settings page -------------------------------------------------------
+
+    #[test]
+    fn settings_page_renders_sections_and_gear_is_active() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/settings", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Learning"));
+        assert!(body.contains("Default agent"));
+        assert!(
+            body.contains("hx-get=\"/drawer/close\""),
+            "opening settings closes any open drawer"
+        );
+        assert_eq!(st.lock().unwrap().active_tab, "settings");
+    }
+
+    #[test]
+    fn set_agent_stages_a_default_agent_edit() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/settings/agent",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "agent=codex",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(st.lock().unwrap().session.ops().len(), 1, "one staged op");
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("hx-get=\"/staged\""),
+            "staged indicator refresh loader"
+        );
+    }
+
+    #[test]
+    fn learn_enable_stages_flag_and_writes_activation_ack() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/settings/learn/enable",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(st.lock().unwrap().session.ops().len(), 1);
+        assert!(
+            crate::learn::state::read_activation_at(&d.path().join("learn")).is_some(),
+            "activation ack written at confirm time (inert until Apply lands the flag)"
+        );
+    }
+
+    #[test]
+    fn learn_disable_stages_flag_and_removes_activation_ack() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        // start from an activated machine
+        route(
+            &st,
+            &req(
+                "POST",
+                "/settings/learn/enable",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/settings/learn/disable",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        assert!(crate::learn::state::read_activation_at(&d.path().join("learn")).is_none());
+    }
+
+    #[test]
+    fn settings_learning_section_carries_consent_copy_before_enable() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/settings", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        // The consent block is a product commitment: what runs, when, the cap.
+        assert!(body.contains("load harvest --ambient"));
+        assert!(body.contains("once per 6h"));
+        assert!(body.contains("review"));
     }
 }

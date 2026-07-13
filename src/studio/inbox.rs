@@ -577,10 +577,9 @@ fn inbox_drawer_fragment(
             @if learn_on {
                 p class="muted" { "You're all caught up — nothing to review." }
             } @else {
-                p class="muted" {
-                    "Learning is off. Turn it on ("
-                    code { "load learn on" }
-                    ") and preferences harvested from your own sessions show up here to review."
+                p class="muted" { "Learning is off." }
+                button class="btn btn-primary btn-sm" hx-get="/settings" hx-target="#main" {
+                    (views::icon("gear")) "Turn it on in Settings"
                 }
             }
         }
