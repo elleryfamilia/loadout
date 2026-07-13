@@ -2846,8 +2846,11 @@ fn display_name(p: &Path) -> String {
         .unwrap_or_else(|| p.display().to_string())
 }
 
-/// Percent-encode a path segment (profile names can contain spaces / em-dashes).
-fn enc(s: &str) -> String {
+/// Percent-encode a path segment for a route: profile/fragment/target/
+/// workflow names can carry spaces or em-dashes, and candidate ids (sha-256
+/// hex, already URL-safe) are encoded defensively too — keeping every route
+/// honest regardless of what it names.
+pub fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {

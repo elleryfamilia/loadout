@@ -45,10 +45,10 @@ use serde::Deserialize;
 use crate::learn::gate::{self, Gated};
 use crate::learn::journal::{self, Action, Candidate, CandidateStatus, Disposition, Event};
 use crate::learn::state as learn_state;
-use crate::learn::worker::{self, LogRecord};
 use crate::profile::FragmentRef;
 use crate::studio::edit::StagedOp;
 use crate::studio::server::{Req, Resp};
+use crate::studio::settings;
 use crate::studio::state::{self, StudioState};
 use crate::studio::views;
 
@@ -69,7 +69,7 @@ impl InboxPaths {
     fn evidence_dir(&self) -> PathBuf {
         self.learn_dir.join("evidence")
     }
-    fn log_path(&self) -> PathBuf {
+    pub(crate) fn log_path(&self) -> PathBuf {
         self.learn_dir.join("log.jsonl")
     }
 }
@@ -474,6 +474,9 @@ pub fn dismiss(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
 /// win the fold and demote it back to observation-derived status. We fold
 /// first, check the suppressed set, and refuse otherwise — an `Unsuppress` only
 /// ever lands on a candidate that a `Dismiss` currently governs.
+///
+/// The dismissed list lives under Settings → Learning (not the drawer), so
+/// both the refusal and the success path re-render the Settings page.
 pub fn unsuppress(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let Some(paths) = paths(state) else {
         return Resp::html(views::error_fragment("learning state is unavailable"));
@@ -487,7 +490,7 @@ pub fn unsuppress(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
             .get(id)
             .map(|c| status_word(c.status))
             .unwrap_or("not in the inbox");
-        return render_drawer(
+        return settings::render_page(
             state,
             Some((
                 true,
@@ -497,7 +500,8 @@ pub fn unsuppress(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     }
     match append_disposition(&paths, id, Action::Unsuppress) {
         Ok(()) => {
-            let mut resp = render_drawer(state, Some((false, "restored to the inbox".to_string())));
+            let mut resp =
+                settings::render_page(state, Some((false, "restored to the inbox".to_string())));
             resp.body
                 .extend_from_slice(views::inbox_badge_loader().as_bytes());
             resp
@@ -527,40 +531,12 @@ fn append_disposition(paths: &InboxPaths, id: &str, action: Action) -> crate::Re
     Ok(())
 }
 
-// --- GET /inbox/history ------------------------------------------------------
-
-/// The run-log panel: every harvest run this machine logged, newest first.
-pub fn history(state: &Arc<Mutex<StudioState>>) -> Resp {
-    state.lock().unwrap().active_tab = "inbox".to_string();
-    let Some(paths) = paths(state) else {
-        return Resp::html(history_fragment(&[]));
-    };
-    let mut records = worker::read_log(&paths.log_path());
-    records.reverse(); // read_log is oldest-first; show newest first
-    Resp::html(history_fragment(&records))
-}
-
 // --- views -------------------------------------------------------------------
-
-/// Percent-encode a path segment for a route. Candidate ids are sha-256 hex
-/// (already URL-safe), but encoding defensively keeps the route honest.
-fn enc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
 
 /// The Inbox drawer body. All strings shown here are candidate-derived; `maud`
 /// escapes them by construction and none are `PreEscaped`. Dismissed rows and
-/// the History link move to Settings (Task 7) — this drawer shows only the
-/// pending/quarantined queue.
+/// harvest history live under Settings → Learning — this drawer shows only
+/// the pending/quarantined queue, with a footer link to Settings.
 fn inbox_drawer_fragment(
     cards: &[CandidateCard],
     learn_on: bool,
@@ -585,7 +561,12 @@ fn inbox_drawer_fragment(
         }
         @for c in cards { (candidate_card(c)) }
     };
-    views::drawer("Inbox", body, None)
+    let foot = Some(html! {
+        button class="btn btn-ghost btn-sm" hx-get="/settings" hx-target="#main" {
+            (views::icon("gear")) "Learning settings & history"
+        }
+    });
+    views::drawer("Inbox", body, foot)
 }
 
 fn candidate_card(c: &CandidateCard) -> Markup {
@@ -624,11 +605,11 @@ fn candidate_card(c: &CandidateCard) -> Markup {
             }
             div class="candidate-actions" {
                 button class="btn btn-primary btn-sm"
-                    hx-get=(format!("/inbox/{}/promote", enc(&c.id))) hx-target="#drawer" {
+                    hx-get=(format!("/inbox/{}/promote", views::enc(&c.id))) hx-target="#drawer" {
                     (views::icon("check")) "Promote"
                 }
                 button class="btn btn-ghost btn-sm"
-                    hx-post=(format!("/inbox/{}/dismiss", enc(&c.id))) hx-target="#drawer"
+                    hx-post=(format!("/inbox/{}/dismiss", views::enc(&c.id))) hx-target="#drawer"
                     hx-confirm="Dismiss this suggestion? It won't return unless you un-dismiss it." {
                     (views::icon("x")) "Dismiss"
                 }
@@ -650,7 +631,7 @@ fn promote_drawer_fragment(
     profiles: &[String],
 ) -> String {
     let body = html! {
-        form class="fragment-form" hx-post=(format!("/inbox/{}/promote", enc(id))) hx-target="#drawer" {
+        form class="fragment-form" hx-post=(format!("/inbox/{}/promote", views::enc(id))) hx-target="#drawer" {
             // Save errors land here (via HX-Retarget), inside the drawer.
             div id="inbox-drawer-msg" class="wf-editor-msg" {}
             @if quarantined {
@@ -708,53 +689,4 @@ fn promote_drawer_fragment(
         }
     };
     views::drawer("Promote suggestion", body, None)
-}
-
-/// The run-log history panel. Fields come from [`worker::LogRecord`] (the
-/// stable read-back reader); it exposes ts, trigger, cli/model, sessions,
-/// candidates, run duration, token usage, and outcome. Duration and usage are
-/// the spend-audit signals — usage is shown verbatim so a metered run's cost is
-/// legible on the machine that harvested it.
-fn history_fragment(records: &[LogRecord]) -> String {
-    html! {
-        div class="inbox" {
-            div class="inbox-head" {
-                h2 { "Harvest history" }
-                a class="btn btn-ghost btn-sm" hx-get="/drawer/inbox" hx-target="#drawer" {
-                    (views::icon("arrow-left")) "Back to inbox"
-                }
-            }
-            @if records.is_empty() {
-                p class="muted" { "No harvest runs recorded on this machine yet." }
-            } @else {
-                ul class="learn-log" {
-                    @for r in records {
-                        li class="learn-log-row" {
-                            span class=(format!("log-outcome log-{}", r.outcome)) { (r.outcome) }
-                            span class="log-ts muted" { (r.ts) }
-                            span class="log-trigger muted" { (r.trigger) }
-                            @if let Some(cli) = &r.cli {
-                                span class="log-cli muted" {
-                                    (cli)
-                                    @if let Some(model) = &r.model { " (" (model) ")" }
-                                }
-                            }
-                            span class="log-counts muted" {
-                                (r.sessions) " sessions · " (r.candidates) " candidates"
-                            }
-                            @if let Some(ms) = r.duration_ms {
-                                span class="log-duration muted" { (ms) "ms" }
-                            }
-                            // Token usage — the spend-audit signal. Untrusted
-                            // CLI-derived text, escaped by maud.
-                            @if let Some(usage) = &r.usage {
-                                span class="log-usage muted" { "usage " (usage) }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    .into_string()
 }

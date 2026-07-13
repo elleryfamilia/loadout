@@ -168,7 +168,6 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/recents/clear") => handle_recents_clear(state),
         ("GET", "/drawer/inbox") => inbox::drawer(state),
         ("GET", "/inbox/badge") => handle_inbox_badge(state),
-        ("GET", "/inbox/history") => inbox::history(state),
         ("GET", "/settings") => settings::page(state),
         ("POST", "/settings/agent") => settings::set_agent(state, req),
         ("POST", "/settings/learn/enable") => settings::learn_enable(state),
@@ -230,9 +229,9 @@ fn handle_fragment_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
 }
 
 /// Route `/inbox/<id>/<action>` (mutations are POST, so they inherit the
-/// Origin/Referer guard). `/drawer/inbox`, `/inbox/badge`, and `/inbox/history`
-/// are exact matches handled in [`route`] before this catch-all (otherwise
-/// `id_and_action` would parse "badge"/"history" as a candidate id).
+/// Origin/Referer guard). `/drawer/inbox` and `/inbox/badge` are exact matches
+/// handled in [`route`] before this catch-all (otherwise `id_and_action` would
+/// parse "badge" as a candidate id).
 fn handle_inbox_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let (id, action) = id_and_action(&req.path, "/inbox/");
     match (req.method.as_str(), action) {
@@ -5204,6 +5203,8 @@ mod tests {
 
     #[test]
     fn inbox_history_renders_seeded_log_lines() {
+        // History moved from the drawer's own panel (`/inbox/history`) to the
+        // Settings → Learning section — same content, new home.
         let d = rust_repo();
         let st = state_for(d.path(), None);
         seed_log_line(d.path(), "empty", "claude", 0);
@@ -5211,7 +5212,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
         ));
         assert!(body.contains("Harvest history"), "history heading: {body}");
         assert!(body.contains("extracted"), "extracted run shown");
@@ -5290,7 +5291,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("input_tokens"),
@@ -5517,5 +5518,85 @@ mod tests {
         assert!(body.contains("load harvest --ambient"));
         assert!(body.contains("once per 6h"));
         assert!(body.contains("review"));
+    }
+
+    #[test]
+    fn settings_page_shows_harvest_history_and_suppressions() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_log_line(d.path(), "extracted", "claude", 3);
+        let id = seed_candidate(d.path(), "machine-a", "Dislikes emoji in commit messages");
+        seed_disposition(
+            d.path(),
+            "machine-a",
+            &id,
+            crate::learn::journal::Action::Dismiss,
+            "2026-07-11T10:00:00Z",
+        );
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(body.contains("3 sessions"), "run log renders: {body}");
+        assert!(
+            body.contains("Dislikes emoji in commit messages"),
+            "suppression listed: {body}"
+        );
+        assert!(
+            body.contains("unsuppress"),
+            "un-dismiss control present: {body}"
+        );
+    }
+
+    #[test]
+    fn unsuppress_from_settings_restores_and_rerenders_settings() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_candidate(d.path(), "machine-a", "Dislikes emoji in commit messages");
+        seed_disposition(
+            d.path(),
+            "machine-a",
+            &id,
+            crate::learn::journal::Action::Dismiss,
+            "2026-07-11T10:00:00Z",
+        );
+
+        let body = body_of(route(
+            &st,
+            &req(
+                "POST",
+                &format!("/inbox/{id}/unsuppress"),
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        ));
+        assert!(
+            body.contains("Settings"),
+            "responds with the settings page: {body}"
+        );
+        assert!(
+            body.contains("hx-get=\"/inbox/badge\""),
+            "badge refresh loader (restored → pending): {body}"
+        );
+        assert!(
+            !body.contains("Dislikes emoji in commit messages"),
+            "restored candidate must drop out of the dismissed list: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_drawer_footer_links_to_settings() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let body = body_of(route(
+            &st,
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("hx-get=\"/settings\""),
+            "drawer footer links to settings: {body}"
+        );
     }
 }

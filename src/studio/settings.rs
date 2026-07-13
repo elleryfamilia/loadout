@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex};
 
 use maud::{html, Markup};
 
+use crate::learn::journal::{self, CandidateStatus};
 use crate::learn::state as learn_state;
+use crate::learn::worker::{self, LogRecord};
 use crate::studio::edit::StagedOp;
 use crate::studio::server::{Req, Resp};
 use crate::studio::state::{self, StudioState};
@@ -26,22 +28,38 @@ pub fn page(state: &Arc<Mutex<StudioState>>) -> Resp {
     render_page(state, None)
 }
 
-fn render_page(state: &Arc<Mutex<StudioState>>, notice: Option<(bool, String)>) -> Resp {
+pub(crate) fn render_page(state: &Arc<Mutex<StudioState>>, notice: Option<(bool, String)>) -> Resp {
     let snap = state.lock().unwrap().snapshot();
     let cfg = match state::staged_config(&snap) {
         Ok(c) => c,
         Err(e) => return Resp::html(views::error_fragment(&e.to_string())),
     };
-    let learn_dir = state
-        .lock()
-        .unwrap()
-        .inbox
-        .as_ref()
-        .map(|p| p.learn_dir.clone());
+    let inbox_paths = state.lock().unwrap().inbox.clone();
+    let learn_dir = inbox_paths.as_ref().map(|p| p.learn_dir.clone());
     let activation = learn_dir
         .as_deref()
         .and_then(learn_state::read_activation_at);
     let agents: Vec<String> = cfg.agents.iter().map(|a| a.id.clone()).collect();
+
+    // Harvest history + dismissed suggestions, folded/read outside the mutex
+    // (snapshot-then-render): the run log is newest-first for display, and the
+    // suppressed set comes straight out of the journal fold's `Suppressed`
+    // status.
+    let (log_records, suppressed) = match &inbox_paths {
+        Some(p) => {
+            let mut records = worker::read_log(&p.log_path());
+            records.reverse(); // read_log is oldest-first; show newest first
+            let fold = journal::fold_at(&p.inbox_dir);
+            let suppressed: Vec<(String, String)> = fold
+                .candidates
+                .values()
+                .filter(|c| c.status == CandidateStatus::Suppressed)
+                .map(|c| (c.id.clone(), c.claim.clone()))
+                .collect();
+            (records, suppressed)
+        }
+        None => (Vec::new(), Vec::new()),
+    };
 
     let mut html = page_fragment(
         &SettingsView {
@@ -49,6 +67,8 @@ fn render_page(state: &Arc<Mutex<StudioState>>, notice: Option<(bool, String)>) 
             activated_here: activation.is_some(),
             default_agent: cfg.default_agent.clone(),
             agents,
+            log_records,
+            suppressed,
         },
         notice,
     );
@@ -62,6 +82,10 @@ struct SettingsView {
     activated_here: bool,
     default_agent: String,
     agents: Vec<String>,
+    /// This machine's harvest run log, newest first.
+    log_records: Vec<LogRecord>,
+    /// `(candidate_id, claim)` for every currently-`Suppressed` candidate.
+    suppressed: Vec<(String, String)>,
 }
 
 fn page_fragment(v: &SettingsView, notice: Option<(bool, String)>) -> String {
@@ -74,7 +98,7 @@ fn page_fragment(v: &SettingsView, notice: Option<(bool, String)>) -> String {
                     div class="banner-body" { (msg) }
                 }
             }
-            (learning_section(v.learn_enabled, v.activated_here))
+            (learning_section(v.learn_enabled, v.activated_here, &v.log_records, &v.suppressed))
             (agent_section(&v.default_agent, &v.agents))
             div id="settings-env" { } // Task 8 fills this section
         }
@@ -83,11 +107,17 @@ fn page_fragment(v: &SettingsView, notice: Option<(bool, String)>) -> String {
 }
 
 /// The Learning section: honest consent copy (mirrors `load learn on`'s
-/// consent block), current state (synced flag + this machine), and the
-/// toggle. The toggle STAGES `[learn] enabled` — Apply writes it; the
-/// activation ack is machine-local and written at confirm time (inert until
-/// the flag lands).
-fn learning_section(enabled: bool, activated_here: bool) -> Markup {
+/// consent block), current state (synced flag + this machine), the toggle,
+/// this machine's harvest history, and any dismissed suggestions with an
+/// un-dismiss control. The toggle STAGES `[learn] enabled` — Apply writes it;
+/// the activation ack is machine-local and written at confirm time (inert
+/// until the flag lands).
+fn learning_section(
+    enabled: bool,
+    activated_here: bool,
+    log_records: &[LogRecord],
+    suppressed: &[(String, String)],
+) -> Markup {
     html! {
         section class="settings-section" id="settings-learning" {
             h3 { "Learning" }
@@ -112,6 +142,52 @@ fn learning_section(enabled: bool, activated_here: bool) -> Markup {
                 button class="btn btn-primary btn-sm" hx-post="/settings/learn/enable" hx-target="#main"
                     hx-confirm="Enable ambient learning on this machine? The staged config change still needs Apply." {
                     (views::icon("power")) "Turn learning on"
+                }
+            }
+            h4 class="inbox-subhead" { "Harvest history" }
+            @if log_records.is_empty() {
+                p class="muted" { "No harvest runs recorded on this machine yet." }
+            } @else {
+                ul class="learn-log" {
+                    @for r in log_records {
+                        li class="learn-log-row" {
+                            span class=(format!("log-outcome log-{}", r.outcome)) { (r.outcome) }
+                            span class="log-ts muted" { (r.ts) }
+                            span class="log-trigger muted" { (r.trigger) }
+                            @if let Some(cli) = &r.cli {
+                                span class="log-cli muted" {
+                                    (cli)
+                                    @if let Some(model) = &r.model { " (" (model) ")" }
+                                }
+                            }
+                            span class="log-counts muted" {
+                                (r.sessions) " sessions · " (r.candidates) " candidates"
+                            }
+                            @if let Some(ms) = r.duration_ms {
+                                span class="log-duration muted" { (ms) "ms" }
+                            }
+                            // Token usage — the spend-audit signal. Untrusted
+                            // CLI-derived text, escaped by maud.
+                            @if let Some(usage) = &r.usage {
+                                span class="log-usage muted" { "usage " (usage) }
+                            }
+                        }
+                    }
+                }
+            }
+            @if !suppressed.is_empty() {
+                h4 class="inbox-subhead" { "Dismissed suggestions" }
+                ul class="suppressions" {
+                    @for (id, claim) in suppressed {
+                        li class="suppression" {
+                            // Untrusted claim text — escaped by maud.
+                            span class="suppression-claim" { (claim) }
+                            button class="btn btn-ghost btn-sm"
+                                hx-post=(format!("/inbox/{}/unsuppress", views::enc(id))) hx-target="#main" {
+                                (views::icon("refresh")) "Un-dismiss"
+                            }
+                        }
+                    }
                 }
             }
         }
