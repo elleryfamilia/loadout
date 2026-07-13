@@ -352,7 +352,7 @@ fn render_markdown(md: &str) -> Markup {
 /// The full page: top bar (brand + tabs + staged indicator), the `#main` tab
 /// content, and the empty `#modal` container. `inbox_pending` is the count of
 /// pending learned candidates awaiting review — shown as a badge on the Inbox
-/// tab when nonzero.
+/// icon (which opens the review drawer) when nonzero.
 pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize) -> String {
     html! {
         (DOCTYPE)
@@ -371,11 +371,16 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
             body {
                 header class="topbar" {
                     div class="brand" { span class="brand-mark" { (brand_mark()) } span class="brand-name" { "Loadout" } }
-                    (tab_bar(active_tab, inbox_pending))
+                    (tab_bar(active_tab))
                     div class="topbar-right" {
                         div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
                         button type="button" class="icon-btn" title="Recent artifacts"
                             hx-get="/drawer/recents" hx-target="#drawer" { (icon("clock")) }
+                        button type="button" class="icon-btn" title="Review inbox"
+                            hx-get="/drawer/inbox" hx-target="#drawer" {
+                            (icon("inbox"))
+                            span id="inbox-badge" { (inbox_badge(inbox_pending)) }
+                        }
                         button type="button" class="icon-btn" title="Show me around" hx-get="/onboarding/welcome" hx-target="#main" { (icon("help")) }
                         (theme_toggle())
                     }
@@ -389,24 +394,29 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
     .into_string()
 }
 
-/// Top nav: three destinations. **Loadouts** is where you assemble a loadout;
+/// Top nav: two destinations. **Loadouts** is where you assemble a loadout;
 /// **Library** is the shared catalog of gear a loadout binds (fragments, targets,
-/// workflows); **Inbox** is the review surface for learned candidate preferences
-/// (with a pending-count badge when nonzero). Anything reached *inside* the
-/// Library keeps `active_tab == "library"`, so the Library button stays lit
-/// while you browse its categories.
-fn tab_bar(active: &str, inbox_pending: usize) -> Markup {
+/// workflows). Anything reached *inside* the Library keeps `active_tab ==
+/// "library"`, so the Library button stays lit while you browse its categories.
+/// Inbox and Recents live in the top-bar icons (right drawers), not here.
+fn tab_bar(active: &str) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
         nav class="tabs" {
             button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
             button class=(cls("library")) data-tab="library" hx-get="/tab/library" hx-target="#main" { (icon("book")) "Library" }
-            button class=(cls("inbox")) data-tab="inbox" hx-get="/tab/inbox" hx-target="#main" {
-                (icon("inbox")) "Inbox"
-                @if inbox_pending > 0 { span class="tab-badge" { (inbox_pending) } }
-            }
         }
     }
+}
+
+/// The inbox icon's numeric badge (pending candidates). Empty markup at zero.
+pub fn inbox_badge(n: usize) -> Markup {
+    html! { @if n > 0 { span class="tab-badge" { (n) } } }
+}
+
+/// One-shot loader that re-pulls the badge after an inbox disposition.
+pub fn inbox_badge_loader() -> String {
+    html! { div hx-get="/inbox/badge" hx-trigger="load" hx-target="#inbox-badge" {} }.into_string()
 }
 
 /// The Library's category sub-nav (a pill row). Baked into the top of every

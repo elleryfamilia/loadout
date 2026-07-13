@@ -165,7 +165,8 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/skills/install") => handle_skill_install(),
         ("GET", "/drawer/recents") => handle_recents_drawer(state),
         ("POST", "/recents/clear") => handle_recents_clear(state),
-        ("GET", "/tab/inbox") => inbox::tab(state),
+        ("GET", "/drawer/inbox") => inbox::drawer(state),
+        ("GET", "/inbox/badge") => handle_inbox_badge(state),
         ("GET", "/inbox/history") => inbox::history(state),
         (_, p) if p.starts_with("/inbox/") => handle_inbox_param(state, req),
         ("GET", p) if p.starts_with("/artifacts/") => {
@@ -224,8 +225,9 @@ fn handle_fragment_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
 }
 
 /// Route `/inbox/<id>/<action>` (mutations are POST, so they inherit the
-/// Origin/Referer guard). `/tab/inbox` and `/inbox/history` are exact matches
-/// handled in [`route`] before this catch-all.
+/// Origin/Referer guard). `/drawer/inbox`, `/inbox/badge`, and `/inbox/history`
+/// are exact matches handled in [`route`] before this catch-all (otherwise
+/// `id_and_action` would parse "badge"/"history" as a candidate id).
 fn handle_inbox_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let (id, action) = id_and_action(&req.path, "/inbox/");
     match (req.method.as_str(), action) {
@@ -235,6 +237,12 @@ fn handle_inbox_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "unsuppress") => inbox::unsuppress(state, &id),
         _ => Resp::not_found(),
     }
+}
+
+/// `GET /inbox/badge` — the inbox icon's badge fragment, re-pulled after a
+/// disposition via [`views::inbox_badge_loader`]. Empty markup at zero.
+fn handle_inbox_badge(state: &Arc<Mutex<StudioState>>) -> Resp {
+    Resp::html(views::inbox_badge(inbox::pending_count(state)).into_string())
 }
 
 fn handle_profile_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
@@ -4816,16 +4824,72 @@ mod tests {
     }
 
     #[test]
-    fn inbox_tab_lists_candidates_and_shell_shows_pending_badge() {
+    fn inbox_drawer_lists_pending_candidates() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+        let r = route(&st, &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Prefers pnpm over npm"), "{body}");
+        assert!(
+            body.contains("drawer"),
+            "renders inside drawer chrome: {body}"
+        );
+        assert!(!body.contains("data-tab=\"inbox\""));
+    }
+
+    #[test]
+    fn inbox_badge_fragment_counts_pending_and_hides_at_zero() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/inbox/badge", "", &[HOST, COOKIE], ""));
+        assert!(
+            String::from_utf8(r.body).unwrap().trim().is_empty(),
+            "no badge at zero"
+        );
+        seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+        let r = route(&st, &req("GET", "/inbox/badge", "", &[HOST, COOKIE], ""));
+        assert!(String::from_utf8(r.body).unwrap().contains('1'));
+    }
+
+    #[test]
+    fn dismiss_rerenders_drawer_and_refreshes_badge() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                &format!("/inbox/{id}/dismiss"),
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("hx-get=\"/inbox/badge\""),
+            "response carries the badge refresh loader: {body}"
+        );
+        assert!(
+            !body.contains("Prefers pnpm over npm"),
+            "dismissed candidate leaves the queue: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_drawer_lists_candidates_and_shell_shows_pending_badge() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         seed_candidate(d.path(), "machine-a", "Always use pnpm, never npm.");
         seed_candidate(d.path(), "machine-a", "Prefer rg over grep.");
 
-        // The tab body lists both candidate claims.
+        // The drawer body lists both candidate claims.
         let body = body_of(route(
             &st,
-            &req("GET", "/tab/inbox", "", &[HOST, COOKIE], ""),
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("Always use pnpm, never npm."),
@@ -4833,9 +4897,17 @@ mod tests {
         );
         assert!(body.contains("Prefer rg over grep."), "claim 2");
 
-        // The shell shows the Inbox nav with a pending-count badge (2).
+        // The tab bar no longer has an Inbox destination; the shell's inbox
+        // icon carries the pending-count badge (2) instead.
         let shell = body_of(route(&st, &req("GET", "/", "", &[HOST, COOKIE], "")));
-        assert!(shell.contains("data-tab=\"inbox\""), "inbox nav present");
+        assert!(
+            !shell.contains("data-tab=\"inbox\""),
+            "inbox nav removed from the tab bar: {shell}"
+        );
+        assert!(
+            shell.contains("id=\"inbox-badge\""),
+            "badge wrapper present on the inbox icon: {shell}"
+        );
         assert!(
             shell.contains("tab-badge"),
             "pending badge present: {shell}"
@@ -4856,7 +4928,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/tab/inbox", "", &[HOST, COOKIE], ""),
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("the user asked for pnpm everywhere"),
@@ -4935,9 +5007,16 @@ mod tests {
                 "",
             ),
         ));
-        // The candidate now shows under the Dismissed list, not as pending.
-        assert!(body.contains("Dismissed"), "dismissed section: {body}");
-        assert!(body.contains("Un-dismiss"), "un-dismiss control present");
+        // The candidate leaves the drawer queue; the dismissed list itself
+        // moved to Settings (Task 7), so it no longer renders here.
+        assert!(
+            !body.contains("Always use pnpm."),
+            "dismissed candidate leaves the queue: {body}"
+        );
+        assert!(
+            body.contains("hx-get=\"/inbox/badge\""),
+            "badge refresh loader present: {body}"
+        );
 
         let fold = inbox_fold(d.path());
         assert!(
@@ -5071,11 +5150,11 @@ mod tests {
 
     /// XSS regression at the trust boundary: candidate claim text is ultimately
     /// third-party transcript content, so a claim carrying a `<script>` tag must
-    /// render HTML-escaped in the inbox tab and NEVER as a raw tag. `maud`
+    /// render HTML-escaped in the inbox drawer and NEVER as a raw tag. `maud`
     /// escapes by construction; this locks it (a future `PreEscaped` on this path
     /// would be a stored-XSS hole in the studio the user opens in their browser).
     #[test]
-    fn inbox_tab_escapes_script_tags_in_candidate_claim() {
+    fn inbox_drawer_escapes_script_tags_in_candidate_claim() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         seed_candidate(
@@ -5086,7 +5165,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/tab/inbox", "", &[HOST, COOKIE], ""),
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
@@ -5109,8 +5188,12 @@ mod tests {
 
         let shell = body_of(route(&st, &req("GET", "/", "", &[HOST, COOKIE], "")));
         assert!(
-            shell.contains("tab-badge\">2<"),
-            "the badge must carry the pending count value 2: {shell}"
+            shell.contains("id=\"inbox-badge\""),
+            "badge lives on the inbox icon: {shell}"
+        );
+        assert!(
+            shell.contains("id=\"inbox-badge\"><span class=\"tab-badge\">2</span>"),
+            "the badge must carry the pending count value 2 inside the icon's badge span: {shell}"
         );
     }
 

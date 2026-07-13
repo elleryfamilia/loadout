@@ -1,4 +1,4 @@
-//! The studio **Inbox** tab: the human review surface for learned candidate
+//! The studio **Inbox** drawer: the human review surface for learned candidate
 //! preferences. Nothing enters a profile without a promote here — this module
 //! is the own-your-markdown gate the release's trust story rests on.
 //!
@@ -52,7 +52,7 @@ use crate::studio::server::{Req, Resp};
 use crate::studio::state::{self, StudioState};
 use crate::studio::views;
 
-/// Where the Inbox tab's three stores live, injected so router tests can point
+/// Where the Inbox drawer's three stores live, injected so router tests can point
 /// them at a fixture tempdir (the `recents_path` precedent).
 #[derive(Clone)]
 pub struct InboxPaths {
@@ -80,7 +80,7 @@ fn paths(state: &Arc<Mutex<StudioState>>) -> Option<InboxPaths> {
     state.lock().unwrap().inbox.clone()
 }
 
-/// The number of `Pending` candidates — the shell's Inbox-tab badge count.
+/// The number of `Pending` candidates — the shell's Inbox-icon badge count.
 /// `Quarantined` candidates are held, not pending, so they don't count (same
 /// number every discovery-line surface shows).
 pub fn pending_count(state: &Arc<Mutex<StudioState>>) -> usize {
@@ -111,46 +111,46 @@ fn values(pairs: &[(String, String)], key: &str) -> Vec<String> {
         .collect()
 }
 
-// --- GET /tab/inbox ----------------------------------------------------------
+// --- GET /drawer/inbox --------------------------------------------------------
 
-/// The Inbox tab body: pending/quarantined candidate cards + a dismissed list.
-pub fn tab(state: &Arc<Mutex<StudioState>>) -> Resp {
-    state.lock().unwrap().active_tab = "inbox".to_string();
-    render_tab(state, None)
+/// `GET /drawer/inbox` — the review-queue drawer. Never touches `active_tab`;
+/// the drawer overlays the current destination.
+pub fn drawer(state: &Arc<Mutex<StudioState>>) -> Resp {
+    render_drawer(state, None)
 }
 
-/// Fold the journals + read evidence (outside the mutex) and render the tab.
+/// Fold the journals + read evidence (outside the mutex) and render the drawer.
 /// `notice` is an optional `(is_error, message)` banner shown above the list.
-fn render_tab(state: &Arc<Mutex<StudioState>>, notice: Option<(bool, String)>) -> Resp {
+fn render_drawer(state: &Arc<Mutex<StudioState>>, notice: Option<(bool, String)>) -> Resp {
     let Some(paths) = paths(state) else {
-        return Resp::html(inbox_fragment(&[], &[], notice));
+        return Resp::html(inbox_drawer_fragment(&[], false, notice));
     };
     let fold = journal::fold_at(&paths.inbox_dir);
     let evidence_dir = paths.evidence_dir();
-
     let mut cards: Vec<CandidateCard> = Vec::new();
-    let mut dismissed: Vec<SuppressedRow> = Vec::new();
     for c in fold.candidates.values() {
-        match c.status {
-            CandidateStatus::Pending | CandidateStatus::Quarantined => {
-                cards.push(build_card(c, &evidence_dir))
-            }
-            CandidateStatus::Suppressed => dismissed.push(SuppressedRow {
-                id: c.id.clone(),
-                claim: c.claim.clone(),
-            }),
-            CandidateStatus::Promoted => {}
+        if matches!(
+            c.status,
+            CandidateStatus::Pending | CandidateStatus::Quarantined
+        ) {
+            cards.push(build_card(c, &evidence_dir));
         }
     }
     // Newest first (last_seen desc) so the freshest suggestions lead.
     cards.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
-
-    Resp::html(inbox_fragment(&cards, &dismissed, notice))
+    // Learning is "on here" when the synced flag is set AND this machine holds
+    // an activation ack — the same two-part gate `learn_active` uses.
+    let snap = state.lock().unwrap().snapshot();
+    let learn_on = state::staged_config(&snap)
+        .map(|cfg| cfg.learn.enabled)
+        .unwrap_or(false)
+        && learn_state::read_activation_at(&paths.learn_dir).is_some();
+    Resp::html(inbox_drawer_fragment(&cards, learn_on, notice))
 }
 
 /// One evidence file: `state_dir/learn/evidence/<id>.json`, written by the
 /// worker as `{ id, quotes: [{ session_ref, quote }] }`. Only `quote` is read
-/// here — session refs are display plumbing the tab doesn't surface.
+/// here — session refs are display plumbing the drawer doesn't surface.
 #[derive(Deserialize)]
 struct EvidenceFile {
     #[serde(default)]
@@ -214,12 +214,6 @@ struct CandidateCard {
     last_seen: String,
 }
 
-/// One dismissed candidate row (the un-dismiss list).
-struct SuppressedRow {
-    id: String,
-    claim: String,
-}
-
 // --- GET /inbox/<id>/promote (modal) -----------------------------------------
 
 /// Render the promote modal for one candidate: editable claim, new-fragment vs
@@ -267,7 +261,7 @@ pub fn promote_form(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
 /// disposition then lands iff the config write lands.
 pub fn promote(state: &Arc<Mutex<StudioState>>, id: &str, req: &Req) -> Resp {
     // Errors from this modal render inside it (its `#inbox-modal-msg` slot),
-    // not by replacing the tab behind the still-open modal.
+    // not by replacing the drawer behind the still-open modal.
     let err = |msg: String| Resp::html_retarget(views::error_fragment(&msg), "#inbox-modal-msg");
 
     let Some(paths) = paths(state) else {
@@ -415,10 +409,11 @@ pub fn promote(state: &Arc<Mutex<StudioState>>, id: &str, req: &Req) -> Resp {
         return err(e.to_string());
     }
 
-    // Success: close the modal, re-render the tab (the candidate still shows as
-    // Pending — the disposition is queued, not yet flushed), and refresh the
-    // staged indicator so Review/Apply appear.
-    let mut resp = render_tab(
+    // Success: re-render the drawer (the candidate still shows as Pending — the
+    // disposition is queued, not yet flushed), refresh the badge, and refresh
+    // the staged indicator so Review/Apply appear. (Full promote rework, incl.
+    // closing the modal from this response, is Task 4.)
+    let mut resp = render_drawer(
         state,
         Some((
             false,
@@ -426,7 +421,7 @@ pub fn promote(state: &Arc<Mutex<StudioState>>, id: &str, req: &Req) -> Resp {
         )),
     );
     resp.body
-        .extend_from_slice(views::modal_close_loader().as_bytes());
+        .extend_from_slice(views::inbox_badge_loader().as_bytes());
     resp.body
         .extend_from_slice(views::staged_indicator_loader().as_bytes());
     resp
@@ -446,16 +441,25 @@ fn default_name(claim: &str) -> String {
 
 // --- POST /inbox/<id>/dismiss ------------------------------------------------
 
-/// Append a `Dismiss` disposition immediately (no config change) and re-render.
+/// Append a `Dismiss` disposition immediately (no config change), re-render the
+/// drawer, and append a badge-refresh loader (the pending count just dropped).
 pub fn dismiss(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let Some(paths) = paths(state) else {
         return Resp::html(views::error_fragment("learning state is unavailable"));
     };
     match append_disposition(&paths, id, Action::Dismiss) {
-        Ok(()) => render_tab(
-            state,
-            Some((false, "dismissed — Un-dismiss to restore".to_string())),
-        ),
+        Ok(()) => {
+            let mut resp = render_drawer(
+                state,
+                Some((
+                    false,
+                    "dismissed — restore it under Settings → Learning".to_string(),
+                )),
+            );
+            resp.body
+                .extend_from_slice(views::inbox_badge_loader().as_bytes());
+            resp
+        }
         Err(e) => Resp::html(views::error_fragment(&format!("could not dismiss: {e}"))),
     }
 }
@@ -482,7 +486,7 @@ pub fn unsuppress(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
             .get(id)
             .map(|c| status_word(c.status))
             .unwrap_or("not in the inbox");
-        return render_tab(
+        return render_drawer(
             state,
             Some((
                 true,
@@ -491,7 +495,7 @@ pub fn unsuppress(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         );
     }
     match append_disposition(&paths, id, Action::Unsuppress) {
-        Ok(()) => render_tab(state, Some((false, "restored to the inbox".to_string()))),
+        Ok(()) => render_drawer(state, Some((false, "restored to the inbox".to_string()))),
         Err(e) => Resp::html(views::error_fragment(&format!("could not un-dismiss: {e}"))),
     }
 }
@@ -547,52 +551,36 @@ fn enc(s: &str) -> String {
     out
 }
 
-/// The Inbox tab body. All strings shown here are candidate-derived; `maud`
-/// escapes them by construction and none are `PreEscaped`.
-fn inbox_fragment(
+/// The Inbox drawer body. All strings shown here are candidate-derived; `maud`
+/// escapes them by construction and none are `PreEscaped`. Dismissed rows and
+/// the History link move to Settings (Task 7) — this drawer shows only the
+/// pending/quarantined queue.
+fn inbox_drawer_fragment(
     cards: &[CandidateCard],
-    dismissed: &[SuppressedRow],
+    learn_on: bool,
     notice: Option<(bool, String)>,
 ) -> String {
-    html! {
-        div class="inbox" {
-            div class="inbox-head" {
-                h2 { "Inbox" }
-                a class="btn btn-ghost btn-sm" hx-get="/inbox/history" hx-target="#main" {
-                    (views::icon("clock")) "History"
-                }
+    let body = html! {
+        @if let Some((is_error, msg)) = &notice {
+            div class=(if *is_error { "banner error" } else { "banner" }) {
+                span class="banner-icon" { (views::icon(if *is_error { "alert" } else { "check" })) }
+                div class="banner-body" { (msg) }
             }
-            @if let Some((is_error, msg)) = &notice {
-                div class=(if *is_error { "banner error" } else { "banner" }) {
-                    span class="banner-icon" { (views::icon(if *is_error { "alert" } else { "check" })) }
-                    div class="banner-body" { (msg) }
-                }
-            }
-            @if cards.is_empty() && dismissed.is_empty() {
+        }
+        @if cards.is_empty() {
+            @if learn_on {
+                p class="muted" { "You're all caught up — nothing to review." }
+            } @else {
                 p class="muted" {
-                    "Nothing staged yet. Once learning is on ("
+                    "Learning is off. Turn it on ("
                     code { "load learn on" }
-                    "), preferences harvested from your own sessions show up here to review."
-                }
-            }
-            @for c in cards { (candidate_card(c)) }
-            @if !dismissed.is_empty() {
-                h3 class="inbox-subhead" { "Dismissed" }
-                ul class="suppressions" {
-                    @for s in dismissed {
-                        li class="suppression" {
-                            span class="suppression-claim" { (s.claim) }
-                            button class="btn btn-ghost btn-sm"
-                                hx-post=(format!("/inbox/{}/unsuppress", enc(&s.id))) hx-target="#main" {
-                                (views::icon("refresh")) "Un-dismiss"
-                            }
-                        }
-                    }
+                    ") and preferences harvested from your own sessions show up here to review."
                 }
             }
         }
-    }
-    .into_string()
+        @for c in cards { (candidate_card(c)) }
+    };
+    views::drawer("Inbox", body, None)
 }
 
 fn candidate_card(c: &CandidateCard) -> Markup {
@@ -635,7 +623,7 @@ fn candidate_card(c: &CandidateCard) -> Markup {
                     (views::icon("check")) "Promote"
                 }
                 button class="btn btn-ghost btn-sm"
-                    hx-post=(format!("/inbox/{}/dismiss", enc(&c.id))) hx-target="#main"
+                    hx-post=(format!("/inbox/{}/dismiss", enc(&c.id))) hx-target="#drawer"
                     hx-confirm="Dismiss this suggestion? It won't return unless you un-dismiss it." {
                     (views::icon("x")) "Dismiss"
                 }
@@ -732,7 +720,7 @@ fn history_fragment(records: &[LogRecord]) -> String {
         div class="inbox" {
             div class="inbox-head" {
                 h2 { "Harvest history" }
-                a class="btn btn-ghost btn-sm" hx-get="/tab/inbox" hx-target="#main" {
+                a class="btn btn-ghost btn-sm" hx-get="/drawer/inbox" hx-target="#drawer" {
                     (views::icon("arrow-left")) "Back to inbox"
                 }
             }
