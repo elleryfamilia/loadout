@@ -163,7 +163,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/packs") => handle_packs(state),
         ("GET", "/skills/card") => handle_skill_card(),
         ("POST", "/skills/install") => handle_skill_install(),
-        ("GET", "/tab/recents") => handle_recents(state),
+        ("GET", "/drawer/recents") => handle_recents_drawer(state),
         ("POST", "/recents/clear") => handle_recents_clear(state),
         ("GET", "/tab/inbox") => inbox::tab(state),
         ("GET", "/inbox/history") => inbox::history(state),
@@ -1322,12 +1322,11 @@ fn skill_action_at(home: &Path, store: &Path, path: &str, method: &str) -> Resp 
 
 // --- Recents ------------------------------------------------------------
 
-/// The Recents destination. The store is read fresh per request, so renders
-/// done in another terminal appear on the next click with no cache dance.
-fn handle_recents(state: &Arc<Mutex<StudioState>>) -> Resp {
-    state.lock().unwrap().active_tab = "recents".to_string();
+/// `GET /drawer/recents` — the Recents drawer. Deliberately does NOT touch
+/// `active_tab`: the drawer overlays whatever destination is current.
+fn handle_recents_drawer(state: &Arc<Mutex<StudioState>>) -> Resp {
     let store = recents_store(state);
-    Resp::html(views::recents_tab_fragment(
+    Resp::html(views::recents_drawer_fragment(
         &recent_rows(&store),
         store.is_readonly(),
     ))
@@ -1340,7 +1339,7 @@ fn handle_recents_clear(state: &Arc<Mutex<StudioState>>) -> Resp {
             "could not clear recents: {e}"
         )));
     }
-    handle_recents(state)
+    handle_recents_drawer(state)
 }
 
 fn handle_recents_remove(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
@@ -1350,7 +1349,7 @@ fn handle_recents_remove(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
             "could not remove entry: {e}"
         )));
     }
-    handle_recents(state)
+    handle_recents_drawer(state)
 }
 
 /// Build display rows. All fs reads happen here (store snapshot already
@@ -2775,17 +2774,22 @@ mod tests {
         // destinations Loadouts | Library.
         assert!(body.contains("Loadouts"));
         assert!(body.contains("Library"));
-        assert!(body.contains("Recents"));
     }
 
     #[test]
-    fn shell_nav_always_shows_recents() {
+    fn shell_shows_recents_icon_not_tab() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         let r = route(&st, &req("GET", "/", "", &[HOST, COOKIE], ""));
         let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("Recents"));
-        assert!(body.contains("data-tab=\"recents\""));
+        assert!(
+            !body.contains("data-tab=\"recents\""),
+            "recents must no longer be a tab"
+        );
+        assert!(
+            body.contains("hx-get=\"/drawer/recents\""),
+            "clock icon opens the recents drawer"
+        );
     }
 
     #[test]
@@ -2807,7 +2811,7 @@ mod tests {
     fn recents_tab_renders_instructive_empty_state() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
-        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let r = route(&st, &req("GET", "/drawer/recents", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Nothing recent yet"));
@@ -2830,7 +2834,7 @@ mod tests {
         )
         .unwrap();
         let id = seed_recents(d.path(), "Demo plan", "gen/demo.html", "sha256:old");
-        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let r = route(&st, &req("GET", "/drawer/recents", "", &[HOST, COOKIE], ""));
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Demo plan"));
         // The kind renders as text, not just an icon — with several artifact
@@ -2859,7 +2863,7 @@ mod tests {
         let st = state_for(d.path(), None);
         let _id = seed_recents(d.path(), "Gone plan", "gen/demo.html", "sha256:demo");
         std::fs::remove_file(d.path().join("gen/demo.html")).unwrap();
-        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let r = route(&st, &req("GET", "/drawer/recents", "", &[HOST, COOKIE], ""));
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Gone plan"));
         assert!(body.contains("recent-unavailable"));
@@ -2940,7 +2944,7 @@ mod tests {
             r#"{"version":999,"entries":[]}"#,
         )
         .unwrap();
-        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let r = route(&st, &req("GET", "/drawer/recents", "", &[HOST, COOKIE], ""));
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("newer loadout"));
         assert!(!body.contains("/recents/clear"));

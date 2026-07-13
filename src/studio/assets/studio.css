@@ -914,10 +914,11 @@ pre.error { color: var(--error-fg); padding: 16px; font-family: var(--mono); whi
   .pack-grid { grid-template-columns: 1fr; }
 }
 
-/* --- Recents tab -------------------------------------------------------- */
+/* --- Recents drawer ------------------------------------------------------ */
 .recents-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .75rem; }
 .recents-list { list-style: none; margin: 0; padding: 0; }
 .recent-row { display: flex; align-items: center; gap: .6rem; padding: .5rem .25rem; border-bottom: 1px solid var(--border); }
+.drawer .recent-row { flex-wrap: wrap; }
 .recent-title { font-weight: 600; }
 .recent-unavailable { opacity: .55; }
 .recent-repo, .recent-detail, .recent-age { font-size: .85em; }

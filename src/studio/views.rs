@@ -374,6 +374,8 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
                     (tab_bar(active_tab, inbox_pending))
                     div class="topbar-right" {
                         div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
+                        button type="button" class="icon-btn" title="Recent artifacts"
+                            hx-get="/drawer/recents" hx-target="#drawer" { (icon("clock")) }
                         button type="button" class="icon-btn" title="Show me around" hx-get="/onboarding/welcome" hx-target="#main" { (icon("help")) }
                         (theme_toggle())
                     }
@@ -387,19 +389,18 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
     .into_string()
 }
 
-/// Top nav: four destinations. **Loadouts** is where you assemble a loadout;
+/// Top nav: three destinations. **Loadouts** is where you assemble a loadout;
 /// **Library** is the shared catalog of gear a loadout binds (fragments, targets,
-/// workflows); **Recents** lists rendered artifacts; **Inbox** is the review
-/// surface for learned candidate preferences (with a pending-count badge when
-/// nonzero). Anything reached *inside* the Library keeps `active_tab ==
-/// "library"`, so the Library button stays lit while you browse its categories.
+/// workflows); **Inbox** is the review surface for learned candidate preferences
+/// (with a pending-count badge when nonzero). Anything reached *inside* the
+/// Library keeps `active_tab == "library"`, so the Library button stays lit
+/// while you browse its categories.
 fn tab_bar(active: &str, inbox_pending: usize) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
         nav class="tabs" {
             button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
             button class=(cls("library")) data-tab="library" hx-get="/tab/library" hx-target="#main" { (icon("book")) "Library" }
-            button class=(cls("recents")) data-tab="recents" hx-get="/tab/recents" hx-target="#main" { (icon("clock")) "Recents" }
             button class=(cls("inbox")) data-tab="inbox" hx-get="/tab/inbox" hx-target="#main" {
                 (icon("inbox")) "Inbox"
                 @if inbox_pending > 0 { span class="tab-badge" { (inbox_pending) } }
@@ -1416,65 +1417,60 @@ pub enum RecentBadge {
     None,
 }
 
-/// The Recents tab body. `readonly` = the store was written by a newer
-/// loadout: render the notice and no destructive controls (they would
-/// silently no-op).
-pub fn recents_tab_fragment(rows: &[RecentRow], readonly: bool) -> String {
-    html! {
-        div class="recents" {
-            div class="recents-head" {
-                h2 { "Recents" }
-                @if !rows.is_empty() && !readonly {
-                    button class="btn btn-ghost btn-sm" hx-post="/recents/clear" hx-target="#main"
-                        hx-confirm="Clear the recents list? Rendered files are not deleted." {
-                        (icon("trash")) "Clear"
-                    }
-                }
-            }
-            @if readonly {
-                p class="muted" { "Recents state was written by a newer loadout — upgrade to manage it." }
-            }
-            @if rows.is_empty() && !readonly {
-                p class="muted" { "Nothing recent yet — render a plan with " code { "load plan render" } " and it shows up here." }
-            }
-            @if !rows.is_empty() {
-                ul class="recents-list" {
-                    @for r in rows {
-                        li class=(if r.available { "recent-row" } else { "recent-row recent-unavailable" }) {
-                            span class="recent-kind" { (icon(if r.kind == "plan" { "layers" } else { "file" })) }
-                            // The kind, as TEXT — the icon alone is illegible
-                            // as an indicator once several artifact kinds
-                            // (plans, design docs, …) live side by side.
-                            // Unknown kinds label themselves automatically:
-                            // this renders the entry's own kind string.
-                            span class="recent-kind-label" { (r.kind) }
-                            @if r.available {
-                                a class="recent-title" href={ "/artifacts/" (r.id) } target="_blank" rel="noopener" { (r.title) }
-                            } @else {
-                                span class="recent-title" title="unavailable (unmounted volume?)" { (r.title) }
-                            }
-                            span class="recent-repo muted" title=(r.repo_full) { (r.repo_name) }
-                            @if !r.detail.is_empty() { span class="recent-detail muted" { (r.detail) } }
-                            span class="recent-age muted" { (r.age) }
-                            @match r.badge {
-                                RecentBadge::Stale => span class="recent-badge stale" title="the plan changed since this render — re-run load plan render" { "stale" },
-                                RecentBadge::Fresh => {},
-                                RecentBadge::None => {},
-                            }
-                            @if !r.available {
-                                span class="recent-badge missing" { "missing" }
-                            }
-                            @if !readonly {
-                                button class="icon-btn recent-remove" title="Remove from recents"
-                                    hx-delete={ "/recents/" (r.id) } hx-target="#main" { (icon("x")) }
-                            }
+/// The Recents drawer. Rows open artifacts in a new browser tab; remove/clear
+/// re-render the drawer. `readonly` (store written by a newer loadout) hides
+/// destructive controls and shows the upgrade notice.
+pub fn recents_drawer_fragment(rows: &[RecentRow], readonly: bool) -> String {
+    let body = html! {
+        @if readonly {
+            p class="muted" { "Recents state was written by a newer loadout — upgrade to manage it." }
+        }
+        @if rows.is_empty() && !readonly {
+            p class="muted" { "Nothing recent yet — render a plan with " code { "load plan render" } " and it shows up here." }
+        }
+        @if !rows.is_empty() {
+            ul class="recents-list" {
+                @for r in rows {
+                    li class=(if r.available { "recent-row" } else { "recent-row recent-unavailable" }) {
+                        span class="recent-kind" { (icon(if r.kind == "plan" { "layers" } else { "file" })) }
+                        // The kind, as TEXT — the icon alone is illegible
+                        // as an indicator once several artifact kinds
+                        // (plans, design docs, …) live side by side.
+                        // Unknown kinds label themselves automatically:
+                        // this renders the entry's own kind string.
+                        span class="recent-kind-label" { (r.kind) }
+                        @if r.available {
+                            a class="recent-title" href={ "/artifacts/" (r.id) } target="_blank" rel="noopener" { (r.title) }
+                        } @else {
+                            span class="recent-title" title="unavailable (unmounted volume?)" { (r.title) }
+                        }
+                        span class="recent-repo muted" title=(r.repo_full) { (r.repo_name) }
+                        @if !r.detail.is_empty() { span class="recent-detail muted" { (r.detail) } }
+                        span class="recent-age muted" { (r.age) }
+                        @match r.badge {
+                            RecentBadge::Stale => span class="recent-badge stale" title="the plan changed since this render — re-run load plan render" { "stale" },
+                            RecentBadge::Fresh => {},
+                            RecentBadge::None => {},
+                        }
+                        @if !r.available { span class="recent-badge missing" { "missing" } }
+                        @if !readonly {
+                            button class="icon-btn recent-remove" title="Remove from recents"
+                                hx-delete={ "/recents/" (r.id) } hx-target="#drawer" { (icon("x")) }
                         }
                     }
                 }
             }
         }
-    }
-    .into_string()
+    };
+    let foot = (!rows.is_empty() && !readonly).then(|| {
+        html! {
+            button class="btn btn-ghost btn-sm" hx-post="/recents/clear" hx-target="#drawer"
+                hx-confirm="Clear the recents list? Rendered files are not deleted." {
+                (icon("trash")) "Clear all"
+            }
+        }
+    });
+    drawer("Recents", body, foot)
 }
 
 /// One tiny gallery card: the workflow name + an "in use" marker (equipped on at
