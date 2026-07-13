@@ -152,7 +152,7 @@ pub struct Session {
     /// config write succeeds — the studio-inbox analogue of `pending_trust`.
     /// Same guarantee: the disposition lands **iff** the config write lands
     /// (queued on stage, flushed in `apply()`, dropped by `discard()`). Used by
-    /// the Inbox tab's promote flow so a candidate is only marked `Promoted` if
+    /// the Inbox drawer's promote flow so a candidate is only marked `Promoted` if
     /// its fragment actually reached the config files.
     pub(crate) pending_dispositions: Vec<crate::learn::journal::Disposition>,
     /// Where [`pending_dispositions`](Self::pending_dispositions) flush:

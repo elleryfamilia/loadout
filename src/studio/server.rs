@@ -4840,7 +4840,7 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
     }
 
-    // --- Inbox tab -----------------------------------------------------------
+    // --- Inbox drawer ----------------------------------------------------------
 
     /// The config fixture the inbox promote tests author into: one existing
     /// fragment + one loadout to bind a promoted fragment onto.

@@ -43,7 +43,7 @@ pub struct StudioState {
     /// Where the per-machine recents registry lives (None: no state dir).
     /// Injected so route() tests point it at a fixture tempdir.
     pub recents_path: Option<PathBuf>,
-    /// Where the Inbox tab's journals + evidence + run log live (None: no
+    /// Where the Inbox drawer's journals + evidence + run log live (None: no
     /// config/state dir). Injected so route() tests point it at a fixture
     /// tempdir, the same seam as `recents_path`.
     pub inbox: Option<crate::studio::inbox::InboxPaths>,

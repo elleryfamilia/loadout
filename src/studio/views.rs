@@ -349,10 +349,13 @@ fn render_markdown(md: &str) -> Markup {
 
 // --- page shell --------------------------------------------------------------
 
-/// The full page: top bar (brand + tabs + staged indicator), the `#main` tab
-/// content, and the empty `#modal` container. `inbox_pending` is the count of
-/// pending learned candidates awaiting review — shown as a badge on the Inbox
-/// icon (which opens the review drawer) when nonzero.
+/// The full page: brand, the two-destination tab nav ([`tab_bar`]), a staged
+/// indicator, and three top-bar action icons — 🕒 (recents drawer), 📥 (inbox
+/// drawer), ⚙ (settings) — followed by the `#main` tab content and the empty
+/// `#modal`/`#drawer` containers those icons and other actions render into.
+/// `inbox_pending` is the count of pending learned candidates awaiting review —
+/// shown as a badge on the Inbox icon (which opens the review drawer) when
+/// nonzero.
 pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize) -> String {
     html! {
         (DOCTYPE)
@@ -401,7 +404,8 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
 /// **Library** is the shared catalog of gear a loadout binds (fragments, targets,
 /// workflows). Anything reached *inside* the Library keeps `active_tab ==
 /// "library"`, so the Library button stays lit while you browse its categories.
-/// Inbox and Recents live in the top-bar icons (right drawers), not here.
+/// The other three top-bar icons — 🕒 recents, 📥 inbox, ⚙ settings — live to
+/// the right of this nav (see [`shell`]), not as tabs here.
 fn tab_bar(active: &str) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
@@ -1408,7 +1412,7 @@ pub fn workflows_result(view: &WorkflowsView, flash: &str) -> String {
     .into_string()
 }
 
-// --- Recents tab ---------------------------------------------------------
+// --- Recents drawer -------------------------------------------------------
 
 /// One Recents row, fully prepared by the server (no fs access in the view).
 pub struct RecentRow {
