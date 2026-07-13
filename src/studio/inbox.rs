@@ -221,11 +221,11 @@ struct CandidateCard {
 /// multi-select.
 pub fn promote_form(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let Some(paths) = paths(state) else {
-        return Resp::html(views::error_fragment("learning state is unavailable"));
+        return Resp::html(views::drawer_error("learning state is unavailable"));
     };
     let fold = journal::fold_at(&paths.inbox_dir);
     let Some(cand) = fold.candidates.get(id) else {
-        return Resp::html(views::error_fragment(
+        return Resp::html(views::drawer_error(
             "that suggestion is no longer in the inbox",
         ));
     };
@@ -446,7 +446,7 @@ fn default_name(claim: &str) -> String {
 /// drawer, and append a badge-refresh loader (the pending count just dropped).
 pub fn dismiss(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let Some(paths) = paths(state) else {
-        return Resp::html(views::error_fragment("learning state is unavailable"));
+        return Resp::html(views::drawer_error("learning state is unavailable"));
     };
     match append_disposition(&paths, id, Action::Dismiss) {
         Ok(()) => {
@@ -461,7 +461,7 @@ pub fn dismiss(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
                 .extend_from_slice(views::inbox_badge_loader().as_bytes());
             resp
         }
-        Err(e) => Resp::html(views::error_fragment(&format!("could not dismiss: {e}"))),
+        Err(e) => Resp::html(views::drawer_error(&format!("could not dismiss: {e}"))),
     }
 }
 

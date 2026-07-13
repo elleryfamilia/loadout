@@ -36,9 +36,10 @@ pub struct StudioState {
     /// guided "review → you're set" beats instead of dropping straight into the
     /// Profiles tab; the first Apply disarms it.
     pub onboarding_active: bool,
-    /// The tab the user is currently on (`profiles`/`fragments`/`targets`/
-    /// `workflows`). Tracked so Apply re-renders the tab in place instead of
-    /// always bouncing back to Profiles.
+    /// The tab the user is currently on (`profiles`/`library`/`settings`).
+    /// Tracked so Apply re-renders the tab in place instead of always
+    /// bouncing back to Profiles. A drawer (recents/inbox) overlays whatever
+    /// tab is current and never sets this.
     pub active_tab: String,
     /// Where the per-machine recents registry lives (None: no state dir).
     /// Injected so route() tests point it at a fixture tempdir.

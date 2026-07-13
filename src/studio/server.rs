@@ -1348,7 +1348,7 @@ fn handle_recents_drawer(state: &Arc<Mutex<StudioState>>) -> Resp {
 fn handle_recents_clear(state: &Arc<Mutex<StudioState>>) -> Resp {
     let mut store = recents_store(state);
     if let Err(e) = store.clear() {
-        return Resp::html(views::error_fragment(&format!(
+        return Resp::html(views::drawer_error(&format!(
             "could not clear recents: {e}"
         )));
     }
@@ -1358,9 +1358,7 @@ fn handle_recents_clear(state: &Arc<Mutex<StudioState>>) -> Resp {
 fn handle_recents_remove(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let mut store = recents_store(state);
     if let Err(e) = store.remove_id(id) {
-        return Resp::html(views::error_fragment(&format!(
-            "could not remove entry: {e}"
-        )));
+        return Resp::html(views::drawer_error(&format!("could not remove entry: {e}")));
     }
     handle_recents_drawer(state)
 }
@@ -2000,6 +1998,7 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
                         .unwrap_or_else(|_| "claude".to_string());
                     let mut html = views::onboarding_done(&summary, &agent);
                     html.push_str(&views::staged_indicator_loader());
+                    html.push_str(&views::inbox_badge_loader());
                     return Resp::html(html);
                 }
             }
@@ -2019,9 +2018,16 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
                     views::workflows_tab(&state::workflows_view(&snap, None), Some(&msg))
                         .into_string();
                 html.push_str(&views::staged_indicator_loader());
+                html.push_str(&views::inbox_badge_loader());
                 return Resp::html(html);
             }
-            profiles_tab_resp(state, None, Some(&msg), true)
+            // Apply is when a queued promote's disposition actually flushes, so
+            // this is the moment the pending count can drop; refresh the badge
+            // unconditionally (cheap, idempotent GET) on all three success arms.
+            let mut resp = profiles_tab_resp(state, None, Some(&msg), true);
+            resp.body
+                .extend_from_slice(views::inbox_badge_loader().as_bytes());
+            resp
         }
         Err(e) => Resp::html(views::error_fragment(&format!("apply failed: {e}"))),
     }
@@ -2810,6 +2816,18 @@ mod tests {
         // destinations Loadouts | Library.
         assert!(body.contains("Loadouts"));
         assert!(body.contains("Library"));
+    }
+
+    #[test]
+    fn shell_gear_button_carries_a_stable_id_for_client_side_active_wiring() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("id=\"settings-btn\""),
+            "studio.js wires the gear's active state off this id: {body}"
+        );
     }
 
     #[test]
@@ -4900,6 +4918,39 @@ mod tests {
     }
 
     #[test]
+    fn inbox_drawer_empty_state_shows_caught_up_when_learning_is_on() {
+        let d = rust_repo();
+        let st = state_for(d.path(), Some("[learn]\nenabled = true\n"));
+        // The two-part `learn_on` gate needs both the synced flag (above) AND
+        // this machine's activation ack — write it directly (`load learn on`'s
+        // effect), the same file `learn_enable`'s handler writes.
+        let learn_dir = d.path().join("learn");
+        std::fs::create_dir_all(&learn_dir).unwrap();
+        crate::learn::state::write_activation_at(
+            &learn_dir,
+            &crate::learn::state::Activation {
+                machine_id: "machine-a".to_string(),
+                hostname: "test-host".to_string(),
+                activated_at: "2026-07-11T10:00:00Z".to_string(),
+            },
+        )
+        .unwrap();
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("You're all caught up"),
+            "learning on + empty inbox shows the caught-up copy: {body}"
+        );
+        assert!(
+            !body.contains("Learning is off"),
+            "the off-copy must not render once learning is actually on: {body}"
+        );
+    }
+
+    #[test]
     fn inbox_badge_fragment_counts_pending_and_hides_at_zero() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
@@ -5041,10 +5092,15 @@ mod tests {
         );
 
         // Apply writes the config AND flushes the disposition to the journal.
-        body_of(route(
+        let applied = body_of(route(
             &st,
             &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
         ));
+        assert!(
+            applied.contains("hx-get=\"/inbox/badge\""),
+            "apply refreshes the inbox badge — the pending count actually \
+             drops the moment the queued promote's disposition flushes: {applied}"
+        );
         let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
         assert!(
             on_disk.contains("id = \"prefer-pnpm\""),
@@ -5355,6 +5411,36 @@ mod tests {
         );
     }
 
+    /// An error swapped into `#drawer` (a candidate that vanished from the
+    /// inbox between page-load and click) must still render as visible drawer
+    /// chrome — `.drawer-root` only shows when it `:has(.drawer)`, so a bare
+    /// error banner there would silently close the drawer instead of showing
+    /// the message.
+    #[test]
+    fn promote_form_error_for_unknown_id_renders_drawer_chrome() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "GET",
+                "/inbox/does-not-exist/promote",
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("class=\"drawer\""),
+            "error still renders inside drawer chrome, not a bare banner: {body}"
+        );
+        assert!(
+            body.contains("no longer in the inbox"),
+            "the error message itself is present: {body}"
+        );
+    }
+
     /// The promote form now renders as the drawer's own content (replacing the
     /// queue), not a separate modal stacked on top of it — a back button
     /// returns to the queue and errors have their own in-drawer slot.
@@ -5456,6 +5542,13 @@ mod tests {
             body.contains("hx-get=\"/staged\""),
             "staged indicator refresh loader"
         );
+        let texts = st.lock().unwrap().session.staged_layer_texts();
+        let global = texts.iter().find(|(l, _, _)| *l == Layer::Global).unwrap();
+        assert!(
+            global.2.contains("agent = \"codex\""),
+            "the staged op writes the submitted agent, not just any op: {}",
+            global.2
+        );
     }
 
     #[test]
@@ -5477,6 +5570,13 @@ mod tests {
         assert!(
             crate::learn::state::read_activation_at(&d.path().join("learn")).is_some(),
             "activation ack written at confirm time (inert until Apply lands the flag)"
+        );
+        let texts = st.lock().unwrap().session.staged_layer_texts();
+        let global = texts.iter().find(|(l, _, _)| *l == Layer::Global).unwrap();
+        assert!(
+            global.2.contains("enabled = true"),
+            "the staged op turns learning ON, not off: {}",
+            global.2
         );
     }
 

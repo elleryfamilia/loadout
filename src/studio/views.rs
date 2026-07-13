@@ -384,7 +384,7 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
                             (icon("inbox"))
                             span id="inbox-badge" { (inbox_badge(inbox_pending)) }
                         }
-                        button type="button"
+                        button type="button" id="settings-btn"
                             class=(if active_tab == "settings" { "icon-btn active" } else { "icon-btn" })
                             title="Settings" hx-get="/settings" hx-target="#main" { (icon("gear")) }
                         button type="button" class="icon-btn" title="Show me around" hx-get="/onboarding/welcome" hx-target="#main" { (icon("help")) }
@@ -2788,9 +2788,22 @@ pub fn fragment_result(lib: &LibraryView, flash: &str) -> String {
     .into_string()
 }
 
+/// The error banner markup shared by [`error_fragment`] and [`drawer_error`].
+fn error_banner(msg: &str) -> Markup {
+    html! { div class="banner error" { span class="banner-icon" { (icon("alert")) } div class="banner-body" { (msg) } } }
+}
+
 /// An inline error fragment (validation / config errors never 500).
 pub fn error_fragment(msg: &str) -> String {
-    html! { div class="banner error" { span class="banner-icon" { (icon("alert")) } div class="banner-body" { (msg) } } }.into_string()
+    error_banner(msg).into_string()
+}
+
+/// An error fragment wrapped in drawer chrome, for handlers whose `hx-target`
+/// is `#drawer`. `.drawer-root` only shows when it `:has(.drawer)`
+/// (`studio.css`), so swapping a bare `error_fragment` in there renders
+/// nothing and silently closes the drawer instead of showing the message.
+pub fn drawer_error(msg: &str) -> String {
+    drawer("Something went wrong", error_banner(msg), None)
 }
 
 /// A minimal full-page error (when the shell itself can't be assembled).
