@@ -146,6 +146,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/tab/workflows") => handle_library(state, "workflows"),
         ("GET", "/staged") => handle_staged(state),
         ("GET", "/close") => Resp::html(String::new()),
+        ("GET", "/drawer/close") => Resp::html(String::new()),
         ("GET", "/diff") => handle_diff(state),
         ("POST", "/apply") => handle_apply(state),
         ("POST", "/discard") => handle_discard(state),
@@ -2785,6 +2786,21 @@ mod tests {
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Recents"));
         assert!(body.contains("data-tab=\"recents\""));
+    }
+
+    #[test]
+    fn shell_has_drawer_container_and_drawer_close_empties_it() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("id=\"drawer\""),
+            "shell must carry the drawer container"
+        );
+        let r = route(&st, &req("GET", "/drawer/close", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        assert!(r.body.is_empty());
     }
 
     #[test]

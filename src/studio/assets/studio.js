@@ -360,10 +360,20 @@
     applyTheme(document.documentElement.dataset.themePref || "auto");
   }
 
+  // Esc closes an open drawer (backdrop click already does; keyboard parity).
+  function wireDrawerEsc() {
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") return;
+      var backdrop = document.querySelector("#drawer .drawer-backdrop");
+      if (backdrop) backdrop.click();
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     process(document.body);
     wireActiveGroups();
     wireTheme();
+    wireDrawerEsc();
     enhanceCode(document.body);
     enhancePager(document.body);
   });

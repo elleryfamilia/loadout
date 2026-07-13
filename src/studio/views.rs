@@ -380,6 +380,7 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
                 }
                 main class="main" id="main" { (main) }
                 div id="modal" class="modal-root" {}
+                div id="drawer" class="drawer-root" {}
             }
         }
     }
@@ -469,6 +470,31 @@ fn modal_close() -> Markup {
 /// re-render when a fragment was edited from inside a profile).
 pub fn modal_close_loader() -> String {
     modal_close().into_string()
+}
+
+/// Right-side drawer chrome: backdrop (click closes) + panel with a titled
+/// head, scrolling body, and optional pinned footer. One drawer at a time —
+/// fragments swap the whole `#drawer` container.
+pub fn drawer(title: &str, body: Markup, foot: Option<Markup>) -> String {
+    html! {
+        div class="drawer-backdrop" hx-get="/drawer/close" hx-target="#drawer" {}
+        aside class="drawer" role="dialog" aria-modal="true" aria-label=(title) {
+            div class="drawer-head" {
+                h2 { (title) }
+                button class="icon-btn" type="button" title="Close"
+                    hx-get="/drawer/close" hx-target="#drawer" { (icon("x")) }
+            }
+            div class="drawer-body" { (body) }
+            @if let Some(f) = foot { div class="drawer-foot" { (f) } }
+        }
+    }
+    .into_string()
+}
+
+/// A one-shot loader that closes the drawer (appended to a `#main` fragment
+/// that a drawer action navigated to, e.g. Settings opened from the inbox).
+pub fn drawer_close_loader() -> String {
+    html! { div hx-get="/drawer/close" hx-trigger="load" hx-target="#drawer" {} }.into_string()
 }
 
 // --- Profiles tab ------------------------------------------------------------

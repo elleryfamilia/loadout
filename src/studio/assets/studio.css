@@ -621,6 +621,17 @@ body {
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
 .modal-foot .delete-left { margin-right: auto; }
 
+/* --- right-side drawer ------------------------------------------------- */
+.drawer-root { position: fixed; inset: 0; z-index: 40; display: none; }
+.drawer-root:has(.drawer) { display: block; }
+.drawer-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 92vw); display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--border-strong); box-shadow: -24px 0 64px rgba(0, 0, 0, .35); animation: drawer-in .18s ease-out; }
+@keyframes drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); flex: none; }
+.drawer-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.drawer-body { flex: 1 1 auto; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.drawer-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); flex: none; }
+
 /* --- confirmation dialog (replaces window.confirm) ------------------------- */
 .confirm-root { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; }
 .confirm-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .62); }
