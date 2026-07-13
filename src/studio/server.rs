@@ -1980,7 +1980,8 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
             // same bootstrap `load learn on|off` runs. Best-effort: a hook
             // hiccup must not fail an applied config write.
             if touched_learn {
-                if let Ok(cfg) = config::Config::load(&state.lock().unwrap().repo_base) {
+                let repo_base = state.lock().unwrap().repo_base.clone();
+                if let Ok(cfg) = config::Config::load(&repo_base) {
                     let _ = crate::adapters::bootstrap_hook_registrations(
                         &cfg,
                         crate::learn::state::learn_active(&cfg),

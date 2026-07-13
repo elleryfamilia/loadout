@@ -211,13 +211,13 @@ pub fn learn_enable(state: &Arc<Mutex<StudioState>>) -> Resp {
 /// the safe direction: this machine goes dormant even if Apply never comes)
 /// and stage `[learn] enabled = false`.
 pub fn learn_disable(state: &Arc<Mutex<StudioState>>) -> Resp {
-    if let Some(learn_dir) = state
+    let learn_dir_opt = state
         .lock()
         .unwrap()
         .inbox
         .as_ref()
-        .map(|p| p.learn_dir.clone())
-    {
+        .map(|p| p.learn_dir.clone());
+    if let Some(learn_dir) = learn_dir_opt {
         let _ = learn_state::remove_activation_at(&learn_dir);
     }
     let staged = state
