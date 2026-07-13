@@ -4997,6 +4997,14 @@ mod tests {
             staged.contains("hx-get=\"/inbox/badge\""),
             "promote response refreshes the inbox badge: {staged}"
         );
+        assert!(
+            staged.contains("hx-get=\"/staged\""),
+            "promote response refreshes the staged indicator: {staged}"
+        );
+        assert!(
+            !staged.contains("hx-get=\"/close\""),
+            "no modal-close loader — the drawer isn't a modal: {staged}"
+        );
         // Not yet promoted — the disposition is queued, flushed only on apply.
         assert_eq!(
             inbox_fold(d.path()).candidates[&id].status,
@@ -5315,5 +5323,68 @@ mod tests {
             on_disk.contains("Prefer pnpm for all installs."),
             "the edited claim text is the written guidance: {on_disk}"
         );
+    }
+
+    /// The promote form now renders as the drawer's own content (replacing the
+    /// queue), not a separate modal stacked on top of it — a back button
+    /// returns to the queue and errors have their own in-drawer slot.
+    #[test]
+    fn promote_form_renders_in_drawer_with_back_button() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+
+        let r = route(
+            &st,
+            &req(
+                "GET",
+                &format!("/inbox/{id}/promote"),
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("class=\"drawer\""),
+            "form renders inside drawer chrome, not a modal: {body}"
+        );
+        assert!(!body.contains("class=\"modal"), "no modal markup: {body}");
+        assert!(
+            body.contains("hx-get=\"/drawer/inbox\""),
+            "back button returns to the queue: {body}"
+        );
+        assert!(
+            body.contains("id=\"inbox-drawer-msg\""),
+            "in-drawer error slot present: {body}"
+        );
+    }
+
+    /// A validation error on promote (merge mode with no fragment picked) must
+    /// retarget into the drawer's own message slot, not `#main` or a modal slot
+    /// that no longer exists.
+    #[test]
+    fn promote_error_retargets_into_drawer_msg_slot() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+
+        // merge mode without a merge_id → validation error
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                &format!("/inbox/{id}/promote"),
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "mode=merge",
+            ),
+        );
+        let (_, target) = r
+            .headers
+            .iter()
+            .find(|(k, _)| k == "HX-Retarget")
+            .expect("promote error must set HX-Retarget");
+        assert_eq!(target, "#inbox-drawer-msg");
     }
 }

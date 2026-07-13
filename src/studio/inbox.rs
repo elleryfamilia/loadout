@@ -214,10 +214,11 @@ struct CandidateCard {
     last_seen: String,
 }
 
-// --- GET /inbox/<id>/promote (modal) -----------------------------------------
+// --- GET /inbox/<id>/promote (drawer) ----------------------------------------
 
-/// Render the promote modal for one candidate: editable claim, new-fragment vs
-/// merge-into-existing, and a profile multi-select.
+/// Render the promote form for one candidate, replacing the queue in the
+/// drawer: editable claim, new-fragment vs merge-into-existing, and a profile
+/// multi-select.
 pub fn promote_form(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let Some(paths) = paths(state) else {
         return Resp::html(views::error_fragment("learning state is unavailable"));
@@ -244,7 +245,7 @@ pub fn promote_form(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         ),
         Err(_) => (Vec::new(), Vec::new()),
     };
-    Resp::html(promote_modal(
+    Resp::html(promote_drawer_fragment(
         &cand.id,
         &cand.claim,
         quarantined,
@@ -260,9 +261,9 @@ pub fn promote_form(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
 /// ORIGINAL candidate id. Nothing is written until the user Applies — the
 /// disposition then lands iff the config write lands.
 pub fn promote(state: &Arc<Mutex<StudioState>>, id: &str, req: &Req) -> Resp {
-    // Errors from this modal render inside it (its `#inbox-modal-msg` slot),
-    // not by replacing the drawer behind the still-open modal.
-    let err = |msg: String| Resp::html_retarget(views::error_fragment(&msg), "#inbox-modal-msg");
+    // Errors from this form render inside the drawer's own message slot (its
+    // `#inbox-drawer-msg` slot), not by replacing the drawer's whole body.
+    let err = |msg: String| Resp::html_retarget(views::error_fragment(&msg), "#inbox-drawer-msg");
 
     let Some(paths) = paths(state) else {
         return err("learning state is unavailable".to_string());
@@ -409,10 +410,10 @@ pub fn promote(state: &Arc<Mutex<StudioState>>, id: &str, req: &Req) -> Resp {
         return err(e.to_string());
     }
 
-    // Success: re-render the drawer (the candidate still shows as Pending — the
-    // disposition is queued, not yet flushed), refresh the badge, and refresh
-    // the staged indicator so Review/Apply appear. (Full promote rework, incl.
-    // closing the modal from this response, is Task 4.)
+    // Success: re-render the drawer's queue (the candidate still shows as
+    // Pending — the disposition is queued, not yet flushed), refresh the
+    // badge, and refresh the staged indicator so Review/Apply appear. The form
+    // is gone because `render_drawer` re-renders the queue body wholesale.
     let mut resp = render_drawer(
         state,
         Some((
@@ -624,7 +625,7 @@ fn candidate_card(c: &CandidateCard) -> Markup {
             }
             div class="candidate-actions" {
                 button class="btn btn-primary btn-sm"
-                    hx-get=(format!("/inbox/{}/promote", enc(&c.id))) hx-target="#modal" {
+                    hx-get=(format!("/inbox/{}/promote", enc(&c.id))) hx-target="#drawer" {
                     (views::icon("check")) "Promote"
                 }
                 button class="btn btn-ghost btn-sm"
@@ -637,82 +638,77 @@ fn candidate_card(c: &CandidateCard) -> Markup {
     }
 }
 
-/// The promote modal. `claim` is the candidate's current text (escaped into the
-/// textarea); `quarantined` adds the edit-required banner. `fragments` feed the
-/// merge picker and `profiles` the multi-select.
-fn promote_modal(
+/// The promote form, rendered as the drawer's content (replacing the queue).
+/// `claim` is the candidate's current text (escaped into the textarea);
+/// `quarantined` adds the edit-required banner. `fragments` feed the merge
+/// picker and `profiles` the multi-select. Same form fields as ever —
+/// `promote()`'s parsing is unchanged.
+fn promote_drawer_fragment(
     id: &str,
     claim: &str,
     quarantined: bool,
     fragments: &[String],
     profiles: &[String],
 ) -> String {
-    html! {
-        div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
-        div class="modal modal-lg" {
-            form class="fragment-form" hx-post=(format!("/inbox/{}/promote", enc(id))) hx-target="#main" {
-                div class="modal-head" {
-                    h2 { "Promote suggestion" }
-                    button class="icon-btn" type="button" title="Close" hx-get="/close" hx-target="#modal" { (views::icon("x")) }
-                }
-                div class="modal-body" {
-                    // Save errors land here (via HX-Retarget), inside the modal.
-                    div id="inbox-modal-msg" class="wf-editor-msg" {}
-                    @if quarantined {
-                        div class="banner error" {
-                            span class="banner-icon" { (views::icon("shield")) }
-                            div class="banner-body" {
-                                p { "This claim was held by the injection lint. Edit it to remove the flagged text — the edit is re-checked when you promote." }
-                            }
-                        }
+    let body = html! {
+        form class="fragment-form" hx-post=(format!("/inbox/{}/promote", enc(id))) hx-target="#drawer" {
+            // Save errors land here (via HX-Retarget), inside the drawer.
+            div id="inbox-drawer-msg" class="wf-editor-msg" {}
+            @if quarantined {
+                div class="banner error" {
+                    span class="banner-icon" { (views::icon("shield")) }
+                    div class="banner-body" {
+                        p { "This claim was held by the injection lint. Edit it to remove the flagged text — the edit is re-checked when you promote." }
                     }
-                    label class="field" {
-                        span class="field-label" { "claim" span class="field-hint" { "becomes the fragment's guidance" } }
-                        // Untrusted claim text as the textarea's initial value.
-                        textarea name="claim" class="wf-step-textarea" rows="3" required { (claim) }
-                    }
-                    fieldset class="field inbox-mode" {
-                        label class="radio" {
-                            input type="radio" name="mode" value="new" checked;
-                            " New fragment"
-                        }
-                        label class="field" {
-                            span class="field-label" { "name" span class="field-hint" { "becomes the fragment id — optional" } }
-                            input type="text" name="name" placeholder="e.g. prefer-pnpm";
-                        }
-                        @if !fragments.is_empty() {
-                            label class="radio" {
-                                input type="radio" name="mode" value="merge";
-                                " Merge into an existing fragment"
-                            }
-                            label class="field" {
-                                span class="field-label" { "fragment" }
-                                select name="merge_id" {
-                                    @for f in fragments { option value=(f) { (f) } }
-                                }
-                            }
-                        }
-                    }
-                    @if !profiles.is_empty() {
-                        fieldset class="field inbox-profiles" {
-                            span class="field-label" { "add to loadouts" span class="field-hint" { "optional" } }
-                            @for p in profiles {
-                                label class="check" {
-                                    input type="checkbox" name="profiles" value=(p);
-                                    " " (p)
-                                }
-                            }
-                        }
-                    }
-                }
-                div class="modal-foot" {
-                    button type="button" class="btn btn-ghost" hx-get="/close" hx-target="#modal" { "Cancel" }
-                    button type="submit" class="btn btn-primary" { (views::icon("check")) "Promote" }
                 }
             }
+            label class="field" {
+                span class="field-label" { "claim" span class="field-hint" { "becomes the fragment's guidance" } }
+                // Untrusted claim text as the textarea's initial value.
+                textarea name="claim" class="wf-step-textarea" rows="3" required { (claim) }
+            }
+            fieldset class="field inbox-mode" {
+                label class="radio" {
+                    input type="radio" name="mode" value="new" checked;
+                    " New fragment"
+                }
+                label class="field" {
+                    span class="field-label" { "name" span class="field-hint" { "becomes the fragment id — optional" } }
+                    input type="text" name="name" placeholder="e.g. prefer-pnpm";
+                }
+                @if !fragments.is_empty() {
+                    label class="radio" {
+                        input type="radio" name="mode" value="merge";
+                        " Merge into an existing fragment"
+                    }
+                    label class="field" {
+                        span class="field-label" { "fragment" }
+                        select name="merge_id" {
+                            @for f in fragments { option value=(f) { (f) } }
+                        }
+                    }
+                }
+            }
+            @if !profiles.is_empty() {
+                fieldset class="field inbox-profiles" {
+                    span class="field-label" { "add to loadouts" span class="field-hint" { "optional" } }
+                    @for p in profiles {
+                        label class="check" {
+                            input type="checkbox" name="profiles" value=(p);
+                            " " (p)
+                        }
+                    }
+                }
+            }
+            div class="drawer-actions" {
+                button type="button" class="btn btn-ghost" hx-get="/drawer/inbox" hx-target="#drawer" {
+                    (views::icon("arrow-left")) "Back"
+                }
+                button type="submit" class="btn btn-primary" { (views::icon("check")) "Promote" }
+            }
         }
-    }
-    .into_string()
+    };
+    views::drawer("Promote suggestion", body, None)
 }
 
 /// The run-log history panel. Fields come from [`worker::LogRecord`] (the
