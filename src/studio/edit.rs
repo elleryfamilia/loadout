@@ -85,6 +85,19 @@ pub enum StagedOp {
     },
     /// Remove the workflow with this id from a layer.
     DeleteWorkflow { layer: Layer, id: String },
+    /// Set `[defaults] agent` — the default launch agent.
+    SetDefaultAgent { layer: Layer, agent: String },
+    /// Set `[learn] enabled` — the synced ambient-learning intent flag. The
+    /// machine-local side effects (activation ack, hook registration) are NOT
+    /// part of the op: they belong to the settings handlers / post-apply hook
+    /// (see `handle_apply`), keeping the op a pure config mutation.
+    SetLearnEnabled { layer: Layer, enabled: bool },
+    /// Replace the `[env]` exposure policy (allowlist + name-deny patterns).
+    SetEnvPolicy {
+        layer: Layer,
+        allowlist: Vec<String>,
+        deny_name_patterns: Vec<String>,
+    },
 }
 
 impl StagedOp {
@@ -101,7 +114,10 @@ impl StagedOp {
             | StagedOp::DeleteTarget { layer, .. }
             | StagedOp::CreateWorkflow { layer, .. }
             | StagedOp::EditWorkflow { layer, .. }
-            | StagedOp::DeleteWorkflow { layer, .. } => *layer,
+            | StagedOp::DeleteWorkflow { layer, .. }
+            | StagedOp::SetDefaultAgent { layer, .. }
+            | StagedOp::SetLearnEnabled { layer, .. }
+            | StagedOp::SetEnvPolicy { layer, .. } => *layer,
             StagedOp::DuplicatePaletteItem { to_layer, .. } => *to_layer,
         }
     }
@@ -554,6 +570,21 @@ fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
         StagedOp::DeleteWorkflow { id, .. } => {
             remove(aot_mut(doc, "workflows"), "id", id);
         }
+        StagedOp::SetDefaultAgent { agent, .. } => {
+            table_mut(doc, "defaults")["agent"] = toml_edit::value(agent.as_str());
+        }
+        StagedOp::SetLearnEnabled { enabled, .. } => {
+            table_mut(doc, "learn")["enabled"] = toml_edit::value(*enabled);
+        }
+        StagedOp::SetEnvPolicy {
+            allowlist,
+            deny_name_patterns,
+            ..
+        } => {
+            let t = table_mut(doc, "env");
+            t["allowlist"] = str_array(allowlist);
+            t["deny_name_patterns"] = str_array(deny_name_patterns);
+        }
     }
     Ok(())
 }
@@ -567,6 +598,15 @@ fn aot_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut ArrayOfTables {
     doc[key]
         .as_array_of_tables_mut()
         .expect("just inserted an array-of-tables")
+}
+
+/// Get (or create) a plain table at `key` (the `[defaults]`/`[learn]`/`[env]`
+/// settings tables — sibling of `aot_mut` for arrays-of-tables).
+fn table_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
+    if doc.get(key).and_then(Item::as_table).is_none() {
+        doc.insert(key, Item::Table(Table::new()));
+    }
+    doc[key].as_table_mut().expect("just inserted a table")
 }
 
 /// Replace the entry whose `field` equals `val`, or push when absent.
@@ -1218,6 +1258,51 @@ mod tests {
         assert!(
             !inbox.join("journal-machine-a.jsonl").exists(),
             "a discarded disposition must never be written"
+        );
+    }
+
+    #[test]
+    fn scalar_ops_write_defaults_learn_and_env_tables() {
+        let d = tempfile::tempdir().unwrap();
+        let gdir = d.path().join("global");
+        std::fs::create_dir_all(&gdir).unwrap();
+        std::fs::write(
+            gdir.join("config.toml"),
+            "# my config\n[learn]\nenabled = false\n",
+        )
+        .unwrap();
+        let mut s = Session::open(d.path(), Some(&gdir)).unwrap();
+        s.stage(StagedOp::SetDefaultAgent {
+            layer: Layer::Global,
+            agent: "codex".into(),
+        })
+        .unwrap();
+        s.stage(StagedOp::SetLearnEnabled {
+            layer: Layer::Global,
+            enabled: true,
+        })
+        .unwrap();
+        s.stage(StagedOp::SetEnvPolicy {
+            layer: Layer::Global,
+            allowlist: vec!["CI".into(), "HOME".into()],
+            deny_name_patterns: vec!["(?i)token".into()],
+        })
+        .unwrap();
+        s.apply().unwrap();
+        let text = std::fs::read_to_string(gdir.join("config.toml")).unwrap();
+        assert!(text.contains("# my config"), "comment preserved");
+        assert!(text.contains("agent = \"codex\""));
+        assert!(text.contains("enabled = true"));
+        assert!(text.contains("allowlist = [\"CI\", \"HOME\"]"));
+        assert!(text.contains("deny_name_patterns"));
+        // The written config must round-trip through the real loader.
+        let cfg =
+            crate::config::Config::load_from(Some(&gdir.join("config.toml")), d.path()).unwrap();
+        assert_eq!(cfg.default_agent, "codex");
+        assert!(cfg.learn.enabled);
+        assert_eq!(
+            cfg.env.allowlist,
+            vec!["CI".to_string(), "HOME".to_string()]
         );
     }
 }
