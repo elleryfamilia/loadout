@@ -1,12 +1,14 @@
 //! The studio **Settings** page — the minimalist home for config the studio
-//! can edit: ambient-learning consent (+ this machine's activation status),
-//! the default launch agent, and the `[env]` exposure policy. Every config
-//! write stages through the [`crate::studio::edit::Session`] pipeline (stage
-//! → diff → apply); only machine-local learning state (the activation ack) is
-//! written directly, because it is not config and is inert without the
-//! synced flag.
+//! can edit: ambient-learning consent (+ this machine's activation status)
+//! and the default launch agent. Every write stages through the
+//! [`crate::studio::edit::Session`] pipeline, and — unlike content edits
+//! (fragments/loadouts), which always wait for an explicit Apply — applies
+//! immediately when nothing else is staged: a settings toggle should just
+//! take effect, not sit "staged" (see [`apply_or_stage`]). Only machine-local
+//! learning state (the activation ack) is written directly, because it is not
+//! config and is inert without the synced flag.
 //!
-//! Not here (TOML-only, by design): `[sync]`, `[codex]`, `[learn]`'s
+//! Not here (TOML-only, by design): `[env]`, `[sync]`, `[codex]`, `[learn]`'s
 //! interval/scope/cli/model knobs, and the trust store (a future tenant).
 
 use std::sync::{Arc, Mutex};
@@ -39,7 +41,19 @@ pub(crate) fn render_page(state: &Arc<Mutex<StudioState>>, notice: Option<(bool,
     let activation = learn_dir
         .as_deref()
         .and_then(learn_state::read_activation_at);
-    let agents: Vec<String> = cfg.agents.iter().map(|a| a.id.clone()).collect();
+    // Only agents `load run` can actually launch (a `launch` program). The
+    // current default is kept even if it fell out of that set (e.g. a hand-
+    // edited config naming "generic") so the select never lies about the
+    // live value — it just won't be reachable by picking it again.
+    let mut agents: Vec<String> = cfg
+        .agents
+        .iter()
+        .filter(|a| a.launch.is_some())
+        .map(|a| a.id.clone())
+        .collect();
+    if !agents.contains(&cfg.default_agent) {
+        agents.push(cfg.default_agent.clone());
+    }
 
     // Harvest history + dismissed suggestions, folded/read outside the mutex
     // (snapshot-then-render): the run log is newest-first for display, and the
@@ -69,8 +83,6 @@ pub(crate) fn render_page(state: &Arc<Mutex<StudioState>>, notice: Option<(bool,
             agents,
             log_records,
             suppressed,
-            env_allowlist: cfg.env.allowlist.clone(),
-            env_deny: cfg.env.deny_name_patterns.clone(),
         },
         notice,
     );
@@ -88,8 +100,6 @@ struct SettingsView {
     log_records: Vec<LogRecord>,
     /// `(candidate_id, claim)` for every currently-`Suppressed` candidate.
     suppressed: Vec<(String, String)>,
-    env_allowlist: Vec<String>,
-    env_deny: Vec<String>,
 }
 
 fn page_fragment(v: &SettingsView, notice: Option<(bool, String)>) -> String {
@@ -104,7 +114,6 @@ fn page_fragment(v: &SettingsView, notice: Option<(bool, String)>) -> String {
             }
             (learning_section(v.learn_enabled, v.activated_here, &v.log_records, &v.suppressed))
             (agent_section(&v.default_agent, &v.agents))
-            (env_section(&v.env_allowlist, &v.env_deny))
         }
     }
     .into_string()
@@ -113,9 +122,10 @@ fn page_fragment(v: &SettingsView, notice: Option<(bool, String)>) -> String {
 /// The Learning section: honest consent copy (mirrors `load learn on`'s
 /// consent block), current state (synced flag + this machine), the toggle,
 /// this machine's harvest history, and any dismissed suggestions with an
-/// un-dismiss control. The toggle STAGES `[learn] enabled` — Apply writes it;
-/// the activation ack is machine-local and written at confirm time (inert
-/// until the flag lands).
+/// un-dismiss control. The toggle sets `[learn] enabled` via
+/// [`apply_or_stage`] — applied immediately on a clean session, or staged
+/// alongside other pending edits; the activation ack is machine-local and
+/// written directly at confirm time (inert until the flag lands).
 fn learning_section(
     enabled: bool,
     activated_here: bool,
@@ -132,19 +142,25 @@ fn learning_section(
                 " — a normal process, never a daemon — after sessions end, at most once per 6h per machine."
             }
             p class="settings-status" {
-                @if enabled { "Learning is " strong { "on" } } @else { "Learning is " strong { "off" } }
+                @if enabled && activated_here {
+                    "Learning is " span class="learn-on-pill" { "on" }
+                } @else if enabled {
+                    "Learning is " strong { "on" }
+                } @else {
+                    "Learning is " strong { "off" }
+                }
                 " in your synced config · this machine is "
                 @if activated_here { strong { "activated" } } @else { strong { "not activated" } }
                 "."
             }
             @if enabled && activated_here {
                 button class="btn btn-ghost btn-sm" hx-post="/settings/learn/disable" hx-target="#main"
-                    hx-confirm="Turn ambient learning off on this machine (and, once applied, everywhere your config syncs)?" {
+                    hx-confirm="Turn ambient learning off on this machine (and, once synced, everywhere your config syncs)?" {
                     (views::icon("power")) "Turn learning off"
                 }
             } @else {
                 button class="btn btn-primary btn-sm" hx-post="/settings/learn/enable" hx-target="#main"
-                    hx-confirm="Enable ambient learning on this machine? The staged config change still needs Apply." {
+                    hx-confirm="Enable ambient learning on this machine?" {
                     (views::icon("power")) "Turn learning on"
                 }
             }
@@ -215,7 +231,7 @@ fn agent_section(current: &str, agents: &[String]) -> Markup {
     }
 }
 
-/// `POST /settings/agent` — stage `[defaults] agent`.
+/// `POST /settings/agent` — set `[defaults] agent`.
 pub fn set_agent(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let pairs = state::parse_pairs(&req.body);
     let Some(agent) = pairs
@@ -226,69 +242,18 @@ pub fn set_agent(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     else {
         return render_page(state, Some((true, "pick an agent".to_string())));
     };
-    let staged = state
-        .lock()
-        .unwrap()
-        .session
-        .stage(StagedOp::SetDefaultAgent {
+    apply_or_stage(
+        state,
+        StagedOp::SetDefaultAgent {
             layer: crate::fragment::Layer::Global,
             agent,
-        });
-    respond_after_stage(state, staged, "staged the default agent — Apply to save")
-}
-
-/// The env policy. Allowlist-only exposure with a name denylist that wins —
-/// shown as two line-separated lists because that's exactly what the config
-/// stores (no cleverness between the UI and the TOML).
-fn env_section(allowlist: &[String], deny: &[String]) -> Markup {
-    html! {
-        section class="settings-section" id="settings-env" {
-            h3 { "Environment variables" }
-            p class="muted" {
-                "Variables your rendered context is allowed to mention. Only names on the "
-                "allowlist are ever surfaced; the deny patterns win even over the allowlist."
-            }
-            form hx-post="/settings/env" hx-target="#main" {
-                label class="field" {
-                    span class="field-label" { "allowlist" span class="field-hint" { "exact names, one per line" } }
-                    textarea name="allowlist" rows="4" { (allowlist.join("\n")) }
-                }
-                label class="field" {
-                    span class="field-label" { "deny patterns" span class="field-hint" { "advanced — regexes over names, one per line; matches are always dropped" } }
-                    textarea name="deny" rows="3" { (deny.join("\n")) }
-                }
-                button type="submit" class="btn btn-primary btn-sm" { "Save" }
-            }
-        }
-    }
-}
-
-/// `POST /settings/env` — stage the `[env]` policy from the two textareas.
-pub fn set_env(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
-    let pairs = state::parse_pairs(&req.body);
-    let lines = |key: &str| -> Vec<String> {
-        pairs
-            .iter()
-            .find(|(k, _)| k == key)
-            .map(|(_, v)| {
-                v.lines()
-                    .map(str::trim)
-                    .filter(|l| !l.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let staged = state.lock().unwrap().session.stage(StagedOp::SetEnvPolicy {
-        layer: crate::fragment::Layer::Global,
-        allowlist: lines("allowlist"),
-        deny_name_patterns: lines("deny"),
-    });
-    respond_after_stage(state, staged, "staged the env policy — Apply to save")
+        },
+        "saved",
+    )
 }
 
 /// `POST /settings/learn/enable` — write this machine's activation ack (inert
-/// until the flag applies) and stage `[learn] enabled = true`.
+/// until the flag applies) and set `[learn] enabled = true`.
 pub fn learn_enable(state: &Arc<Mutex<StudioState>>) -> Resp {
     let Some(learn_dir) = state
         .lock()
@@ -322,24 +287,19 @@ pub fn learn_enable(state: &Arc<Mutex<StudioState>>) -> Resp {
             Some((true, format!("could not activate this machine: {e}"))),
         );
     }
-    let staged = state
-        .lock()
-        .unwrap()
-        .session
-        .stage(StagedOp::SetLearnEnabled {
+    apply_or_stage(
+        state,
+        StagedOp::SetLearnEnabled {
             layer: crate::fragment::Layer::Global,
             enabled: true,
-        });
-    respond_after_stage(
-        state,
-        staged,
-        "learning staged ON — Apply to save; hooks register on Apply",
+        },
+        "learning is on",
     )
 }
 
 /// `POST /settings/learn/disable` — remove the ack immediately (stopping is
 /// the safe direction: this machine goes dormant even if Apply never comes)
-/// and stage `[learn] enabled = false`.
+/// and set `[learn] enabled = false`.
 pub fn learn_disable(state: &Arc<Mutex<StudioState>>) -> Resp {
     let learn_dir_opt = state
         .lock()
@@ -350,33 +310,86 @@ pub fn learn_disable(state: &Arc<Mutex<StudioState>>) -> Resp {
     if let Some(learn_dir) = learn_dir_opt {
         let _ = learn_state::remove_activation_at(&learn_dir);
     }
-    let staged = state
-        .lock()
-        .unwrap()
-        .session
-        .stage(StagedOp::SetLearnEnabled {
+    apply_or_stage(
+        state,
+        StagedOp::SetLearnEnabled {
             layer: crate::fragment::Layer::Global,
             enabled: false,
-        });
-    respond_after_stage(
-        state,
-        staged,
-        "learning staged OFF — Apply to save; hooks deregister on Apply",
+        },
+        "learning is off",
     )
 }
 
-/// Shared tail: re-render the page with a banner + the staged-indicator loader.
-fn respond_after_stage(
-    state: &Arc<Mutex<StudioState>>,
-    staged: crate::Result<()>,
-    ok_msg: &str,
-) -> Resp {
-    let notice = match staged {
-        Ok(()) => (false, ok_msg.to_string()),
+/// Shared tail for every settings write: stage `op`, then either apply it
+/// immediately or leave it queued, depending on whether anything else was
+/// already staged when this request arrived.
+///
+/// Staging is the right model for *content* (fragments/loadouts) — you build
+/// up a batch, review it on the diff page, then Apply. A settings toggle is
+/// not content: Ellery's expectation is that flipping it just takes effect,
+/// the same way editing `[sync]`/`[codex]` by hand does. So when the session
+/// was clean, this stages `op` and immediately calls `session.apply()` — the
+/// same write `handle_apply`'s Apply button performs, including its
+/// learn-hook bootstrap and auto-push side effects. When something else was
+/// already staged, `op` joins it and waits for that Apply instead, so a
+/// half-reviewed batch of content edits is never silently written early.
+///
+/// `applied_msg` is the banner shown when `op` applies immediately (e.g.
+/// "saved", or the learn-specific "learning is on"/"learning is off" so D's
+/// green-pill state and the banner text agree).
+fn apply_or_stage(state: &Arc<Mutex<StudioState>>, op: StagedOp, applied_msg: &str) -> Resp {
+    let is_learn_toggle = matches!(op, StagedOp::SetLearnEnabled { .. });
+    let was_clean = state.lock().unwrap().session.ops().is_empty();
+
+    // Each lock is taken in its own `let` statement rather than directly in a
+    // `match` scrutinee: a `match`'s scrutinee temporaries (here, the
+    // `MutexGuard`) live for the *whole* match expression, not just the
+    // scrutinee evaluation — matching on `state.lock().unwrap().session.stage(..)`
+    // directly would hold the guard across the arms below, and the nested
+    // `.lock()` for apply() would then deadlock against itself.
+    let stage_result = state.lock().unwrap().session.stage(op);
+    let notice = match stage_result {
         Err(e) => (true, e.to_string()),
+        Ok(()) if !was_clean => (
+            false,
+            "staged alongside your pending edits — Apply to save".to_string(),
+        ),
+        Ok(()) => {
+            let apply_result = state.lock().unwrap().session.apply();
+            match apply_result {
+                Ok(_written) => {
+                    // Same post-apply side effects `handle_apply` runs, so a
+                    // settings save behaves identically whichever button
+                    // triggered the write.
+                    if is_learn_toggle {
+                        crate::studio::server::learn_bootstrap_after_apply(state);
+                    }
+                    let mut msg = applied_msg.to_string();
+                    if let Some(note) = crate::studio::server::auto_push_after_apply(state) {
+                        msg.push_str(" · ");
+                        msg.push_str(&note);
+                    }
+                    (false, msg)
+                }
+                // The op stays staged — `apply()` only clears ops on success —
+                // so this is surfaced rather than discarded; the top-bar
+                // Apply can retry once the conflict is resolved.
+                Err(e) => (
+                    true,
+                    format!("config changed on disk — review and apply from the top bar: {e}"),
+                ),
+            }
+        }
     };
+
     let mut resp = render_page(state, Some(notice));
     resp.body
         .extend_from_slice(views::staged_indicator_loader().as_bytes());
+    // A landed (or reverted) learn toggle can change a queued promote's
+    // disposition, so refresh the badge unconditionally — cheap, idempotent.
+    if is_learn_toggle {
+        resp.body
+            .extend_from_slice(views::inbox_badge_loader().as_bytes());
+    }
     resp
 }

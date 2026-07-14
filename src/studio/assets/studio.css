@@ -209,6 +209,8 @@ body {
 .settings { display: flex; flex-direction: column; gap: 20px; max-width: 720px; }
 .settings-section { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel); }
 .settings-section h3 { margin: 0; }
+.settings-section form { display: flex; align-items: center; gap: 10px; }
+.settings-status .learn-on-pill { display: inline-flex; align-items: center; font-weight: 600; font-size: 11px; padding: 2px 9px; border-radius: 999px; color: var(--ok); background: rgba(127, 214, 160, 0.14); }
 
 .dash-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .dash-head h1 { margin: 0; font-size: 20px; font-weight: 600; }

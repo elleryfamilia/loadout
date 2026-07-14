@@ -48,6 +48,13 @@ pub struct StudioState {
     /// config/state dir). Injected so route() tests point it at a fixture
     /// tempdir, the same seam as `recents_path`.
     pub inbox: Option<crate::studio::inbox::InboxPaths>,
+    /// Whether a landed `[learn] enabled` change should run the real hook
+    /// bootstrap (see `server::learn_bootstrap_after_apply`). True in
+    /// production; false in the studio route-test fixture — the bootstrap
+    /// resolves hook files under the real `$HOME` (`config::home_dir()`), and
+    /// there is no test seam to redirect that, so tests must skip the call
+    /// entirely rather than risk writing into a developer's real dotfiles.
+    pub bootstrap_learn_hooks: bool,
 }
 
 impl StudioState {

@@ -92,12 +92,6 @@ pub enum StagedOp {
     /// part of the op: they belong to the settings handlers / post-apply hook
     /// (see `handle_apply`), keeping the op a pure config mutation.
     SetLearnEnabled { layer: Layer, enabled: bool },
-    /// Replace the `[env]` exposure policy (allowlist + name-deny patterns).
-    SetEnvPolicy {
-        layer: Layer,
-        allowlist: Vec<String>,
-        deny_name_patterns: Vec<String>,
-    },
 }
 
 impl StagedOp {
@@ -116,8 +110,7 @@ impl StagedOp {
             | StagedOp::EditWorkflow { layer, .. }
             | StagedOp::DeleteWorkflow { layer, .. }
             | StagedOp::SetDefaultAgent { layer, .. }
-            | StagedOp::SetLearnEnabled { layer, .. }
-            | StagedOp::SetEnvPolicy { layer, .. } => *layer,
+            | StagedOp::SetLearnEnabled { layer, .. } => *layer,
             StagedOp::DuplicatePaletteItem { to_layer, .. } => *to_layer,
         }
     }
@@ -159,15 +152,6 @@ impl StagedOp {
                     "turn ambient learning off \u{2014} sets [learn] enabled = false".to_string()
                 }
             }
-            StagedOp::SetEnvPolicy {
-                allowlist,
-                deny_name_patterns,
-                ..
-            } => format!(
-                "update the env exposure policy ({} allowed name(s), {} deny pattern(s))",
-                allowlist.len(),
-                deny_name_patterns.len()
-            ),
         }
     }
 }
@@ -624,15 +608,6 @@ fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
         }
         StagedOp::SetLearnEnabled { enabled, .. } => {
             table_mut(doc, "learn")["enabled"] = toml_edit::value(*enabled);
-        }
-        StagedOp::SetEnvPolicy {
-            allowlist,
-            deny_name_patterns,
-            ..
-        } => {
-            let t = table_mut(doc, "env");
-            t["allowlist"] = str_array(allowlist);
-            t["deny_name_patterns"] = str_array(deny_name_patterns);
         }
     }
     Ok(())
@@ -1354,20 +1329,7 @@ mod tests {
     }
 
     #[test]
-    fn describe_set_env_policy_counts_allowlist_and_deny_patterns() {
-        let op = StagedOp::SetEnvPolicy {
-            layer: Layer::Global,
-            allowlist: vec!["CI".into(), "HOME".into()],
-            deny_name_patterns: vec!["(?i)token".into()],
-        };
-        assert_eq!(
-            op.describe(),
-            "update the env exposure policy (2 allowed name(s), 1 deny pattern(s))"
-        );
-    }
-
-    #[test]
-    fn scalar_ops_write_defaults_learn_and_env_tables() {
+    fn scalar_ops_write_defaults_and_learn_tables() {
         let d = tempfile::tempdir().unwrap();
         let gdir = d.path().join("global");
         std::fs::create_dir_all(&gdir).unwrap();
@@ -1387,27 +1349,15 @@ mod tests {
             enabled: true,
         })
         .unwrap();
-        s.stage(StagedOp::SetEnvPolicy {
-            layer: Layer::Global,
-            allowlist: vec!["CI".into(), "HOME".into()],
-            deny_name_patterns: vec!["(?i)token".into()],
-        })
-        .unwrap();
         s.apply().unwrap();
         let text = std::fs::read_to_string(gdir.join("config.toml")).unwrap();
         assert!(text.contains("# my config"), "comment preserved");
         assert!(text.contains("agent = \"codex\""));
         assert!(text.contains("enabled = true"));
-        assert!(text.contains("allowlist = [\"CI\", \"HOME\"]"));
-        assert!(text.contains("deny_name_patterns"));
         // The written config must round-trip through the real loader.
         let cfg =
             crate::config::Config::load_from(Some(&gdir.join("config.toml")), d.path()).unwrap();
         assert_eq!(cfg.default_agent, "codex");
         assert!(cfg.learn.enabled);
-        assert_eq!(
-            cfg.env.allowlist,
-            vec!["CI".to_string(), "HOME".to_string()]
-        );
     }
 }

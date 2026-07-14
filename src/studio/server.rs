@@ -172,7 +172,6 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/settings/agent") => settings::set_agent(state, req),
         ("POST", "/settings/learn/enable") => settings::learn_enable(state),
         ("POST", "/settings/learn/disable") => settings::learn_disable(state),
-        ("POST", "/settings/env") => settings::set_env(state, req),
         (_, p) if p.starts_with("/inbox/") => handle_inbox_param(state, req),
         ("GET", p) if p.starts_with("/artifacts/") => {
             handle_artifact(state, p.strip_prefix("/artifacts/").unwrap_or(""))
@@ -1989,14 +1988,7 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
             // same bootstrap `load learn on|off` runs. Best-effort: a hook
             // hiccup must not fail an applied config write.
             if touched_learn {
-                let repo_base = state.lock().unwrap().repo_base.clone();
-                if let Ok(cfg) = config::Config::load(&repo_base) {
-                    let _ = crate::adapters::bootstrap_hook_registrations(
-                        &cfg,
-                        crate::learn::state::learn_active(&cfg),
-                        false,
-                    );
-                }
+                learn_bootstrap_after_apply(state);
             }
             // Guided first-run: a profile actually landed → show the "you're set"
             // finish card (names `load <agent>`), then disarm the flow. If
@@ -2044,10 +2036,43 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
     }
 }
 
+/// Shared post-apply side effect for a landed `[learn] enabled` change: load
+/// the just-written config and (de)register the ambient-learning hooks to
+/// match the new two-part gate (synced flag AND this machine's activation
+/// ack) — the same bootstrap `load learn on|off` runs on the CLI path. Called
+/// from both `handle_apply` (the main Apply button) and
+/// `settings::apply_or_stage` (a clean-session settings toggle applying
+/// immediately), so the two apply paths can't drift. Best-effort: a hook
+/// hiccup must not fail an applied config write, so failures are swallowed.
+///
+/// Gated behind `StudioState::bootstrap_learn_hooks` (false in the studio
+/// route-test fixture, see `state_for`): the real bootstrap resolves hook
+/// files under `config::home_dir()` — i.e. the *real* `$HOME` — and the only
+/// home-explicit test seam (`bootstrap_hook_registrations_at`) is private to
+/// `adapters::mod`, so route tests have no way to redirect it. They must skip
+/// the call entirely rather than risk writing into a developer's real
+/// dotfiles.
+pub(crate) fn learn_bootstrap_after_apply(state: &Arc<Mutex<StudioState>>) {
+    let (repo_base, enabled) = {
+        let s = state.lock().unwrap();
+        (s.repo_base.clone(), s.bootstrap_learn_hooks)
+    };
+    if !enabled {
+        return;
+    }
+    if let Ok(cfg) = config::Config::load(&repo_base) {
+        let _ = crate::adapters::bootstrap_hook_registrations(
+            &cfg,
+            crate::learn::state::learn_active(&cfg),
+            false,
+        );
+    }
+}
+
 /// Commit + push the global config after a studio apply, if `[sync] auto_push`
 /// is on and the config dir is a synced repo. Returns a short status to append
 /// to the flash (or `None` when sync isn't configured / nothing to push).
-fn auto_push_after_apply(state: &Arc<Mutex<StudioState>>) -> Option<String> {
+pub(crate) fn auto_push_after_apply(state: &Arc<Mutex<StudioState>>) -> Option<String> {
     let repo_base = state.lock().unwrap().repo_base.clone();
     let cfg = crate::config::Config::load(&repo_base).ok()?;
     if !cfg.sync.auto_push {
@@ -2184,6 +2209,7 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
             }),
             _ => None,
         },
+        bootstrap_learn_hooks: true,
     }));
 
     // `0`/`0s` disables the idle shutdown; anything else is the inactivity window.
@@ -2617,6 +2643,11 @@ mod tests {
                 inbox_dir: repo.join("inbox"),
                 learn_dir: repo.join("learn"),
             }),
+            // Never let a route test's settings auto-apply run the real hook
+            // bootstrap — it resolves hook files under the real $HOME, and
+            // there's no test seam to redirect that (see
+            // `learn_bootstrap_after_apply`).
+            bootstrap_learn_hooks: false,
         }))
     }
 
@@ -3765,7 +3796,21 @@ mod tests {
         let d = rust_repo();
         let st = state_for(d.path(), None);
 
-        // Stage a learn toggle — this is the case Ellery hit live: an
+        // Stage a fragment edit first via the create-fragment fixture flow
+        // used elsewhere in this file — this is what keeps the session dirty,
+        // so the learn toggle below stages alongside it instead of
+        // auto-applying and vanishing from the diff.
+        route(
+            &st,
+            &req(
+                "POST",
+                "/fragments",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "name=rc&kind=markdown&guidance=Use+clippy&scope=repo&visibility=public",
+            ),
+        );
+        // ...then a learn toggle — this is the case Ellery hit live: an
         // anonymous config.toml hunk with no clue what was staged.
         route(
             &st,
@@ -3775,18 +3820,6 @@ mod tests {
                 "",
                 &[HOST, COOKIE, ORIGIN],
                 "",
-            ),
-        );
-        // ...and a fragment edit via the same create-fragment fixture flow
-        // used elsewhere in this file.
-        route(
-            &st,
-            &req(
-                "POST",
-                "/fragments",
-                "",
-                &[HOST, COOKIE, ORIGIN],
-                "name=rc&kind=markdown&guidance=Use+clippy&scope=repo&visibility=public",
             ),
         );
 
@@ -5574,10 +5607,21 @@ mod tests {
             "opening settings closes any open drawer"
         );
         assert_eq!(st.lock().unwrap().active_tab, "settings");
+        // The picker only lists launchable agents — "generic" has no `launch`
+        // program (it's AGENTS.md-style, wired by hand), so `load run` could
+        // never actually use it as a default.
+        assert!(
+            body.contains("value=\"claude\""),
+            "a launchable agent is offered: {body}"
+        );
+        assert!(
+            !body.contains("value=\"generic\""),
+            "generic has no launch program and must not appear: {body}"
+        );
     }
 
     #[test]
-    fn set_agent_stages_a_default_agent_edit() {
+    fn set_agent_auto_applies_on_clean_session() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         let r = route(
@@ -5591,23 +5635,25 @@ mod tests {
             ),
         );
         assert_eq!(r.status, 200);
-        assert_eq!(st.lock().unwrap().session.ops().len(), 1, "one staged op");
+        assert_eq!(
+            st.lock().unwrap().session.ops().len(),
+            0,
+            "a clean session applies immediately instead of staying staged"
+        );
         let body = String::from_utf8(r.body).unwrap();
         assert!(
             body.contains("hx-get=\"/staged\""),
             "staged indicator refresh loader"
         );
-        let texts = st.lock().unwrap().session.staged_layer_texts();
-        let global = texts.iter().find(|(l, _, _)| *l == Layer::Global).unwrap();
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
         assert!(
-            global.2.contains("agent = \"codex\""),
-            "the staged op writes the submitted agent, not just any op: {}",
-            global.2
+            on_disk.contains("agent = \"codex\""),
+            "the submitted agent landed on disk, not just any op: {on_disk}"
         );
     }
 
     #[test]
-    fn learn_enable_stages_flag_and_writes_activation_ack() {
+    fn learn_enable_auto_applies_on_clean_session_and_writes_activation_ack() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         let r = route(
@@ -5621,22 +5667,29 @@ mod tests {
             ),
         );
         assert_eq!(r.status, 200);
-        assert_eq!(st.lock().unwrap().session.ops().len(), 1);
+        assert_eq!(
+            st.lock().unwrap().session.ops().len(),
+            0,
+            "a clean session applies immediately instead of staying staged"
+        );
         assert!(
             crate::learn::state::read_activation_at(&d.path().join("learn")).is_some(),
-            "activation ack written at confirm time (inert until Apply lands the flag)"
+            "activation ack written at confirm time"
         );
-        let texts = st.lock().unwrap().session.staged_layer_texts();
-        let global = texts.iter().find(|(l, _, _)| *l == Layer::Global).unwrap();
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
         assert!(
-            global.2.contains("enabled = true"),
-            "the staged op turns learning ON, not off: {}",
-            global.2
+            on_disk.contains("enabled = true"),
+            "the toggle turned learning ON, not off, on disk: {on_disk}"
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("learn-on-pill"),
+            "the settings page shows the green on-state right after auto-apply: {body}"
         );
     }
 
     #[test]
-    fn learn_disable_stages_flag_and_removes_activation_ack() {
+    fn learn_disable_auto_applies_on_clean_session_and_removes_activation_ack() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         // start from an activated machine
@@ -5661,7 +5714,63 @@ mod tests {
             ),
         );
         assert_eq!(r.status, 200);
+        assert_eq!(
+            st.lock().unwrap().session.ops().len(),
+            0,
+            "a clean session applies immediately instead of staying staged"
+        );
         assert!(crate::learn::state::read_activation_at(&d.path().join("learn")).is_none());
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
+        assert!(
+            on_disk.contains("enabled = false"),
+            "the toggle turned learning OFF on disk: {on_disk}"
+        );
+    }
+
+    #[test]
+    fn settings_stage_not_apply_when_content_edits_pending() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        // Stage a fragment edit first — content edits always wait for Apply,
+        // so the session is now "dirty".
+        route(
+            &st,
+            &req(
+                "POST",
+                "/fragments",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "name=rc&kind=markdown&guidance=Use+clippy&scope=repo&visibility=public",
+            ),
+        );
+        assert_eq!(st.lock().unwrap().session.ops().len(), 1, "fragment staged");
+
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/settings/agent",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "agent=codex",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(
+            st.lock().unwrap().session.ops().len(),
+            2,
+            "the settings op is staged alongside the pending fragment edit, not applied"
+        );
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap_or_default();
+        assert!(
+            !on_disk.contains("agent = \"codex\""),
+            "not applied yet — nothing should have landed on disk: {on_disk}"
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("staged alongside your pending edits"),
+            "banner explains it queued rather than applied: {body}"
+        );
     }
 
     #[test]
@@ -5754,42 +5863,5 @@ mod tests {
             body.contains("hx-get=\"/settings\""),
             "drawer footer links to settings: {body}"
         );
-    }
-
-    #[test]
-    fn env_section_renders_current_policy() {
-        let d = rust_repo();
-        let st = state_for(
-            d.path(),
-            Some("[env]\nallowlist = [\"CI\"]\ndeny_name_patterns = [\"(?i)token\"]\n"),
-        );
-        let r = route(&st, &req("GET", "/settings", "", &[HOST, COOKIE], ""));
-        let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("Environment variables"));
-        assert!(body.contains("CI"));
-        assert!(body.contains("(?i)token"));
-    }
-
-    #[test]
-    fn set_env_stages_policy_from_line_separated_lists() {
-        let d = rust_repo();
-        let st = state_for(d.path(), None);
-        let r = route(
-            &st,
-            &req(
-                "POST",
-                "/settings/env",
-                "",
-                &[HOST, COOKIE, ORIGIN],
-                "allowlist=CI%0AHOME%0A%0A&deny=%28%3Fi%29token",
-            ),
-        );
-        assert_eq!(r.status, 200);
-        assert_eq!(st.lock().unwrap().session.ops().len(), 1);
-        // The staged doc must contain both lists (blank lines dropped).
-        let texts = st.lock().unwrap().session.staged_layer_texts();
-        let global = texts.iter().find(|(l, _, _)| *l == Layer::Global).unwrap();
-        assert!(global.2.contains("allowlist = [\"CI\", \"HOME\"]"));
-        assert!(global.2.contains("(?i)token"));
     }
 }
