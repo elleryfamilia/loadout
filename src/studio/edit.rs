@@ -121,6 +121,55 @@ impl StagedOp {
             StagedOp::DuplicatePaletteItem { to_layer, .. } => *to_layer,
         }
     }
+
+    /// One plain-language sentence describing this op, for the review page's
+    /// "What's staged" summary. Names the item id/name so the reader can tell
+    /// staged ops apart without reading the file diff below.
+    pub fn describe(&self) -> String {
+        match self {
+            StagedOp::CreateFragment { cap, .. } => {
+                format!("new fragment \u{201c}{}\u{201d}", cap.id)
+            }
+            StagedOp::EditFragment { id, .. } => format!("edit fragment \u{201c}{id}\u{201d}"),
+            StagedOp::DeleteFragment { id, .. } => format!("delete fragment \u{201c}{id}\u{201d}"),
+            StagedOp::CreateProfile { profile, .. } => {
+                format!("new loadout \u{201c}{}\u{201d}", profile.name)
+            }
+            StagedOp::EditProfile { name, .. } => format!("edit loadout \u{201c}{name}\u{201d}"),
+            StagedOp::DeleteProfile { name, .. } => {
+                format!("delete loadout \u{201c}{name}\u{201d}")
+            }
+            StagedOp::DuplicatePaletteItem { id, .. } => {
+                format!("adopt palette fragment \u{201c}{id}\u{201d}")
+            }
+            StagedOp::EditTarget { id, .. } => format!("edit target \u{201c}{id}\u{201d}"),
+            StagedOp::DeleteTarget { id, .. } => format!("delete target \u{201c}{id}\u{201d}"),
+            StagedOp::CreateWorkflow { workflow, .. } => {
+                format!("new workflow \u{201c}{}\u{201d}", workflow.id)
+            }
+            StagedOp::EditWorkflow { id, .. } => format!("edit workflow \u{201c}{id}\u{201d}"),
+            StagedOp::DeleteWorkflow { id, .. } => format!("delete workflow \u{201c}{id}\u{201d}"),
+            StagedOp::SetDefaultAgent { agent, .. } => {
+                format!("set the default agent to \u{201c}{agent}\u{201d}")
+            }
+            StagedOp::SetLearnEnabled { enabled, .. } => {
+                if *enabled {
+                    "turn ambient learning on \u{2014} adds [learn] enabled = true".to_string()
+                } else {
+                    "turn ambient learning off \u{2014} sets [learn] enabled = false".to_string()
+                }
+            }
+            StagedOp::SetEnvPolicy {
+                allowlist,
+                deny_name_patterns,
+                ..
+            } => format!(
+                "update the env exposure policy ({} allowed name(s), {} deny pattern(s))",
+                allowlist.len(),
+                deny_name_patterns.len()
+            ),
+        }
+    }
 }
 
 /// One writable config layer file held by a [`Session`].
@@ -1258,6 +1307,62 @@ mod tests {
         assert!(
             !inbox.join("journal-machine-a.jsonl").exists(),
             "a discarded disposition must never be written"
+        );
+    }
+
+    // --- StagedOp::describe (review page's plain-language summary) -----------
+
+    #[test]
+    fn describe_create_fragment_names_the_id() {
+        let op = StagedOp::CreateFragment {
+            layer: Layer::Global,
+            cap: Box::new(cap("rc", "Use clippy")),
+        };
+        assert_eq!(op.describe(), "new fragment \u{201c}rc\u{201d}");
+    }
+
+    #[test]
+    fn describe_set_default_agent_names_the_agent() {
+        let op = StagedOp::SetDefaultAgent {
+            layer: Layer::Global,
+            agent: "codex".into(),
+        };
+        assert_eq!(
+            op.describe(),
+            "set the default agent to \u{201c}codex\u{201d}"
+        );
+    }
+
+    #[test]
+    fn describe_set_learn_enabled_differs_on_and_off() {
+        let on = StagedOp::SetLearnEnabled {
+            layer: Layer::Global,
+            enabled: true,
+        };
+        assert_eq!(
+            on.describe(),
+            "turn ambient learning on \u{2014} adds [learn] enabled = true"
+        );
+        let off = StagedOp::SetLearnEnabled {
+            layer: Layer::Global,
+            enabled: false,
+        };
+        assert_eq!(
+            off.describe(),
+            "turn ambient learning off \u{2014} sets [learn] enabled = false"
+        );
+    }
+
+    #[test]
+    fn describe_set_env_policy_counts_allowlist_and_deny_patterns() {
+        let op = StagedOp::SetEnvPolicy {
+            layer: Layer::Global,
+            allowlist: vec!["CI".into(), "HOME".into()],
+            deny_name_patterns: vec!["(?i)token".into()],
+        };
+        assert_eq!(
+            op.describe(),
+            "update the env exposure policy (2 allowed name(s), 1 deny pattern(s))"
         );
     }
 

@@ -1907,11 +1907,16 @@ fn profile_preview_or_empty(
 }
 
 fn handle_diff(state: &Arc<Mutex<StudioState>>) -> Resp {
-    let (diffs, texts, staged, fs_changed) = {
+    let (diffs, texts, op_descriptions, staged, fs_changed) = {
         let s = state.lock().unwrap();
         (
             s.session.diff(),
             s.session.staged_layer_texts(),
+            s.session
+                .ops()
+                .iter()
+                .map(|op| op.describe())
+                .collect::<Vec<_>>(),
             s.session.ops().len(),
             s.session.external_edits(),
         )
@@ -1925,7 +1930,13 @@ fn handle_diff(state: &Arc<Mutex<StudioState>>) -> Resp {
         .collect();
     leaks.sort();
     leaks.dedup();
-    Resp::html(views::diff_view(&diffs, &leaks, &fs_changed, staged))
+    Resp::html(views::diff_view(
+        &diffs,
+        &op_descriptions,
+        &leaks,
+        &fs_changed,
+        staged,
+    ))
 }
 
 /// `POST /fragments/try` — run the *draft* script from the editor form right now
@@ -3747,6 +3758,50 @@ mod tests {
         // Baseline reset: nothing staged now.
         let diff2 = body_of(route(&st, &req("GET", "/diff", "", &[HOST, COOKIE], "")));
         assert!(diff2.contains("No staged changes"));
+    }
+
+    #[test]
+    fn review_page_leads_with_plain_language_staged_op_summaries() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+
+        // Stage a learn toggle — this is the case Ellery hit live: an
+        // anonymous config.toml hunk with no clue what was staged.
+        route(
+            &st,
+            &req(
+                "POST",
+                "/settings/learn/enable",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        // ...and a fragment edit via the same create-fragment fixture flow
+        // used elsewhere in this file.
+        route(
+            &st,
+            &req(
+                "POST",
+                "/fragments",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "name=rc&kind=markdown&guidance=Use+clippy&scope=repo&visibility=public",
+            ),
+        );
+
+        let diff = body_of(route(&st, &req("GET", "/diff", "", &[HOST, COOKIE], "")));
+        assert!(
+            diff.contains("turn ambient learning on"),
+            "the learn toggle's staged op must be described in plain language: {diff}"
+        );
+        // /fragments always stages EditFragment (an id-based upsert that
+        // creates when absent — see handle_fragment_save), so the described
+        // op is "edit fragment", not "new fragment".
+        assert!(
+            diff.contains("edit fragment \u{201c}rc\u{201d}"),
+            "the fragment edit's staged op must be described in plain language: {diff}"
+        );
     }
 
     #[test]

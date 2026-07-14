@@ -2717,6 +2717,7 @@ pub fn editor_preview_fragment(p: &PreviewOutcome) -> String {
 
 pub fn diff_view(
     diffs: &[FileDiff],
+    op_descriptions: &[String],
     leaks: &[String],
     fs_changed: &[std::path::PathBuf],
     staged: usize,
@@ -2729,6 +2730,15 @@ pub fn diff_view(
                     h1 { "Review staged changes" }
                 }
                 span class="pill" { (staged) " staged" }
+            }
+
+            @if !op_descriptions.is_empty() {
+                div class="staged-ops-summary" {
+                    h3 { "What's staged" }
+                    ul class="staged-ops" {
+                        @for desc in op_descriptions { li { (desc) } }
+                    }
+                }
             }
 
             @if !leaks.is_empty() {
