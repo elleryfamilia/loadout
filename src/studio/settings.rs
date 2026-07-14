@@ -339,6 +339,11 @@ pub fn learn_disable(state: &Arc<Mutex<StudioState>>) -> Resp {
 /// green-pill state and the banner text agree).
 fn apply_or_stage(state: &Arc<Mutex<StudioState>>, op: StagedOp, applied_msg: &str) -> Resp {
     let is_learn_toggle = matches!(op, StagedOp::SetLearnEnabled { .. });
+    // The was_clean read, the stage, and the apply below each take the lock
+    // separately. That check-then-act sequence is race-free ONLY because
+    // `serve_loop` handles requests strictly one at a time (single-threaded);
+    // if the server ever goes concurrent, this must become one critical
+    // section or an auto-apply could flush another request's staged edits.
     let was_clean = state.lock().unwrap().session.ops().is_empty();
 
     // Each lock is taken in its own `let` statement rather than directly in a
