@@ -4306,14 +4306,14 @@ mod tests {
         assert!(body.contains("Select a loadout to see what it composes."));
         assert!(!body.contains("fragment-detail"));
         assert!(!body.contains("<h1>rust</h1>"));
-        // Explicitly selecting one renders its board (Applies to / Fragments /
-        // Workflow slots), not the composed-document cards.
+        // Explicitly selecting one renders its board (Targets / Context
+        // fragments / Execution workflow slots), not the composed-document cards.
         let detail = body_of(route(
             &st,
             &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
         ));
         assert!(detail.contains("<h1>rust</h1>") && detail.contains("lo-board"));
-        assert!(detail.contains("Applies to") && detail.contains("Workflow"));
+        assert!(detail.contains("Targets") && detail.contains("Execution workflow"));
         assert!(!detail.contains("fragment-detail"));
     }
 
@@ -4333,10 +4333,11 @@ mod tests {
         ));
         assert!(board.contains("lo-board"));
         assert!(
-            board.contains("Applies to")
-                && board.contains("Fragments")
-                && board.contains("Workflow")
+            board.contains("Targets")
+                && board.contains("Context fragments")
+                && board.contains("Execution workflow")
         );
+        assert!(board.contains("when this loadout applies"));
         assert!(board.contains("/profiles/rust/fragments/rc")); // rc chip's remove
 
         // Equip the second fragment → it stages and the readout counts both.
@@ -4431,7 +4432,7 @@ mod tests {
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
-        // The default's board: locked "Applies to", a Default badge, and no
+        // The default's board: locked "Targets", a Default badge, and no
         // rename/delete (it's always-present).
         let base = body_of(route(
             &st,

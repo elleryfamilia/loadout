@@ -305,12 +305,12 @@ pub struct BoardWorkflow {
 }
 
 /// Everything the board needs to render one loadout as slots: its targets
-/// ("Applies to"), equipped fragments, and the single workflow binding. Built
+/// ("Targets"), equipped fragments, and the single workflow binding. Built
 /// from the *staged* config so it reflects unsaved edits.
 pub struct BoardView {
     pub name: String,
     pub disabled: bool,
-    /// No targets ⇒ the catch-all default loadout (locked "Applies to").
+    /// No targets ⇒ the catch-all default loadout (locked "Targets").
     pub is_default: bool,
     pub targets: Vec<TargetChip>,
     pub fragments: Vec<BoardFrag>,

@@ -871,8 +871,8 @@ pub fn profile_detail_fragment(d: &ProfileDetail) -> String {
 
 // --- the Create-a-Loadout board ---------------------------------------------
 
-/// The board: the selected loadout shown as editable slots — Applies to
-/// (targets), Fragments, and a single Workflow — plus a readout. Fills
+/// The board: the selected loadout shown as editable slots — Targets, Context
+/// fragments, and a single Execution workflow — plus a readout. Fills
 /// `#profile-main` (the rail's select renders this). A "Preview" action swaps in
 /// the composed-document view ([`profile_detail`]).
 pub fn loadout_board(b: &BoardView) -> Markup {
@@ -910,7 +910,7 @@ pub fn loadout_board(b: &BoardView) -> Markup {
             div class="lo-board" {
                 (board_applies(b, &e))
                 (board_section(
-                    "box", "Fragments", Some(b.fragments.len()), "the guidance it composes",
+                    "box", "Context fragments", Some(b.fragments.len()), "the knowledge the agent carries",
                     Some(html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/fragments/new")) hx-target="#modal" { (icon("plus")) "Equip" } }),
                     html! {
                         @if b.fragments.is_empty() {
@@ -925,7 +925,7 @@ pub fn loadout_board(b: &BoardView) -> Markup {
                     },
                 ))
                 (board_section(
-                    "git-branch", "Workflow", None, "a single multi-step process, optional",
+                    "git-branch", "Execution workflow", None, "the process it works by — optional",
                     None, board_workflow_slot(b, &e),
                 ))
                 div class="provenance" {
@@ -971,13 +971,13 @@ fn board_section(
     }
 }
 
-/// The "Applies to" section — a locked explainer for the default loadout, or the
+/// The "Targets" section — a locked explainer for the default loadout, or the
 /// editable target chips + Add for a targeted one.
 fn board_applies(b: &BoardView, e: &str) -> Markup {
     if b.is_default {
         board_section(
             "globe",
-            "Applies to",
+            "Targets",
             None,
             "the default — applies when no other loadout matches",
             None,
@@ -994,9 +994,9 @@ fn board_applies(b: &BoardView, e: &str) -> Markup {
     } else {
         board_section(
             "target",
-            "Applies to",
+            "Targets",
             Some(b.targets.len()),
-            "repos this loadout is detected on",
+            "when this loadout applies",
             Some(
                 html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/targets/new")) hx-target="#modal" { (icon("plus")) "Add" } },
             ),
