@@ -58,7 +58,9 @@
 //! Default cheap models when `learn.model` is unset: claude → the `haiku` alias
 //! (resolves to a current haiku-class model), gemini → `gemini-2.5-flash` (the
 //! CLI's own `DEFAULT_GEMINI_FLASH_MODEL`), codex → its configured default
-//! (`-m` omitted). A set `learn.model` overrides all three.
+//! (`-m` omitted). A set `learn.model` overrides the selected CLI's default.
+//! Without a `learn.cli` pin, an explicit model restricts selection to the
+//! preferred CLI so the model id is never forwarded to another provider.
 //!
 //! Everything the CLI returns is untrusted data — a transcript the model
 //! summarized can contain injection attempts. This layer only extracts the text
@@ -365,10 +367,16 @@ pub fn select(learn: &LearnConfig) -> Selection {
 
 /// Selection with an injectable bounded probe for deterministic tests.
 fn select_with(learn: &LearnConfig, probe: impl Fn(&str) -> providers::CliProbe) -> Selection {
+    let has_explicit_model = learn
+        .model
+        .as_deref()
+        .is_some_and(|model| !model.is_empty());
     // A `learn.cli` pin restricts the candidates to that one known id; an
-    // unknown pin yields an empty candidate list (→ None). No pin ⇒ full order.
+    // unknown pin yields an empty candidate list (→ None). An unpinned model
+    // restricts selection to the preferred CLI so it cannot cross providers.
     let candidates: Vec<&'static str> = match learn.cli.as_deref() {
         Some(pin) => PROBE_ORDER.iter().copied().filter(|c| *c == pin).collect(),
+        None if has_explicit_model => PROBE_ORDER.first().copied().into_iter().collect(),
         None => PROBE_ORDER.to_vec(),
     };
     let mut unsupported = None;
@@ -835,6 +843,19 @@ mod tests {
     }
 
     #[test]
+    fn select_pin_keeps_its_explicit_model() {
+        let selection = select_with(&learn(Some("codex"), Some("o3")), |program| {
+            assert_eq!(program, "codex");
+            providers::CliProbe::Found("codex-cli 0.144.4".to_string())
+        });
+        let Selection::Chosen(choice) = selection else {
+            panic!("expected pinned Codex");
+        };
+        assert_eq!(choice.cli_id, "codex");
+        assert_eq!(choice.model, "o3");
+    }
+
+    #[test]
     fn select_pin_does_not_fall_back_when_pinned_cli_missing() {
         // Pinned gemini is not installed; claude/codex are — but a pin means
         // "this CLI or nothing", so there is no fallback.
@@ -913,6 +934,59 @@ mod tests {
             panic!("expected Codex fallback");
         };
         assert_eq!(choice.cli_id, "codex");
+    }
+
+    #[test]
+    fn unpinned_old_claude_with_explicit_model_does_not_probe_fallback_clis() {
+        let probed = std::cell::RefCell::new(Vec::new());
+        let selection = select_with(&learn(None, Some("haiku")), |program| {
+            probed.borrow_mut().push(program.to_string());
+            match program {
+                "claude" => providers::CliProbe::Found("claude 2.1.210".to_string()),
+                "codex" => providers::CliProbe::Found("codex-cli 0.144.4".to_string()),
+                "gemini" => providers::CliProbe::Found("0.45.2".to_string()),
+                _ => providers::CliProbe::Missing,
+            }
+        });
+
+        let Selection::Unsupported(unsupported) = selection else {
+            panic!("expected unsupported Claude");
+        };
+        assert_eq!(unsupported.cli_id, "claude");
+        assert_eq!(unsupported.reason, UnsupportedReason::TooOld);
+        assert_eq!(&*probed.borrow(), &["claude"]);
+    }
+
+    #[test]
+    fn unpinned_missing_claude_with_explicit_model_does_not_probe_fallback_clis() {
+        let probed = std::cell::RefCell::new(Vec::new());
+        let selection = select_with(&learn(None, Some("haiku")), |program| {
+            probed.borrow_mut().push(program.to_string());
+            match program {
+                "claude" => providers::CliProbe::Missing,
+                "codex" => providers::CliProbe::Found("codex-cli 0.144.4".to_string()),
+                "gemini" => providers::CliProbe::Found("0.45.2".to_string()),
+                _ => providers::CliProbe::Missing,
+            }
+        });
+
+        assert!(matches!(selection, Selection::None));
+        assert_eq!(&*probed.borrow(), &["claude"]);
+    }
+
+    #[test]
+    fn unpinned_old_claude_with_empty_model_uses_fallback_default() {
+        let selection = select_with(&learn(None, Some("")), |program| match program {
+            "claude" => providers::CliProbe::Found("claude 2.1.210".to_string()),
+            "codex" => providers::CliProbe::Found("codex-cli 0.144.4".to_string()),
+            _ => providers::CliProbe::Missing,
+        });
+
+        let Selection::Chosen(choice) = selection else {
+            panic!("expected Codex fallback");
+        };
+        assert_eq!(choice.cli_id, "codex");
+        assert_eq!(choice.model, "");
     }
 
     #[test]
