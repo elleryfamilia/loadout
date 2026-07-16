@@ -285,7 +285,8 @@ fn status(rt: &super::Runtime) -> Result<()> {
     }
 
     // The CLI + model a run would use.
-    match agent_cli::select(&config.learn) {
+    let selection = agent_cli::select(&config.learn);
+    match &selection {
         agent_cli::Selection::Chosen(c) => {
             let model = if c.model.is_empty() {
                 "cli default".to_string()
@@ -309,6 +310,12 @@ fn status(rt: &super::Runtime) -> Result<()> {
                 p.yellow(u.cli_id),
                 reason,
                 u.minimum_version
+            );
+            let diagnostic = worker::HarvestDiagnostic::UnsupportedCli(u.clone());
+            println!(
+                "  {} current issue:   {}",
+                p.yellow("!"),
+                super::harvest::format_diagnostic(&diagnostic)
             );
         }
         agent_cli::Selection::None => println!(
@@ -344,6 +351,18 @@ fn status(rt: &super::Runtime) -> Result<()> {
         // extraction call (design Decision #3).
         let e = trigger::eligibility_at(dir, config.learn.interval, SystemTime::now());
         println!("  next harvest:    {}", eligibility_line(&p, &e));
+
+        // The breaker counter, not `log.last()`, decides whether an older
+        // failure is still actionable. A later empty/no-op run must not hide
+        // the reason; `load learn on` resets the counter and makes old log
+        // entries historical.
+        if let Some(failure) = worker::latest_unresolved_failure(dir) {
+            println!(
+                "  {} unresolved failure: {}",
+                p.yellow("!"),
+                super::harvest::format_logged_diagnostic(&failure)
+            );
+        }
 
         // Paused after repeated failures + the clearing action.
         if state::paused_at(dir) {

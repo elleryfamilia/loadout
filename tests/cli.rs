@@ -892,6 +892,18 @@ fn agent_stub(fx: &Fixture, script: &str) -> std::path::PathBuf {
     bin
 }
 
+/// Write an executable `claude` stub into a dir and return that dir (for PATH).
+#[cfg(unix)]
+fn claude_stub(fx: &Fixture, script: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = fx.global.path().join("stub-bin");
+    fs::create_dir_all(&bin).unwrap();
+    let stub = bin.join("claude");
+    fs::write(&stub, script).unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
 #[cfg(unix)]
 #[test]
 fn doctor_completes_when_an_agent_cli_leaves_a_pipe_holding_grandchild() {
@@ -3655,6 +3667,70 @@ exit 0
     assert!(lc.contains("\"trigger\":\"manual\""));
 }
 
+/// A failed manual harvest prints only the worker's typed diagnostic. Raw
+/// provider text must stay out of the terminal even when it classified the
+/// failure.
+#[cfg(unix)]
+#[test]
+fn harvest_failure_prints_safe_stage_code_and_message() {
+    let fx = Fixture::new();
+    fx.author("[learn]\nenabled = true\ncli = \"claude\"\nscope = \"all\"\n");
+
+    let home = fx.global.path().join("home");
+    let proj = home.join(".claude/projects/proj");
+    fs::create_dir_all(&proj).unwrap();
+    let session = proj.join("sess-failure.jsonl");
+    fs::write(
+        &session,
+        concat!(
+            r#"{"type":"user","userType":"external","entrypoint":"cli","cwd":"/work/repo","timestamp":"2126-01-01T00:00:00.000Z","message":{"content":"Always use pnpm."}}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    std::process::Command::new("touch")
+        .args(["-t", "202601010000"])
+        .arg(&session)
+        .status()
+        .unwrap();
+
+    let bin = claude_stub(
+        &fx,
+        concat!(
+            "#!/bin/sh\n",
+            "case \"$1\" in --version) echo 'claude 9.9.9'; exit 0 ;; esac\n",
+            "cat >/dev/null\n",
+            "printf '%s' '{\"is_error\":true,\"result\":\"Not logged in SECRET_PROVIDER_BODY\"}'\n",
+        ),
+    );
+
+    fx.cmd()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .timeout(std::time::Duration::from_secs(30))
+        .arg("harvest")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cli_output/cli_auth_failed"))
+        .stdout(predicate::str::contains("Claude could not authenticate"))
+        .stdout(predicate::str::contains("SECRET_PROVIDER_BODY").not());
+}
+
+#[test]
+fn harvest_corrupt_watermarks_prints_typed_diagnostic() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.write_state("learn/watermarks.json", "{ not json");
+
+    fx.cmd()
+        .arg("harvest")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "preflight/watermark_store_corrupt",
+        ))
+        .stdout(predicate::str::contains("load learn reset"));
+}
+
 #[test]
 fn harvest_dry_run_makes_no_call_and_writes_nothing() {
     // `--dry-run` on a spend-and-write command must do neither.
@@ -4167,6 +4243,109 @@ fn learn_status_reports_paused_after_seeded_failures() {
         .stdout(predicate::str::contains("load harvest"));
 }
 
+/// A later no-op run must not hide the breaker failure that still needs user
+/// action.
+#[test]
+fn learn_status_reports_unresolved_failure_after_later_empty_run() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.write_state("learn/failures.json", "{\"consecutive\":1}\n");
+    fx.write_state(
+        "learn/log.jsonl",
+        concat!(
+            r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","sessions":1,"candidates":0,"outcome":"failed","error_stage":"validate_output","error_code":"output_json_invalid","error":"The extraction CLI returned invalid JSON output."}"#,
+            "\n",
+            r#"{"ts":"2026-07-10T10:05:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"empty"}"#,
+            "\n"
+        ),
+    );
+
+    fx.cmd()
+        .args(["learn", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "validate_output/output_json_invalid",
+        ))
+        .stdout(predicate::str::contains(
+            "The extraction CLI returned invalid JSON output.",
+        ));
+}
+
+/// Old logs did not carry typed diagnostic fields. Status names that limitation
+/// without replaying an arbitrary legacy error string.
+#[test]
+fn learn_status_uses_generic_fallback_for_legacy_failure_log() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.write_state("learn/failures.json", "{\"consecutive\":1}\n");
+    fx.write_state(
+        "learn/log.jsonl",
+        concat!(
+            r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","sessions":1,"candidates":0,"outcome":"failed","error":"SECRET_LEGACY_PROVIDER_TEXT"}"#,
+            "\n"
+        ),
+    );
+
+    fx.cmd()
+        .args(["learn", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "this loadout version did not record a safe diagnostic",
+        ))
+        .stdout(predicate::str::contains("SECRET_LEGACY_PROVIDER_TEXT").not());
+}
+
+/// Re-enabling locally resets the breaker, so old log history no longer
+/// appears as a current failure.
+#[test]
+fn learn_on_reset_hides_old_failure_from_status() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.write_state("learn/failures.json", "{\"consecutive\":2}\n");
+    fx.write_state(
+        "learn/log.jsonl",
+        concat!(
+            r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","sessions":1,"candidates":0,"outcome":"failed","error_stage":"validate_output","error_code":"output_json_invalid","error":"The extraction CLI returned invalid JSON output."}"#,
+            "\n"
+        ),
+    );
+
+    fx.cmd().args(["learn", "on", "--yes"]).assert().success();
+    fx.cmd()
+        .args(["learn", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unresolved failure").not())
+        .stdout(predicate::str::contains("paused after repeated failures").not());
+}
+
+/// Current CLI incompatibility is independent of session eligibility and the
+/// breaker log, so status reports it even before the first harvest.
+#[cfg(unix)]
+#[test]
+fn learn_status_reports_current_unsupported_pinned_claude() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\ncli = \"claude\"\n");
+    fx.activate_learning();
+    let bin = claude_stub(&fx, "#!/bin/sh\necho 'claude 2.1.210'\n");
+
+    fx.cmd()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .args(["learn", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "preflight/claude_structured_output_unsupported",
+        ))
+        .stdout(predicate::str::contains("Upgrade to 2.1.211 or newer"));
+}
+
 /// Unix-seconds stamp content for "right now" (the on-disk throttle-stamp
 /// format `state::read_stamp` parses).
 fn stamp_now() -> String {
@@ -4336,6 +4515,82 @@ fn doctor_prints_a_learning_section() {
         .success()
         .stdout(predicate::str::contains("Learning"))
         .stdout(predicate::str::contains("load learn on"));
+}
+
+#[test]
+fn doctor_warns_with_safe_unresolved_failure_while_learning_is_active() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.activate_learning();
+    fx.write_state("learn/failures.json", "{\"consecutive\":1}\n");
+    fx.write_state(
+        "learn/log.jsonl",
+        concat!(
+            r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","sessions":1,"candidates":0,"outcome":"failed","error_stage":"validate_output","error_code":"output_schema_mismatch","error":"The extraction CLI returned JSON that does not match the required schema."}"#,
+            "\n",
+            r#"{"ts":"2026-07-10T10:05:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"empty"}"#,
+            "\n"
+        ),
+    );
+
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unresolved harvest failure"))
+        .stdout(predicate::str::contains(
+            "validate_output/output_schema_mismatch",
+        ))
+        .stdout(predicate::str::contains(
+            "does not match the required schema",
+        ));
+}
+
+/// Breaker history is not an active health problem when learning is disabled.
+#[test]
+fn doctor_treats_old_failure_and_pause_as_historical_when_disabled() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = false\n");
+    fx.write_state("learn/failures.json", "{\"consecutive\":2}\n");
+    fx.write_state(
+        "learn/log.jsonl",
+        concat!(
+            r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","sessions":1,"candidates":0,"outcome":"failed","error_stage":"validate_output","error_code":"output_json_invalid","error":"The extraction CLI returned invalid JSON output."}"#,
+            "\n"
+        ),
+    );
+
+    fx.cmd()
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("unresolved harvest failure").not())
+        .stdout(predicate::str::contains("paused after repeated failures").not())
+        .stdout(predicate::str::contains("output_json_invalid").not());
+}
+
+/// Unsupported selection is a current health warning even before a worker has
+/// found an eligible session or written a log entry.
+#[cfg(unix)]
+#[test]
+fn doctor_warns_for_current_unsupported_pinned_claude_while_active() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\ncli = \"claude\"\n");
+    fx.activate_learning();
+    let bin = claude_stub(&fx, "#!/bin/sh\necho 'claude 2.1.210'\n");
+
+    fx.cmd()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .arg("doctor")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "preflight/claude_structured_output_unsupported",
+        ))
+        .stdout(predicate::str::contains("Upgrade to 2.1.211 or newer"));
 }
 
 /// `load doctor` flags a learning hook left registered after learning went
