@@ -74,6 +74,15 @@ pub fn print_summary(out: &worker::RunOutcome) {
                  (set `learn.cli` or install claude/codex/gemini)"
             )
         ),
+        // Task 6 replaces this compile arm with the typed actionable
+        // diagnostic. Keep this checkpoint's surface intentionally minimal.
+        Outcome::UnsupportedCli => println!(
+            "{}",
+            p.dim(
+                "learning: found new sessions but the configured extraction CLI \
+                 does not support the required structured output"
+            )
+        ),
         Outcome::Busy => println!("{}", p.dim("learning: a harvest is already running")),
         Outcome::Fenced => println!("{}", p.dim("learning: another run took over; nothing done")),
         Outcome::Corrupt => println!(

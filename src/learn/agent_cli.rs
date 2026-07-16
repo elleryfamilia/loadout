@@ -69,8 +69,6 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context as _, Result};
-
 use crate::config::LearnConfig;
 use crate::providers;
 
@@ -121,17 +119,6 @@ pub enum Selection {
     Chosen(CliChoice),
     Unsupported(UnsupportedCli),
     None,
-}
-
-impl Selection {
-    /// Compatibility for the current worker. A later diagnostics checkpoint
-    /// replaces this with explicit unsupported-version handling.
-    pub(crate) fn map<T>(self, f: impl FnOnce(CliChoice) -> T) -> Option<T> {
-        match self {
-            Self::Chosen(choice) => Some(f(choice)),
-            Self::Unsupported(_) | Self::None => None,
-        }
-    }
 }
 
 /// Numeric CLI version with missing components normalized to zero.
@@ -204,6 +191,168 @@ pub struct InvokeOut {
     /// for the harvest log's token accounting.
     pub usage: Option<String>,
 }
+
+/// A provider identifier safe to retain in harvest diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderId {
+    Claude,
+    Codex,
+    Gemini,
+    Unknown,
+}
+
+impl ProviderId {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Gemini => "gemini",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Closed failure classifications returned by provider adapters. None of the
+/// variants accepts provider-controlled text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvokeFailureKind {
+    SpawnFailed,
+    TimedOut,
+    ProcessFailed,
+    EnvelopeInvalid,
+    Authentication,
+    RateLimited,
+    StructuredRetriesExhausted,
+    ProviderReported,
+    OutputMissing,
+}
+
+/// Privacy-safe failure from one extraction-CLI invocation.
+///
+/// Provider stdout, stderr, error bodies, paths, prompts, and model output are
+/// deliberately absent. The optional usage value is copied only from the
+/// provider envelope's dedicated usage/stats field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvokeFailure {
+    pub provider: ProviderId,
+    pub kind: InvokeFailureKind,
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+    pub stdout_bytes: usize,
+    pub stderr_bytes: usize,
+    pub io_kind: Option<std::io::ErrorKind>,
+    pub os_error: Option<i32>,
+    pub usage: Option<String>,
+}
+
+impl InvokeFailure {
+    fn new(provider: ProviderId, kind: InvokeFailureKind) -> Self {
+        Self {
+            provider,
+            kind,
+            exit_code: None,
+            signal: None,
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            io_kind: None,
+            os_error: None,
+            usage: None,
+        }
+    }
+
+    fn from_output(
+        provider: ProviderId,
+        kind: InvokeFailureKind,
+        output: &std::process::Output,
+        usage: Option<String>,
+    ) -> Self {
+        let (exit_code, signal) = exit_parts(&output.status);
+        Self {
+            provider,
+            kind,
+            exit_code,
+            signal,
+            stdout_bytes: output.stdout.len(),
+            stderr_bytes: output.stderr.len(),
+            io_kind: None,
+            os_error: None,
+            usage,
+        }
+    }
+
+    pub fn stage(&self) -> &'static str {
+        match self.kind {
+            InvokeFailureKind::SpawnFailed
+            | InvokeFailureKind::TimedOut
+            | InvokeFailureKind::ProcessFailed => "invoke",
+            InvokeFailureKind::EnvelopeInvalid
+            | InvokeFailureKind::Authentication
+            | InvokeFailureKind::RateLimited
+            | InvokeFailureKind::StructuredRetriesExhausted
+            | InvokeFailureKind::ProviderReported
+            | InvokeFailureKind::OutputMissing => "cli_output",
+        }
+    }
+
+    pub fn code(&self) -> &'static str {
+        match self.kind {
+            InvokeFailureKind::SpawnFailed => "cli_spawn_failed",
+            InvokeFailureKind::TimedOut => "cli_timed_out",
+            InvokeFailureKind::ProcessFailed => "cli_process_failed",
+            InvokeFailureKind::EnvelopeInvalid => "cli_envelope_invalid",
+            InvokeFailureKind::Authentication => "cli_auth_failed",
+            InvokeFailureKind::RateLimited => "cli_rate_limited",
+            InvokeFailureKind::StructuredRetriesExhausted => "cli_structured_retries_exhausted",
+            InvokeFailureKind::ProviderReported => "cli_reported_error",
+            InvokeFailureKind::OutputMissing => "provider_output_missing",
+        }
+    }
+
+    pub fn message(&self) -> &'static str {
+        match self.kind {
+            InvokeFailureKind::SpawnFailed => "Loadout could not start the extraction CLI.",
+            InvokeFailureKind::TimedOut => "The extraction CLI exceeded its deadline.",
+            InvokeFailureKind::ProcessFailed => "The extraction CLI exited unsuccessfully.",
+            InvokeFailureKind::EnvelopeInvalid => {
+                "The extraction CLI returned an invalid response envelope."
+            }
+            InvokeFailureKind::Authentication => match self.provider {
+                ProviderId::Claude => {
+                    "Claude could not authenticate. Open Claude and sign in, then run `load harvest` again."
+                }
+                ProviderId::Codex => {
+                    "Codex could not authenticate. Open Codex and sign in, then run `load harvest` again."
+                }
+                ProviderId::Gemini => {
+                    "Gemini could not authenticate. Open Gemini and sign in, then run `load harvest` again."
+                }
+                ProviderId::Unknown => {
+                    "The extraction CLI could not authenticate. Sign in, then run `load harvest` again."
+                }
+            },
+            InvokeFailureKind::RateLimited => {
+                "The extraction provider rate-limited this request. Wait, then run `load harvest` again."
+            }
+            InvokeFailureKind::StructuredRetriesExhausted => {
+                "The extraction CLI could not produce valid structured output. Upgrade the CLI if this repeats."
+            }
+            InvokeFailureKind::ProviderReported => {
+                "The extraction provider reported an error. Run `load harvest` again."
+            }
+            InvokeFailureKind::OutputMissing => {
+                "The extraction CLI did not return the required structured output."
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for InvokeFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for InvokeFailure {}
 
 /// Pick the extraction CLI: `learn.cli` pins one (used only if that id is known
 /// and installed — otherwise `None`, no fallback); else the first of
@@ -294,12 +443,15 @@ pub fn invoke(
     prompt: &str,
     work_dir: &Path,
     deadline: Duration,
-) -> Result<InvokeOut> {
+) -> Result<InvokeOut, InvokeFailure> {
     match choice.cli_id {
         "claude" => invoke_claude(choice, prompt, work_dir, deadline),
         "codex" => invoke_codex(choice, prompt, work_dir, deadline),
         "gemini" => invoke_gemini(choice, prompt, work_dir, deadline),
-        other => bail!("unknown extraction CLI id {other:?}"),
+        _ => Err(InvokeFailure::new(
+            ProviderId::Unknown,
+            InvokeFailureKind::ProviderReported,
+        )),
     }
 }
 
@@ -318,15 +470,80 @@ fn base_command(program: &str, work_dir: &Path) -> Command {
 /// its exit status — the per-CLI unwrapper decides success from the payload,
 /// since e.g. claude exits non-zero yet still emits a usable JSON envelope).
 fn run_capture(
+    provider: ProviderId,
     cmd: &mut Command,
     prompt: &str,
     deadline: Duration,
-) -> Result<std::process::Output> {
+) -> Result<std::process::Output, InvokeFailure> {
     match providers::output_with_timeout_stdin(cmd, deadline, prompt.as_bytes()) {
         Ok(Some(out)) => Ok(out),
-        Ok(None) => bail!("extraction CLI exceeded its {deadline:?} deadline and was killed"),
-        Err(e) => Err(anyhow!("spawning extraction CLI failed: {e}")),
+        Ok(None) => Err(InvokeFailure::new(provider, InvokeFailureKind::TimedOut)),
+        Err(error) => {
+            let mut failure = InvokeFailure::new(provider, InvokeFailureKind::SpawnFailed);
+            failure.io_kind = Some(error.kind());
+            failure.os_error = error.raw_os_error();
+            Err(failure)
+        }
     }
+}
+
+fn exit_parts(status: &std::process::ExitStatus) -> (Option<i32>, Option<i32>) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        (status.code(), status.signal())
+    }
+    #[cfg(not(unix))]
+    {
+        (status.code(), None)
+    }
+}
+
+fn classify_provider_error(text: &str) -> InvokeFailureKind {
+    let normalized = text.to_ascii_lowercase();
+    if [
+        "not logged in",
+        "authentication failed",
+        "unauthorized",
+        "invalid api key",
+        "login required",
+        "please log in",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        InvokeFailureKind::Authentication
+    } else if [
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "resource exhausted",
+        "resource_exhausted",
+        "quota exceeded",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        InvokeFailureKind::RateLimited
+    } else if (normalized.contains("structured output") || normalized.contains("structured_output"))
+        && ["retry", "retries", "attempt", "attempts"]
+            .iter()
+            .any(|marker| normalized.contains(marker))
+    {
+        InvokeFailureKind::StructuredRetriesExhausted
+    } else {
+        InvokeFailureKind::ProviderReported
+    }
+}
+
+fn process_failure(
+    provider: ProviderId,
+    output: &std::process::Output,
+    usage: Option<String>,
+) -> Option<InvokeFailure> {
+    (!output.status.success()).then(|| {
+        InvokeFailure::from_output(provider, InvokeFailureKind::ProcessFailed, output, usage)
+    })
 }
 
 /// Append `-m <model>` (flag_name = "-m") only when a model id is set. codex
@@ -342,9 +559,10 @@ fn invoke_claude(
     prompt: &str,
     work_dir: &Path,
     deadline: Duration,
-) -> Result<InvokeOut> {
+) -> Result<InvokeOut, InvokeFailure> {
+    let provider = ProviderId::Claude;
     let schema = serde_json::to_string(&crate::learn::extract::output_json_schema())
-        .context("serializing Claude output schema")?;
+        .expect("the extraction schema is JSON-serializable");
     let mut cmd = base_command(&choice.program, work_dir);
     cmd.arg("-p")
         .arg("--safe-mode")
@@ -357,28 +575,36 @@ fn invoke_claude(
         .arg(""); // disable ALL built-in tools
     push_model(&mut cmd, "--model", &choice.model);
 
-    let out = run_capture(&mut cmd, prompt, deadline)?;
-    let value: serde_json::Value = serde_json::from_slice(&out.stdout).with_context(|| {
-        format!(
-            "claude --output-format json produced non-JSON stdout: {}",
-            String::from_utf8_lossy(&out.stdout).trim()
-        )
+    let out = run_capture(provider, &mut cmd, prompt, deadline)?;
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
+        InvokeFailure::from_output(provider, InvokeFailureKind::EnvelopeInvalid, &out, None)
     })?;
+    let usage = value.get("usage").map(|u| u.to_string());
     if value.get("is_error").and_then(|b| b.as_bool()) == Some(true) {
-        let msg = value
-            .get("result")
-            .and_then(|r| r.as_str())
-            .unwrap_or("(no result field)");
-        bail!("claude reported an error result: {msg}");
+        let body = value.get("result").and_then(|r| r.as_str()).unwrap_or("");
+        return Err(InvokeFailure::from_output(
+            provider,
+            classify_provider_error(body),
+            &out,
+            usage,
+        ));
     }
     let structured = value
         .get("structured_output")
         .filter(|output| output.is_object())
         .ok_or_else(|| {
-            anyhow!("claude JSON is missing an object-valued `structured_output` field")
+            InvokeFailure::from_output(
+                provider,
+                InvokeFailureKind::OutputMissing,
+                &out,
+                usage.clone(),
+            )
         })?;
-    let text = serde_json::to_string(structured).context("serializing Claude structured output")?;
-    let usage = value.get("usage").map(|u| u.to_string());
+    let text = serde_json::to_string(structured)
+        .expect("a parsed JSON value can always be serialized back to JSON");
+    if let Some(failure) = process_failure(provider, &out, usage.clone()) {
+        return Err(failure);
+    }
     Ok(InvokeOut { text, usage })
 }
 
@@ -387,14 +613,23 @@ fn invoke_codex(
     prompt: &str,
     work_dir: &Path,
     deadline: Duration,
-) -> Result<InvokeOut> {
+) -> Result<InvokeOut, InvokeFailure> {
+    let provider = ProviderId::Codex;
     // Write the strict output schema codex should steer its structured output
     // toward, then clear any stale final-message file so an old one can't be
     // mistaken for this run's success.
     let schema_path = work_dir.join("schema.json");
     let schema = crate::learn::extract::output_json_schema();
-    std::fs::write(&schema_path, serde_json::to_vec(&schema)?)
-        .with_context(|| format!("writing codex output schema to {}", schema_path.display()))?;
+    std::fs::write(
+        &schema_path,
+        serde_json::to_vec(&schema).expect("the extraction schema is JSON-serializable"),
+    )
+    .map_err(|error| {
+        let mut failure = InvokeFailure::new(provider, InvokeFailureKind::SpawnFailed);
+        failure.io_kind = Some(error.kind());
+        failure.os_error = error.raw_os_error();
+        failure
+    })?;
     let last_path = work_dir.join("last-message.txt");
     let _ = std::fs::remove_file(&last_path);
 
@@ -411,36 +646,67 @@ fn invoke_codex(
         .arg("--json");
     push_model(&mut cmd, "-m", &choice.model);
 
-    let out = run_capture(&mut cmd, prompt, deadline)?;
+    let out = run_capture(provider, &mut cmd, prompt, deadline)?;
+    let envelope = codex_envelope(&out)
+        .map_err(|kind| InvokeFailure::from_output(provider, kind, &out, None))?;
+    if let Some(kind) = envelope.error_kind {
+        return Err(InvokeFailure::from_output(
+            provider,
+            kind,
+            &out,
+            envelope.usage,
+        ));
+    }
     let text = std::fs::read_to_string(&last_path)
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
-            anyhow!(
-                "codex produced no final message (exec failed); stderr: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
+            InvokeFailure::from_output(
+                provider,
+                InvokeFailureKind::OutputMissing,
+                &out,
+                envelope.usage.clone(),
             )
         })?;
-    let usage = codex_usage(&out.stdout);
+    let usage = envelope.usage;
+    if let Some(failure) = process_failure(provider, &out, usage.clone()) {
+        return Err(failure);
+    }
     Ok(InvokeOut { text, usage })
 }
 
-/// The `usage` blob from the last `{"type":"turn.completed",...}` line of
-/// codex's `--json` stdout stream, serialized. `None` if no such line carries a
-/// usage object (e.g. a failed turn).
-fn codex_usage(stdout: &[u8]) -> Option<String> {
-    String::from_utf8_lossy(stdout)
+/// The last `usage` blob in codex's parsed `--json` event stream, plus any
+/// provider-reported failure classification.
+struct CodexEnvelope {
+    usage: Option<String>,
+    error_kind: Option<InvokeFailureKind>,
+}
+
+fn codex_envelope(output: &std::process::Output) -> Result<CodexEnvelope, InvokeFailureKind> {
+    let mut usage = None;
+    let mut error_kind = None;
+    for line in String::from_utf8_lossy(&output.stdout)
         .lines()
-        .rev()
-        .find_map(|line| {
-            let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
-            if value.get("type").and_then(|t| t.as_str()) == Some("turn.completed") {
-                value.get("usage").map(|u| u.to_string())
-            } else {
-                None
-            }
-        })
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let value: serde_json::Value =
+            serde_json::from_str(line).map_err(|_| InvokeFailureKind::EnvelopeInvalid)?;
+        let event_type = value.get("type").and_then(|kind| kind.as_str());
+        if value.get("usage").is_some() {
+            usage = value.get("usage").map(|value| value.to_string());
+        }
+        if matches!(event_type, Some("turn.failed" | "error")) && error_kind.is_none() {
+            let body = value
+                .get("error")
+                .or_else(|| value.get("message"))
+                .map(serde_json::Value::to_string)
+                .unwrap_or_default();
+            error_kind = Some(classify_provider_error(&body));
+        }
+    }
+    Ok(CodexEnvelope { usage, error_kind })
 }
 
 fn invoke_gemini(
@@ -448,7 +714,8 @@ fn invoke_gemini(
     prompt: &str,
     work_dir: &Path,
     deadline: Duration,
-) -> Result<InvokeOut> {
+) -> Result<InvokeOut, InvokeFailure> {
+    let provider = ProviderId::Gemini;
     let mut cmd = base_command(&choice.program, work_dir);
     cmd.arg("-p")
         .arg("") // headless; prompt comes from stdin
@@ -459,29 +726,35 @@ fn invoke_gemini(
         .arg("--skip-trust");
     push_model(&mut cmd, "-m", &choice.model);
 
-    let out = run_capture(&mut cmd, prompt, deadline)?;
-    let value: serde_json::Value = serde_json::from_slice(&out.stdout).with_context(|| {
-        format!(
-            "gemini -o json produced non-JSON stdout: {}",
-            String::from_utf8_lossy(&out.stdout).trim()
-        )
+    let out = run_capture(provider, &mut cmd, prompt, deadline)?;
+    let value: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|_| {
+        InvokeFailure::from_output(provider, InvokeFailureKind::EnvelopeInvalid, &out, None)
     })?;
+    let usage = value.get("stats").map(|s| s.to_string());
+    if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+        let body = error.to_string();
+        return Err(InvokeFailure::from_output(
+            provider,
+            classify_provider_error(&body),
+            &out,
+            usage,
+        ));
+    }
     let text = value
         .get("response")
         .and_then(|r| r.as_str())
         .ok_or_else(|| {
-            let err = value
-                .get("error")
-                .map(|e| e.to_string())
-                .unwrap_or_default();
-            if err.is_empty() {
-                anyhow!("gemini JSON is missing a string `response` field")
-            } else {
-                anyhow!("gemini JSON is missing a string `response` field; error: {err}")
-            }
+            InvokeFailure::from_output(
+                provider,
+                InvokeFailureKind::OutputMissing,
+                &out,
+                usage.clone(),
+            )
         })?
         .to_string();
-    let usage = value.get("stats").map(|s| s.to_string());
+    if let Some(failure) = process_failure(provider, &out, usage.clone()) {
+        return Err(failure);
+    }
     Ok(InvokeOut { text, usage })
 }
 
@@ -706,6 +979,18 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn assert_safe_failure(failure: &InvokeFailure, kind: InvokeFailureKind, forbidden: &[&str]) {
+        assert_eq!(failure.kind, kind);
+        let retained = format!("{failure:?}\n{failure}");
+        for sentinel in forbidden {
+            assert!(
+                !retained.contains(sentinel),
+                "provider-controlled sentinel leaked into failure: {retained}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn invoke_claude_flags_env_stdin_and_structured_output_unwrap() {
         let bin = tempfile::tempdir().unwrap();
@@ -782,9 +1067,11 @@ mod tests {
             "claude",
             &format!(
                 "{DUMP_PROLOGUE}\
+                 printf '%s' 'SECRET_CLAUDE_STDERR' >&2\n\
                  cat <<'JSON'\n\
-                 {{\"is_error\":true,\"result\":\"Not logged in\"}}\n\
-                 JSON\n"
+                 {{\"is_error\":true,\"result\":\"Not logged in SECRET_CLAUDE_BODY\",\"usage\":{{\"input_tokens\":7}}}}\n\
+                 JSON\n\
+                 exit 19\n"
             ),
         );
         let err = invoke(
@@ -794,7 +1081,45 @@ mod tests {
             Duration::from_secs(10),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("Not logged in"), "{err}");
+        assert_safe_failure(
+            &err,
+            InvokeFailureKind::Authentication,
+            &["SECRET_CLAUDE_BODY", "SECRET_CLAUDE_STDERR"],
+        );
+        assert_eq!(err.stage(), "cli_output");
+        assert_eq!(err.code(), "cli_auth_failed");
+        assert_eq!(err.exit_code, Some(19));
+        assert_eq!(err.usage.as_deref(), Some(r#"{"input_tokens":7}"#));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoke_claude_invalid_envelope_precedes_process_status() {
+        let bin = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let stub = write_stub(
+            bin.path(),
+            "claude",
+            &format!(
+                "{DUMP_PROLOGUE}\
+                 printf '%s' 'SECRET_INVALID_STDOUT'\n\
+                 printf '%s' 'SECRET_INVALID_STDERR' >&2\n\
+                 exit 23\n"
+            ),
+        );
+        let err = invoke(
+            &choice("claude", &stub, "haiku"),
+            "p",
+            work.path(),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert_safe_failure(
+            &err,
+            InvokeFailureKind::EnvelopeInvalid,
+            &["SECRET_INVALID_STDOUT", "SECRET_INVALID_STDERR"],
+        );
+        assert_eq!(err.exit_code, Some(23));
     }
 
     #[cfg(unix)]
@@ -808,8 +1133,10 @@ mod tests {
             &format!(
                 "{DUMP_PROLOGUE}\
                  cat <<'JSON'\n\
-                 {{\"is_error\":false,\"result\":\"{{\\\"candidates\\\":[]}}\"}}\n\
-                 JSON\n"
+                 {{\"is_error\":false,\"result\":\"SECRET_RESULT_BODY\"}}\n\
+                 JSON\n\
+                 printf '%s' 'SECRET_MISSING_STDERR' >&2\n\
+                 exit 29\n"
             ),
         );
         let err = invoke(
@@ -819,7 +1146,106 @@ mod tests {
             Duration::from_secs(10),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("structured_output"), "{err}");
+        assert_safe_failure(
+            &err,
+            InvokeFailureKind::OutputMissing,
+            &["SECRET_RESULT_BODY", "SECRET_MISSING_STDERR"],
+        );
+        assert_eq!(err.exit_code, Some(29));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoke_claude_process_status_precedes_payload_validation() {
+        let bin = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let stub = write_stub(
+            bin.path(),
+            "claude",
+            &format!(
+                "{DUMP_PROLOGUE}\
+                 printf '%s' '{{\"is_error\":false,\"structured_output\":{{\"not_candidates\":\"SECRET_PAYLOAD\"}}}}'\n\
+                 printf '%s' 'SECRET_PROCESS_STDERR' >&2\n\
+                 exit 31\n"
+            ),
+        );
+        let err = invoke(
+            &choice("claude", &stub, "haiku"),
+            "p",
+            work.path(),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert_safe_failure(
+            &err,
+            InvokeFailureKind::ProcessFailed,
+            &["SECRET_PAYLOAD", "SECRET_PROCESS_STDERR"],
+        );
+        assert_eq!(err.exit_code, Some(31));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoke_claude_classifies_structured_retry_exhaustion_without_body() {
+        let bin = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let stub = write_stub(
+            bin.path(),
+            "claude",
+            &format!(
+                "{DUMP_PROLOGUE}\
+                 printf '%s' '{{\"is_error\":true,\"result\":\"Failed to provide valid structured output after retries SECRET_RETRY_BODY\"}}'\n"
+            ),
+        );
+        let err = invoke(
+            &choice("claude", &stub, "haiku"),
+            "p",
+            work.path(),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert_safe_failure(
+            &err,
+            InvokeFailureKind::StructuredRetriesExhausted,
+            &["SECRET_RETRY_BODY"],
+        );
+    }
+
+    #[test]
+    fn known_rate_limit_marker_maps_to_safe_classification() {
+        assert_eq!(
+            classify_provider_error("Too many requests: SECRET_RATE_BODY"),
+            InvokeFailureKind::RateLimited
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_invoke_defers_strict_payload_validation_to_extract() {
+        let bin = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let stub = write_stub(
+            bin.path(),
+            "claude",
+            &format!(
+                "{DUMP_PROLOGUE}\
+                 printf '%s' '{{\"is_error\":false,\"structured_output\":{{\"not_candidates\":\"SECRET_SCHEMA_VALUE\"}}}}'\n"
+            ),
+        );
+        let out = invoke(
+            &choice("claude", &stub, "haiku"),
+            "p",
+            work.path(),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let failure = crate::learn::extract::parse_output(&out.text).unwrap_err();
+        assert_eq!(
+            failure.kind(),
+            crate::learn::extract::ParseFailureKind::SchemaMismatch
+        );
+        let retained = format!("{failure:?}\n{failure}");
+        assert!(!retained.contains("SECRET_SCHEMA_VALUE"), "{retained}");
     }
 
     #[cfg(unix)]
@@ -928,7 +1354,15 @@ mod tests {
         let bin = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();
         // Stub writes NOTHING to the -o file (simulates a failed turn).
-        let stub = write_stub(bin.path(), "codex", &format!("{DUMP_PROLOGUE}printf ''\n"));
+        let stub = write_stub(
+            bin.path(),
+            "codex",
+            &format!(
+                "{DUMP_PROLOGUE}\
+                 printf '%s\\n' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":13}},\"detail\":\"SECRET_CODEX_STDOUT\"}}'\n\
+                 printf '%s' 'SECRET_CODEX_STDERR' >&2\n"
+            ),
+        );
         let err = invoke(
             &choice("codex", &stub, ""),
             "p",
@@ -936,7 +1370,12 @@ mod tests {
             Duration::from_secs(10),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("no final message"), "{err}");
+        assert_safe_failure(
+            &err,
+            InvokeFailureKind::OutputMissing,
+            &["SECRET_CODEX_STDOUT", "SECRET_CODEX_STDERR"],
+        );
+        assert_eq!(err.usage.as_deref(), Some(r#"{"input_tokens":13}"#));
     }
 
     #[cfg(unix)]
@@ -993,7 +1432,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn invoke_gemini_missing_response_is_a_failure() {
+    fn invoke_gemini_provider_error_precedes_missing_response() {
         let bin = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();
         let stub = write_stub(
@@ -1002,8 +1441,10 @@ mod tests {
             &format!(
                 "{DUMP_PROLOGUE}\
                  cat <<'JSON'\n\
-                 {{\"error\":{{\"message\":\"boom\"}}}}\n\
-                 JSON\n"
+                 {{\"error\":{{\"message\":\"SECRET_GEMINI_BODY\"}},\"stats\":{{\"tokens\":17}}}}\n\
+                 JSON\n\
+                 printf '%s' 'SECRET_GEMINI_STDERR' >&2\n\
+                 exit 37\n"
             ),
         );
         let err = invoke(
@@ -1013,8 +1454,62 @@ mod tests {
             Duration::from_secs(10),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("response"), "{err}");
-        assert!(err.to_string().contains("boom"), "{err}");
+        assert_safe_failure(
+            &err,
+            InvokeFailureKind::ProviderReported,
+            &["SECRET_GEMINI_BODY", "SECRET_GEMINI_STDERR"],
+        );
+        assert_eq!(err.usage.as_deref(), Some(r#"{"tokens":17}"#));
+        assert_eq!(err.exit_code, Some(37));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoke_gemini_missing_response_does_not_retain_output() {
+        let bin = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let stub = write_stub(
+            bin.path(),
+            "gemini",
+            &format!(
+                "{DUMP_PROLOGUE}\
+                 printf '%s' '{{\"other\":\"SECRET_GEMINI_STDOUT\"}}'\n\
+                 printf '%s' 'SECRET_GEMINI_MISSING_STDERR' >&2\n"
+            ),
+        );
+        let err = invoke(
+            &choice("gemini", &stub, "gemini-2.5-flash"),
+            "p",
+            work.path(),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert_safe_failure(
+            &err,
+            InvokeFailureKind::OutputMissing,
+            &["SECRET_GEMINI_STDOUT", "SECRET_GEMINI_MISSING_STDERR"],
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoke_spawn_failure_does_not_retain_program_path() {
+        let work = tempfile::tempdir().unwrap();
+        let err = invoke(
+            &choice(
+                "claude",
+                Path::new("/definitely/missing/SECRET_SPAWN_PATH"),
+                "haiku",
+            ),
+            "p",
+            work.path(),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert_safe_failure(&err, InvokeFailureKind::SpawnFailed, &["SECRET_SPAWN_PATH"]);
+        assert!(err.io_kind.is_some());
+        assert!(err.os_error.is_some());
+        assert_eq!(err.exit_code, None);
     }
 
     #[cfg(unix)]
@@ -1036,6 +1531,7 @@ mod tests {
             start.elapsed() < Duration::from_secs(10),
             "deadline was not enforced"
         );
-        assert!(err.to_string().contains("deadline"), "{err}");
+        assert_safe_failure(&err, InvokeFailureKind::TimedOut, &[]);
+        assert_eq!(err.code(), "cli_timed_out");
     }
 }
