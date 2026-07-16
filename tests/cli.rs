@@ -3586,8 +3586,8 @@ fn harvest_full_cycle_with_stub_claude_writes_inbox_and_log() {
         .unwrap();
 
     // Stub `claude`: answers `--version` (for the install probe), and on the
-    // extraction call drains the prompt and prints the claude JSON envelope
-    // whose `result` string is the strict extraction JSON.
+    // extraction call drains the prompt and prints the Claude JSON envelope
+    // whose object-valued structured output is the strict extraction JSON.
     let bin = fx.global.path().join("stub-bin");
     fs::create_dir_all(&bin).unwrap();
     let stub = bin.join("claude");
@@ -3595,20 +3595,36 @@ fn harvest_full_cycle_with_stub_claude_writes_inbox_and_log() {
 case "$1" in
   --version) echo "claude 9.9.9"; exit 0 ;;
 esac
+: > "$STUB_ARGV"
+for a in "$@"; do printf '%s\n' "$a" >> "$STUB_ARGV"; done
 cat >/dev/null
-printf '%s' '{"result": "{\"candidates\":[{\"claim\":\"Always use pnpm, never npm.\",\"kind\":\"preference\",\"evidence\":[{\"session_ref\":\"claude:sess-1\",\"quote\":\"pnpm\"}]}]}", "usage": {"input_tokens": 1}}'
+printf '%s' '{"result":"MISLEADING FREE-FORM PROSE","structured_output":{"candidates":[{"claim":"Always use pnpm, never npm.","kind":"preference","evidence":[{"session_ref":"claude:sess-1","quote":"pnpm"}]}]},"usage":{"input_tokens":1}}'
 exit 0
 "#;
     fs::write(&stub, script).unwrap();
     fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
 
+    let argv_path = fx.global.path().join("claude-argv");
     fx.cmd()
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("STUB_ARGV", &argv_path)
         .timeout(std::time::Duration::from_secs(30))
         .arg("harvest")
         .assert()
         .success()
         .stdout(predicate::str::contains("harvested 1 session"));
+
+    let argv: Vec<String> = fs::read_to_string(&argv_path)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let schema_idx = argv.iter().position(|a| a == "--json-schema").unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&argv[schema_idx + 1]).unwrap(),
+        loadout::learn::extract::output_json_schema(),
+        "harvest must pass Claude the exact extraction schema"
+    );
 
     // A journal appeared under the isolated config dir's inbox…
     let inbox = fx.global.path().join("empty").join("inbox");

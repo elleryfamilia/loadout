@@ -286,7 +286,7 @@ fn status(rt: &super::Runtime) -> Result<()> {
 
     // The CLI + model a run would use.
     match agent_cli::select(&config.learn) {
-        Some(c) => {
+        agent_cli::Selection::Chosen(c) => {
             let model = if c.model.is_empty() {
                 "cli default".to_string()
             } else {
@@ -294,7 +294,24 @@ fn status(rt: &super::Runtime) -> Result<()> {
             };
             println!("  extraction:      {} ({})", c.cli_id, p.dim(&model));
         }
-        None => println!(
+        agent_cli::Selection::Unsupported(u) => {
+            let reason = match (u.reason, u.installed_version.as_deref()) {
+                (agent_cli::UnsupportedReason::TooOld, Some(found)) => {
+                    format!("{found} is too old")
+                }
+                (agent_cli::UnsupportedReason::ProbeTimedOut, _) => {
+                    "version probe timed out".to_string()
+                }
+                _ => "version is unrecognized".to_string(),
+            };
+            println!(
+                "  extraction:      {} ({}; requires >= {})",
+                p.yellow(u.cli_id),
+                reason,
+                u.minimum_version
+            );
+        }
+        agent_cli::Selection::None => println!(
             "  extraction:      {} (install claude/codex/gemini or set `learn.cli`)",
             p.dim("no CLI available")
         ),

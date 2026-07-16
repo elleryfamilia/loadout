@@ -43,10 +43,10 @@ use assert_cmd::Command;
 /// so a single script serves every scenario.
 const STUB: &str = r#"#!/bin/sh
 case "$1" in
-  --version) echo "claude 9.9.9"; exit 0 ;;
+  --version) echo "claude ${STUB_VERSION:-9.9.9}"; exit 0 ;;
 esac
 # --- extraction call ---
-echo call >> "$STUB_CALLS"
+echo claude >> "$STUB_CALLS"
 : > "$STUB_ARGV"
 for a in "$@"; do printf '%s\n' "$a" >> "$STUB_ARGV"; done
 printf '%s' "${LOADOUT_LEARN_WORKER}" > "$STUB_ENV"
@@ -107,6 +107,9 @@ impl Env {
     fn envelope_file(&self) -> PathBuf {
         self.path().join("envelope.json")
     }
+    fn codex_output_file(&self) -> PathBuf {
+        self.path().join("codex-output.json")
+    }
     fn calls_file(&self) -> PathBuf {
         self.path().join("calls")
     }
@@ -133,6 +136,48 @@ impl Env {
     fn write_stub(&self) {
         let stub = self.stub_bin().join("claude");
         fs::write(&stub, STUB).unwrap();
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Install a Codex stub that mirrors the output-file and JSONL contracts
+    /// used by the production adapter.
+    fn write_codex_stub(&self, session_id: &str, claim: &str) {
+        let output = serde_json::json!({
+            "candidates": [{
+                "claim": claim,
+                "kind": "preference",
+                "evidence": [{
+                    "session_ref": format!("claude:{session_id}"),
+                    "quote": "the user asked for this in their own words",
+                }],
+            }],
+        });
+        fs::write(
+            self.codex_output_file(),
+            serde_json::to_string(&output).unwrap(),
+        )
+        .unwrap();
+
+        let stub = self.stub_bin().join("codex");
+        let script = r#"#!/bin/sh
+case "$1" in
+  --version) echo "codex-cli 0.144.4"; exit 0 ;;
+esac
+echo codex >> "$STUB_CALLS"
+: > "$STUB_ARGV"
+for a in "$@"; do printf '%s\n' "$a" >> "$STUB_ARGV"; done
+printf '%s' "${LOADOUT_LEARN_WORKER}" > "$STUB_ENV"
+cat > "$STUB_STDIN"
+out=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  prev="$a"
+done
+cat "$STUB_CODEX_OUTPUT" > "$out"
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":7,"output_tokens":3}}'
+"#;
+        fs::write(&stub, script).unwrap();
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
@@ -207,8 +252,8 @@ impl Env {
         path
     }
 
-    /// Write the canned claude JSON envelope the stub emits: `{"result": "<inner
-    /// ExtractionOut as a JSON string>", ...}`, citing `claude:<session_id>`.
+    /// Write the canned Claude JSON envelope with object-valued structured
+    /// output, citing the requested session.
     fn write_envelope(&self, session_id: &str, claim: &str) {
         let inner = serde_json::json!({
             "candidates": [{
@@ -220,9 +265,9 @@ impl Env {
                 }],
             }],
         });
-        let inner_str = serde_json::to_string(&inner).unwrap();
         let envelope = serde_json::json!({
-            "result": inner_str,
+            "result": "MISLEADING FREE-FORM PROSE",
+            "structured_output": inner,
             "is_error": false,
             "usage": {"input_tokens": 10, "output_tokens": 5},
         });
@@ -249,8 +294,10 @@ impl Env {
         c.env("STUB_ENV", self.worker_env_file());
         c.env("STUB_STDIN", self.stdin_file());
         c.env("STUB_ENVELOPE_FILE", self.envelope_file());
+        c.env("STUB_CODEX_OUTPUT", self.codex_output_file());
         c.env("STUB_EMIT", "1");
         c.env("STUB_EXIT", "0");
+        c.env("STUB_VERSION", "9.9.9");
         c.env("LOAD_BIN", assert_cmd::cargo::cargo_bin("load"));
         c.arg("--cwd").arg(self.repo());
         c.timeout(Duration::from_secs(45));
@@ -925,6 +972,7 @@ fn scenario8_selection_uses_path_lookup_not_alias() {
         "--no-session-persistence",
         "--output-format",
         "json",
+        "--json-schema",
         "--tools",
     ] {
         assert!(
@@ -932,10 +980,72 @@ fn scenario8_selection_uses_path_lookup_not_alias() {
             "argv missing {flag:?}: {argv:?}"
         );
     }
+    let schema_idx = argv.iter().position(|a| a == "--json-schema").unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&argv[schema_idx + 1]).unwrap(),
+        loadout::learn::extract::output_json_schema(),
+        "the worker must pass the exact extraction schema"
+    );
     // And the selection is attributed to claude in the log.
     assert!(
         e.log_text().contains(r#""cli":"claude""#),
         "selection picked the PATH claude stub"
+    );
+}
+
+#[test]
+fn scenario8b_pinned_old_claude_never_spends_and_status_reports_minimum() {
+    let e = Env::new();
+    e.write_config(HARVEST_CFG);
+    e.write_claude_session("sess-1", "Prefer small PRs.");
+
+    e.cmd()
+        .env("STUB_VERSION", "2.1.210")
+        .arg("harvest")
+        .assert()
+        .success();
+
+    assert_eq!(e.calls(), 0, "unsupported Claude must not be invoked");
+    assert!(
+        !e.learn_dir().join("spend-stamp").exists(),
+        "unsupported Claude must be rejected before the spend stamp"
+    );
+    e.cmd()
+        .env("STUB_VERSION", "2.1.210")
+        .args(["learn", "status"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("2.1.210 is too old"))
+        .stdout(predicates::str::contains("requires >= 2.1.211"));
+}
+
+#[test]
+fn scenario8c_unpinned_old_claude_falls_back_before_spend() {
+    let e = Env::new();
+    e.write_config("[learn]\nenabled = true\nscope = \"all\"\n");
+    let claim = "Keep commits focused.";
+    e.write_claude_session("sess-1", claim);
+    e.write_codex_stub("sess-1", claim);
+
+    e.cmd()
+        .env("STUB_VERSION", "2.1.210")
+        .arg("harvest")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("via codex"));
+
+    assert_eq!(
+        fs::read_to_string(e.calls_file()).unwrap(),
+        "codex\n",
+        "old Claude must be skipped without an extraction call"
+    );
+    assert!(
+        e.learn_dir().join("spend-stamp").exists(),
+        "the single fallback extraction writes one spend stamp"
+    );
+    assert!(
+        e.log_text().contains(r#""cli":"codex""#),
+        "the fallback provider is attributed in the run log"
     );
 }
 

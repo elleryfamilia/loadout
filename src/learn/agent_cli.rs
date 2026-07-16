@@ -23,17 +23,20 @@
 //!   session/trust state stays scoped to it, not the user's real projects).
 //!
 //! ## Per-CLI hygiene flags and output unwrapping (pinned against the real
-//! installed binaries — claude 2.1.206, codex-cli 0.142.0, gemini 0.45.2)
+//! installed binaries — claude 2.1.211, codex-cli 0.142.0, gemini 0.45.2)
 //!
 //! - **claude** `-p --safe-mode --no-session-persistence --output-format json
-//!   --tools "" [--model <model>]`. `--safe-mode` disables hooks, plugins, MCP
+//!   --json-schema <schema> --tools "" [--model <model>]`. `--safe-mode`
+//!   disables hooks, plugins, MCP
 //!   servers, CLAUDE.md discovery, skills, and custom commands/agents while
 //!   keeping auth working normally — unlike `--bare`, which additionally blocks
 //!   OAuth/keychain reads and so returns "Not logged in" for a
 //!   subscription-authenticated user (verified empirically). `--tools ""` is
 //!   documented and verified to disable ALL built-in tools. Output: stdout is a
-//!   single JSON object; final text is `.result`, usage blob is `.usage`, and
-//!   `.is_error == true` is treated as a failed call.
+//!   single JSON object; strict extraction data is the object-valued
+//!   `.structured_output`, usage blob is `.usage`, and `.is_error == true`
+//!   is treated as a failed call. Free-form `.result` is never accepted as
+//!   extraction output.
 //! - **codex** `exec -s read-only --ephemeral --skip-git-repo-check
 //!   --output-schema <work_dir>/schema.json -o <work_dir>/last-message.txt
 //!   --json [-m <model>]`. `-s read-only` forbids writes; `--ephemeral` skips
@@ -76,6 +79,10 @@ use crate::providers;
 /// matching id (no fallback — a pin means "this CLI or nothing").
 const PROBE_ORDER: &[&str] = &["claude", "codex", "gemini"];
 
+/// Old Claude releases did not provide the structured-output contract harvest
+/// relies on. This is the exact version used for the approved live check.
+pub const CLAUDE_MIN_VERSION: &str = "2.1.211";
+
 /// A resolved choice of extraction CLI: which one, the program to spawn, and
 /// the model id to pass. `model` is empty when the CLI's own configured default
 /// should be used (codex) — [`invoke`] then omits the `-m`/`--model` flag.
@@ -87,6 +94,104 @@ pub struct CliChoice {
     pub program: String,
     /// The model id, or empty to use the CLI's own default.
     pub model: String,
+}
+
+/// Why an installed Claude executable cannot be used for harvest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsupportedReason {
+    TooOld,
+    UnrecognizedVersion,
+    ProbeTimedOut,
+}
+
+/// A known extraction CLI that cannot satisfy harvest's output contract.
+/// Provider-controlled version text is never retained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsupportedCli {
+    pub cli_id: &'static str,
+    /// Canonical numeric form only. Unknown raw output is discarded.
+    pub installed_version: Option<String>,
+    pub minimum_version: &'static str,
+    pub reason: UnsupportedReason,
+}
+
+/// Result of extraction-CLI selection.
+#[derive(Debug, Clone)]
+pub enum Selection {
+    Chosen(CliChoice),
+    Unsupported(UnsupportedCli),
+    None,
+}
+
+impl Selection {
+    /// Compatibility for the current worker. A later diagnostics checkpoint
+    /// replaces this with explicit unsupported-version handling.
+    pub(crate) fn map<T>(self, f: impl FnOnce(CliChoice) -> T) -> Option<T> {
+        match self {
+            Self::Chosen(choice) => Some(f(choice)),
+            Self::Unsupported(_) | Self::None => None,
+        }
+    }
+}
+
+/// Numeric CLI version with missing components normalized to zero.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NumericVersion {
+    components: [u64; 3],
+    prerelease: bool,
+}
+
+impl NumericVersion {
+    fn canonical(&self) -> String {
+        let [major, minor, patch] = self.components;
+        if self.prerelease {
+            format!("{major}.{minor}.{patch}-prerelease")
+        } else {
+            format!("{major}.{minor}.{patch}")
+        }
+    }
+}
+
+impl PartialOrd for NumericVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NumericVersion {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.components
+            .cmp(&other.components)
+            .then_with(|| (!self.prerelease).cmp(&(!other.prerelease)))
+    }
+}
+
+fn numeric_version(raw: &str) -> Option<NumericVersion> {
+    let token = providers::parse_version(raw);
+    let (core, prerelease) = match token.split_once('-') {
+        Some((core, suffix)) if recognized_prerelease(suffix) => (core, true),
+        Some(_) => return None,
+        None => (token.as_str(), false),
+    };
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next().map(str::parse).transpose().ok()?.unwrap_or(0);
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(NumericVersion {
+        components: [major, minor, patch],
+        prerelease,
+    })
+}
+
+fn recognized_prerelease(suffix: &str) -> bool {
+    let label = suffix.split(['.', '-']).next().unwrap_or_default();
+    matches!(label, "alpha" | "beta" | "rc" | "pre" | "dev")
+        && suffix
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
 }
 
 /// The usable result of one extraction call.
@@ -105,36 +210,67 @@ pub struct InvokeOut {
 /// [`PROBE_ORDER`] that is installed, probed via
 /// [`crate::providers::probe_cli`] (3s-bounded). `None` when nothing eligible
 /// is installed.
-pub fn select(learn: &LearnConfig) -> Option<CliChoice> {
-    select_with(learn, |program| {
-        matches!(providers::probe_cli(program), providers::CliProbe::Found(_))
-    })
+pub fn select(learn: &LearnConfig) -> Selection {
+    select_with(learn, providers::probe_cli)
 }
 
-/// [`select`] with an injectable availability check, so the probe-order /
-/// pin / skip-missing logic is unit-testable without spawning real CLIs.
-fn select_with(learn: &LearnConfig, available: impl Fn(&str) -> bool) -> Option<CliChoice> {
+/// Selection with an injectable bounded probe for deterministic tests.
+fn select_with(learn: &LearnConfig, probe: impl Fn(&str) -> providers::CliProbe) -> Selection {
     // A `learn.cli` pin restricts the candidates to that one known id; an
     // unknown pin yields an empty candidate list (→ None). No pin ⇒ full order.
     let candidates: Vec<&'static str> = match learn.cli.as_deref() {
         Some(pin) => PROBE_ORDER.iter().copied().filter(|c| *c == pin).collect(),
         None => PROBE_ORDER.to_vec(),
     };
+    let mut unsupported = None;
     for cli_id in candidates {
-        if available(cli_id) {
-            let model = learn
-                .model
-                .clone()
-                .filter(|m| !m.is_empty())
-                .unwrap_or_else(|| default_model(cli_id).to_string());
-            return Some(CliChoice {
-                cli_id,
-                program: cli_id.to_string(),
-                model,
-            });
+        match probe(cli_id) {
+            providers::CliProbe::Found(raw) => {
+                if cli_id == "claude" {
+                    let Some(found) = numeric_version(&raw) else {
+                        unsupported = Some(UnsupportedCli {
+                            cli_id,
+                            installed_version: None,
+                            minimum_version: CLAUDE_MIN_VERSION,
+                            reason: UnsupportedReason::UnrecognizedVersion,
+                        });
+                        continue;
+                    };
+                    let minimum =
+                        numeric_version(CLAUDE_MIN_VERSION).expect("valid Claude minimum version");
+                    if found < minimum {
+                        unsupported = Some(UnsupportedCli {
+                            cli_id,
+                            installed_version: Some(found.canonical()),
+                            minimum_version: CLAUDE_MIN_VERSION,
+                            reason: UnsupportedReason::TooOld,
+                        });
+                        continue;
+                    }
+                }
+                let model = learn
+                    .model
+                    .clone()
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| default_model(cli_id).to_string());
+                return Selection::Chosen(CliChoice {
+                    cli_id,
+                    program: cli_id.to_string(),
+                    model,
+                });
+            }
+            providers::CliProbe::TimedOut if cli_id == "claude" => {
+                unsupported = Some(UnsupportedCli {
+                    cli_id,
+                    installed_version: None,
+                    minimum_version: CLAUDE_MIN_VERSION,
+                    reason: UnsupportedReason::ProbeTimedOut,
+                });
+            }
+            providers::CliProbe::Missing | providers::CliProbe::TimedOut => {}
         }
     }
-    None
+    unsupported.map_or(Selection::None, Selection::Unsupported)
 }
 
 /// Default cheap model per CLI when `learn.model` is unset. Empty string means
@@ -207,12 +343,16 @@ fn invoke_claude(
     work_dir: &Path,
     deadline: Duration,
 ) -> Result<InvokeOut> {
+    let schema = serde_json::to_string(&crate::learn::extract::output_json_schema())
+        .context("serializing Claude output schema")?;
     let mut cmd = base_command(&choice.program, work_dir);
     cmd.arg("-p")
         .arg("--safe-mode")
         .arg("--no-session-persistence")
         .arg("--output-format")
         .arg("json")
+        .arg("--json-schema")
+        .arg(schema)
         .arg("--tools")
         .arg(""); // disable ALL built-in tools
     push_model(&mut cmd, "--model", &choice.model);
@@ -231,11 +371,13 @@ fn invoke_claude(
             .unwrap_or("(no result field)");
         bail!("claude reported an error result: {msg}");
     }
-    let text = value
-        .get("result")
-        .and_then(|r| r.as_str())
-        .ok_or_else(|| anyhow!("claude JSON is missing a string `result` field"))?
-        .to_string();
+    let structured = value
+        .get("structured_output")
+        .filter(|output| output.is_object())
+        .ok_or_else(|| {
+            anyhow!("claude JSON is missing an object-valued `structured_output` field")
+        })?;
+    let text = serde_json::to_string(structured).context("serializing Claude structured output")?;
     let usage = value.get("usage").map(|u| u.to_string());
     Ok(InvokeOut { text, usage })
 }
@@ -361,7 +503,12 @@ mod tests {
 
     #[test]
     fn select_prefers_claude_when_all_available() {
-        let choice = select_with(&learn(None, None), |_| true).unwrap();
+        let selection = select_with(&learn(None, None), |_| {
+            providers::CliProbe::Found("claude 2.1.211".to_string())
+        });
+        let Selection::Chosen(choice) = selection else {
+            panic!("expected supported Claude to be selected");
+        };
         assert_eq!(choice.cli_id, "claude");
         assert_eq!(choice.program, "claude");
         assert_eq!(choice.model, "haiku");
@@ -369,7 +516,14 @@ mod tests {
 
     #[test]
     fn select_skips_missing_and_falls_to_codex() {
-        let choice = select_with(&learn(None, None), |p| p != "claude").unwrap();
+        let selection = select_with(&learn(None, None), |program| match program {
+            "claude" => providers::CliProbe::Missing,
+            "codex" => providers::CliProbe::Found("codex-cli 0.144.4".to_string()),
+            _ => providers::CliProbe::Missing,
+        });
+        let Selection::Chosen(choice) = selection else {
+            panic!("expected Codex fallback");
+        };
         assert_eq!(choice.cli_id, "codex");
         // codex uses its configured default: empty model, `-m` omitted.
         assert_eq!(choice.model, "");
@@ -377,20 +531,33 @@ mod tests {
 
     #[test]
     fn select_falls_through_to_gemini() {
-        let choice = select_with(&learn(None, None), |p| p == "gemini").unwrap();
+        let selection = select_with(&learn(None, None), |program| match program {
+            "gemini" => providers::CliProbe::Found("0.45.2".to_string()),
+            _ => providers::CliProbe::Missing,
+        });
+        let Selection::Chosen(choice) = selection else {
+            panic!("expected Gemini fallback");
+        };
         assert_eq!(choice.cli_id, "gemini");
         assert_eq!(choice.model, "gemini-2.5-flash");
     }
 
     #[test]
     fn select_returns_none_when_nothing_installed() {
-        assert!(select_with(&learn(None, None), |_| false).is_none());
+        assert!(matches!(
+            select_with(&learn(None, None), |_| providers::CliProbe::Missing),
+            Selection::None
+        ));
     }
 
     #[test]
     fn select_pin_wins_over_probe_order() {
-        // codex is pinned even though claude is also available.
-        let choice = select_with(&learn(Some("codex"), None), |_| true).unwrap();
+        let selection = select_with(&learn(Some("codex"), None), |_| {
+            providers::CliProbe::Found("codex-cli 0.144.4".to_string())
+        });
+        let Selection::Chosen(choice) = selection else {
+            panic!("expected pinned Codex");
+        };
         assert_eq!(choice.cli_id, "codex");
     }
 
@@ -398,20 +565,106 @@ mod tests {
     fn select_pin_does_not_fall_back_when_pinned_cli_missing() {
         // Pinned gemini is not installed; claude/codex are — but a pin means
         // "this CLI or nothing", so there is no fallback.
-        let choice = select_with(&learn(Some("gemini"), None), |p| p != "gemini");
-        assert!(choice.is_none());
+        let selection = select_with(&learn(Some("gemini"), None), |_| {
+            providers::CliProbe::Missing
+        });
+        assert!(matches!(selection, Selection::None));
     }
 
     #[test]
     fn select_unknown_pin_yields_none() {
-        assert!(select_with(&learn(Some("nope"), None), |_| true).is_none());
+        assert!(matches!(
+            select_with(&learn(Some("nope"), None), |_| {
+                providers::CliProbe::Found("9.9.9".to_string())
+            }),
+            Selection::None
+        ));
     }
 
     #[test]
     fn select_model_pin_overrides_per_cli_default() {
-        let choice = select_with(&learn(None, Some("opus")), |_| true).unwrap();
+        let selection = select_with(&learn(None, Some("opus")), |_| {
+            providers::CliProbe::Found("claude 2.1.211".to_string())
+        });
+        let Selection::Chosen(choice) = selection else {
+            panic!("expected supported Claude");
+        };
         assert_eq!(choice.cli_id, "claude");
         assert_eq!(choice.model, "opus");
+    }
+
+    #[test]
+    fn numeric_versions_compare_components_not_lexically() {
+        assert!(numeric_version("claude 2.1.99").unwrap() < numeric_version("2.1.211").unwrap());
+        assert_eq!(
+            numeric_version("2.1").unwrap(),
+            numeric_version("2.1.0").unwrap()
+        );
+    }
+
+    #[test]
+    fn prerelease_is_below_the_matching_release() {
+        assert!(
+            numeric_version("claude 2.1.211-beta.1").unwrap() < numeric_version("2.1.211").unwrap()
+        );
+    }
+
+    #[test]
+    fn unknown_version_suffix_fails_closed() {
+        assert!(numeric_version("claude 2.1.211-custom").is_none());
+        assert!(numeric_version("claude 2.1.211+local").is_none());
+    }
+
+    #[test]
+    fn pinned_old_claude_is_reported_unsupported() {
+        let selection = select_with(&learn(Some("claude"), None), |_| {
+            providers::CliProbe::Found("claude 2.1.210".to_string())
+        });
+        let Selection::Unsupported(unsupported) = selection else {
+            panic!("expected unsupported Claude");
+        };
+        assert_eq!(unsupported.cli_id, "claude");
+        assert_eq!(unsupported.installed_version.as_deref(), Some("2.1.210"));
+        assert_eq!(unsupported.minimum_version, CLAUDE_MIN_VERSION);
+        assert_eq!(unsupported.reason, UnsupportedReason::TooOld);
+    }
+
+    #[test]
+    fn unpinned_old_claude_falls_back_to_codex() {
+        let selection = select_with(&learn(None, None), |program| match program {
+            "claude" => providers::CliProbe::Found("claude 2.1.210".to_string()),
+            "codex" => providers::CliProbe::Found("codex-cli 0.144.4".to_string()),
+            _ => providers::CliProbe::Missing,
+        });
+        let Selection::Chosen(choice) = selection else {
+            panic!("expected Codex fallback");
+        };
+        assert_eq!(choice.cli_id, "codex");
+    }
+
+    #[test]
+    fn unknown_claude_version_falls_back_but_is_reported_when_alone() {
+        let selection = select_with(&learn(None, None), |program| match program {
+            "claude" => providers::CliProbe::Found("claude 2.1.211-custom".to_string()),
+            _ => providers::CliProbe::Missing,
+        });
+        let Selection::Unsupported(unsupported) = selection else {
+            panic!("expected unsupported Claude");
+        };
+        assert_eq!(unsupported.installed_version, None);
+        assert_eq!(unsupported.reason, UnsupportedReason::UnrecognizedVersion);
+    }
+
+    #[test]
+    fn timed_out_claude_probe_falls_back_but_is_reported_when_alone() {
+        let selection = select_with(&learn(None, None), |program| match program {
+            "claude" => providers::CliProbe::TimedOut,
+            _ => providers::CliProbe::Missing,
+        });
+        let Selection::Unsupported(unsupported) = selection else {
+            panic!("expected timed-out Claude to be reported");
+        };
+        assert_eq!(unsupported.reason, UnsupportedReason::ProbeTimedOut);
     }
 
     // --- invoke: per-CLI flags, env guard, stdin, unwrap (stub-driven) -------
@@ -454,7 +707,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn invoke_claude_flags_env_stdin_and_result_unwrap() {
+    fn invoke_claude_flags_env_stdin_and_structured_output_unwrap() {
         let bin = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();
         let stub = write_stub(
@@ -463,7 +716,7 @@ mod tests {
             &format!(
                 "{DUMP_PROLOGUE}\
                  cat <<'JSON'\n\
-                 {{\"type\":\"result\",\"is_error\":false,\"result\":\"CLAUDE-OUTPUT\",\"usage\":{{\"input_tokens\":5}}}}\n\
+                 {{\"type\":\"result\",\"is_error\":false,\"result\":\"MISLEADING PROSE\",\"structured_output\":{{\"candidates\":[]}},\"usage\":{{\"input_tokens\":5}}}}\n\
                  JSON\n"
             ),
         );
@@ -475,7 +728,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(out.text, "CLAUDE-OUTPUT");
+        assert_eq!(out.text, r#"{"candidates":[]}"#);
         assert_eq!(out.usage.as_deref(), Some(r#"{"input_tokens":5}"#));
 
         let argv = dumped_lines(work.path(), "argv.txt");
@@ -485,6 +738,7 @@ mod tests {
             "--no-session-persistence",
             "--output-format",
             "json",
+            "--json-schema",
             "--tools",
             "--model",
             "haiku",
@@ -500,6 +754,12 @@ mod tests {
             argv[tools_idx + 1],
             "",
             "--tools must be followed by an empty arg"
+        );
+        let schema_idx = argv.iter().position(|a| a == "--json-schema").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&argv[schema_idx + 1]).unwrap(),
+            crate::learn::extract::output_json_schema(),
+            "Claude must receive the exact extraction schema"
         );
         // Recursion guard set, prompt delivered on stdin.
         assert_eq!(
@@ -535,6 +795,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("Not logged in"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invoke_claude_never_falls_back_to_result() {
+        let bin = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let stub = write_stub(
+            bin.path(),
+            "claude",
+            &format!(
+                "{DUMP_PROLOGUE}\
+                 cat <<'JSON'\n\
+                 {{\"is_error\":false,\"result\":\"{{\\\"candidates\\\":[]}}\"}}\n\
+                 JSON\n"
+            ),
+        );
+        let err = invoke(
+            &choice("claude", &stub, "haiku"),
+            "p",
+            work.path(),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("structured_output"), "{err}");
     }
 
     #[cfg(unix)]
