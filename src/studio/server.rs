@@ -2655,6 +2655,21 @@ mod tests {
         writeln!(f, "{line}").unwrap();
     }
 
+    /// Append one caller-shaped run-log line so history-route tests can cover
+    /// compatibility with older and foreign writers without changing the
+    /// production worker serializer.
+    fn seed_raw_log_line(repo: &std::path::Path, line: &serde_json::Value) {
+        let dir = repo.join("learn");
+        std::fs::create_dir_all(&dir).unwrap();
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("log.jsonl"))
+            .unwrap();
+        writeln!(f, "{line}").unwrap();
+    }
+
     /// Seed one recents entry + a marker-bearing artifact file inside the
     /// fixture repo; returns the entry's route id. The `detail` map matches
     /// the production shape `record_render` writes in
@@ -5122,6 +5137,155 @@ mod tests {
             "token usage must surface for spend audit: {body}"
         );
         assert!(body.contains("1200ms"), "run duration must surface: {body}");
+    }
+
+    #[test]
+    fn inbox_history_shows_safe_diagnostic_below_run_metadata() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_raw_log_line(
+            d.path(),
+            &serde_json::json!({
+                "ts": "2026-07-10T10:00:00Z",
+                "trigger": "manual",
+                "cli": "claude",
+                "sessions": 1,
+                "candidates": 0,
+                "outcome": "failed",
+                "error_stage": "cli_output",
+                "error_code": "cli_rate_limited",
+                "error": "The provider rate-limited the harvest request."
+            }),
+        );
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("class=\"log-diagnostic\""),
+            "diagnostic line must render: {body}"
+        );
+        assert!(
+            body.contains("cli_output/cli_rate_limited</span> — The provider rate-limited"),
+            "stage/code label must render: {body}"
+        );
+        assert!(
+            body.contains("The provider rate-limited the harvest request."),
+            "safe message must render: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_history_without_diagnostic_fields_keeps_existing_compact_row() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_log_line(d.path(), "extracted", "claude", 3);
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(body.contains("3 sessions"), "run remains visible: {body}");
+        assert!(
+            !body.contains("log-diagnostic"),
+            "a run without diagnostic fields must not gain an empty line: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_history_keeps_line_when_diagnostic_fields_are_non_strings() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_raw_log_line(
+            d.path(),
+            &serde_json::json!({
+                "ts": "2026-07-10T10:00:00Z",
+                "trigger": "manual",
+                "cli": "claude",
+                "sessions": 7,
+                "candidates": 0,
+                "outcome": "failed",
+                "error_stage": {"foreign": true},
+                "error_code": 42,
+                "error": ["not", "text"]
+            }),
+        );
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("failed"),
+            "failed run remains visible: {body}"
+        );
+        assert!(
+            body.contains("7 sessions"),
+            "lenient diagnostic parsing must not drop the run: {body}"
+        );
+        assert!(
+            !body.contains("log-diagnostic"),
+            "foreign non-string fields are ignored rather than rendered: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_history_escapes_diagnostic_html() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_raw_log_line(
+            d.path(),
+            &serde_json::json!({
+                "ts": "2026-07-10T10:00:00Z",
+                "trigger": "manual",
+                "sessions": 1,
+                "candidates": 0,
+                "outcome": "failed",
+                "error": "<img src=x onerror=alert(1)>"
+            }),
+        );
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("&lt;img src=x onerror=alert(1)&gt;"),
+            "diagnostic text must be HTML-escaped: {body}"
+        );
+        assert!(
+            !body.contains("<img src=x onerror=alert(1)>"),
+            "raw diagnostic HTML must never reach Studio: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_history_caps_legacy_error_at_512_unicode_scalars() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let legacy_error = "α".repeat(600);
+        seed_raw_log_line(
+            d.path(),
+            &serde_json::json!({
+                "ts": "2026-07-10T10:00:00Z",
+                "trigger": "manual",
+                "sessions": 1,
+                "candidates": 0,
+                "outcome": "failed",
+                "error": legacy_error
+            }),
+        );
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+        ));
+        assert_eq!(
+            body.chars().filter(|c| *c == 'α').count(),
+            512,
+            "legacy error display must be capped by Unicode scalar count"
+        );
     }
 
     /// Editing a claim before promote keeps the disposition keyed to the

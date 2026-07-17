@@ -80,6 +80,9 @@ const MAX_QUOTES: usize = 5;
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
     pub outcome: Outcome,
+    /// Privacy-safe reason for an actionable terminal outcome, when one is
+    /// available. The run log is derived from this same closed value.
+    pub diagnostic: Option<HarvestDiagnostic>,
     /// `"manual"` or `"ambient"`.
     pub trigger: &'static str,
     pub cli: Option<String>,
@@ -95,6 +98,99 @@ pub struct RunOutcome {
     pub duration_ms: u128,
     /// Per-store skip reasons surfaced from the scan (contract C9).
     pub skipped: Vec<String>,
+}
+
+/// Closed, privacy-safe explanation for an actionable harvest outcome.
+///
+/// No variant accepts provider output, transcript content, paths, or an
+/// arbitrary error string. Messages and wire codes are derived exclusively
+/// from this enum and the already-sanitized provider/parser failure types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HarvestDiagnostic {
+    RunDeadlineExceeded,
+    UnsupportedCli(agent_cli::UnsupportedCli),
+    WatermarkStoreCorrupt,
+    StaleLockReclaimed,
+    SpendStampWriteFailed {
+        io_kind: std::io::ErrorKind,
+        os_error: Option<i32>,
+    },
+    Invoke(agent_cli::InvokeFailure),
+    Parse(extract::ParseFailure),
+    JournalAppendFailed {
+        io_kind: std::io::ErrorKind,
+        os_error: Option<i32>,
+    },
+}
+
+impl HarvestDiagnostic {
+    pub fn stage(&self) -> &'static str {
+        match self {
+            Self::RunDeadlineExceeded
+            | Self::UnsupportedCli(_)
+            | Self::WatermarkStoreCorrupt
+            | Self::StaleLockReclaimed => "preflight",
+            Self::SpendStampWriteFailed { .. } => "spend_guard",
+            Self::Invoke(failure) => failure.stage(),
+            Self::Parse(_) => "validate_output",
+            Self::JournalAppendFailed { .. } => "persist_journal",
+        }
+    }
+
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::RunDeadlineExceeded => "run_deadline_exceeded",
+            Self::UnsupportedCli(_) => "claude_structured_output_unsupported",
+            Self::WatermarkStoreCorrupt => "watermark_store_corrupt",
+            Self::StaleLockReclaimed => "stale_lock_reclaimed",
+            Self::SpendStampWriteFailed { .. } => "spend_stamp_write_failed",
+            Self::Invoke(failure) => failure.code(),
+            Self::Parse(failure) => failure.code(),
+            Self::JournalAppendFailed { .. } => "journal_append_failed",
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::RunDeadlineExceeded => {
+                "The harvest run exceeded its deadline before extraction started.".to_string()
+            }
+            Self::UnsupportedCli(unsupported) => match (
+                unsupported.reason,
+                unsupported.installed_version.as_deref(),
+            ) {
+                (agent_cli::UnsupportedReason::TooOld, Some(installed)) => format!(
+                    "Claude Code {installed} cannot provide the required structured output. Upgrade to {} or newer.",
+                    unsupported.minimum_version
+                ),
+                (agent_cli::UnsupportedReason::ProbeTimedOut, _) => format!(
+                    "Loadout could not verify Claude Code's version. Upgrade to {} or newer, then run `load harvest` again.",
+                    unsupported.minimum_version
+                ),
+                _ => format!(
+                    "Loadout could not verify that Claude Code supports structured output. Upgrade to {} or newer.",
+                    unsupported.minimum_version
+                ),
+            },
+            Self::WatermarkStoreCorrupt => {
+                "The learning watermark store is corrupt. Run `load learn reset` to re-baseline it."
+                    .to_string()
+            }
+            Self::StaleLockReclaimed => {
+                "Loadout reclaimed a stale harvest lock left by an interrupted run.".to_string()
+            }
+            Self::SpendStampWriteFailed { .. } => {
+                "Loadout could not write the harvest spend stamp. Check permissions and available disk space, then run `load harvest` again."
+                    .to_string()
+            }
+            Self::Invoke(failure) => failure.message().to_string(),
+            Self::Parse(failure) => failure.message().to_string(),
+            Self::JournalAppendFailed { .. } => {
+                "Loadout could not append extracted candidates to the learning journal. Check permissions and available disk space."
+                    .to_string()
+            }
+        }
+    }
 }
 
 /// The terminal state of a run.
@@ -115,6 +211,9 @@ pub enum Outcome {
     /// Eligible content exists but no extraction CLI is installed; nothing
     /// spent, nothing advanced (retry once a CLI appears).
     NoCli,
+    /// Claude is installed but cannot satisfy harvest's required structured
+    /// output contract. Nothing was spent and the failure breaker is unchanged.
+    UnsupportedCli,
     /// The watermark store is corrupt; run refused, `load learn reset` needed.
     Corrupt,
     /// The extraction call failed to spawn or produced unusable/malformed
@@ -135,6 +234,7 @@ impl Outcome {
             Outcome::Throttled => "throttled",
             Outcome::Empty => "empty",
             Outcome::NoCli => "no_cli",
+            Outcome::UnsupportedCli => "unsupported_cli",
             Outcome::Corrupt => "corrupt_watermarks",
             Outcome::Failed => "failed",
             Outcome::Deadline => "deadline_exceeded",
@@ -153,13 +253,22 @@ trait Extractor {
         prompt: &str,
         work_dir: &Path,
         deadline: Duration,
-    ) -> Result<agent_cli::InvokeOut>;
+    ) -> Result<agent_cli::InvokeOut, agent_cli::InvokeFailure>;
 }
 
 /// The production extractor: a resolved [`agent_cli::CliChoice`] invoked via
 /// [`agent_cli::invoke`] (one bounded, hygiene-flagged agent-CLI spawn).
 struct RealExtractor {
     choice: agent_cli::CliChoice,
+}
+
+/// Worker-facing projection of [`agent_cli::Selection`]. Keeping the
+/// unsupported case distinct prevents production from silently treating an
+/// installed-but-incompatible Claude as though no CLI were installed.
+enum WorkerSelection<'a> {
+    Chosen(&'a dyn Extractor),
+    Unsupported(agent_cli::UnsupportedCli),
+    None,
 }
 
 impl RealExtractor {
@@ -180,7 +289,7 @@ impl Extractor for RealExtractor {
         prompt: &str,
         work_dir: &Path,
         deadline: Duration,
-    ) -> Result<agent_cli::InvokeOut> {
+    ) -> Result<agent_cli::InvokeOut, agent_cli::InvokeFailure> {
         agent_cli::invoke(&self.choice, prompt, work_dir, deadline)
     }
 }
@@ -280,24 +389,44 @@ pub fn run_harvest(cfg: &Config, manual: bool) -> Result<RunOutcome> {
         home,
     };
 
-    let extractor = agent_cli::select(&cfg.learn).map(RealExtractor::new);
-    run_harvest_ctx(&ctx, extractor.as_ref().map(|e| e as &dyn Extractor))
+    match agent_cli::select(&cfg.learn) {
+        agent_cli::Selection::Chosen(choice) => {
+            let extractor = RealExtractor::new(choice);
+            run_harvest_ctx(&ctx, WorkerSelection::Chosen(&extractor))
+        }
+        agent_cli::Selection::Unsupported(unsupported) => {
+            run_harvest_ctx(&ctx, WorkerSelection::Unsupported(unsupported))
+        }
+        agent_cli::Selection::None => run_harvest_ctx(&ctx, WorkerSelection::None),
+    }
 }
 
 /// Step 1 (lock) + dispatch to the fenced body. A `Busy` lock exits quietly; a
 /// `Reclaimed` stale lock counts as one failure, recorded immediately (C7),
 /// then proceeds. The guard is released after the body regardless of outcome
 /// ([`lock::LockGuard::release`] no-ops if the token went foreign).
-fn run_harvest_ctx(ctx: &Ctx, extractor: Option<&dyn Extractor>) -> Result<RunOutcome> {
-    let guard = match lock::acquire_at(&ctx.learn_dir, DEADLINE, ctx.now_unix())? {
+fn run_harvest_ctx(ctx: &Ctx, selection: WorkerSelection<'_>) -> Result<RunOutcome> {
+    let (guard, reclaimed) = match lock::acquire_at(&ctx.learn_dir, DEADLINE, ctx.now_unix())? {
         lock::Acquire::Busy => return Ok(empty_outcome(ctx, Outcome::Busy)),
-        lock::Acquire::Held(g) => g,
-        lock::Acquire::Reclaimed(g) => {
-            state::record_failure_at(&ctx.learn_dir);
-            g
-        }
+        lock::Acquire::Held(g) => (g, false),
+        lock::Acquire::Reclaimed(g) => (g, true),
     };
-    let outcome = run_body(ctx, &guard, extractor);
+
+    // Reclamation is an observed failure of the previous holder, not this
+    // continuation. Record it as its own fenced audit line before doing any
+    // further work, so a later empty result cannot hide the breaker reason.
+    if reclaimed {
+        if !guard.still_held() {
+            return Ok(empty_outcome(ctx, Outcome::Fenced));
+        }
+        let diagnostic = HarvestDiagnostic::StaleLockReclaimed;
+        state::record_failure_at(&ctx.learn_dir);
+        let mut fields = LogFields::new(ctx, Outcome::Failed, Duration::ZERO);
+        fields.diagnostic = Some(diagnostic);
+        log_run(ctx, &fields);
+    }
+
+    let outcome = run_body(ctx, &guard, selection);
     guard.release();
     outcome
 }
@@ -307,7 +436,7 @@ fn run_harvest_ctx(ctx: &Ctx, extractor: Option<&dyn Extractor>) -> Result<RunOu
 fn run_body(
     ctx: &Ctx,
     guard: &lock::LockGuard,
-    extractor: Option<&dyn Extractor>,
+    selection: WorkerSelection<'_>,
 ) -> Result<RunOutcome> {
     let start = Instant::now();
 
@@ -365,12 +494,18 @@ fn run_body(
             "learning watermark store is corrupt — run `load learn reset` to re-baseline \
              (it harvests forward only, never re-mines old sessions)"
         );
-        if !guard.still_held() {
-            return Ok(empty_outcome(ctx, Outcome::Fenced));
-        }
-        state::record_failure_at(&ctx.learn_dir);
-        log_run(ctx, &LogFields::new(ctx, Outcome::Corrupt, start.elapsed()));
-        return Ok(empty_outcome(ctx, Outcome::Corrupt));
+        let diagnostic = HarvestDiagnostic::WatermarkStoreCorrupt;
+        return Ok(terminal_failure(
+            ctx,
+            guard,
+            start,
+            Outcome::Corrupt,
+            diagnostic,
+            None,
+            None,
+            None,
+            Vec::new(),
+        ));
     }
     // Fix the 14-day age-cutoff baseline on the first ever run (idempotent;
     // `load learn on` may also set it — same value, no conflict). Only
@@ -427,27 +562,67 @@ fn run_body(
         return Ok(empty_outcome(ctx, Outcome::Fenced));
     }
     if start.elapsed() >= DEADLINE {
-        state::record_failure_at(&ctx.learn_dir);
-        log_run(
+        return Ok(terminal_failure(
             ctx,
-            &LogFields::new(ctx, Outcome::Deadline, start.elapsed()),
-        );
-        return Ok(empty_outcome(ctx, Outcome::Deadline));
+            guard,
+            start,
+            Outcome::Deadline,
+            HarvestDiagnostic::RunDeadlineExceeded,
+            None,
+            Some(&assembled),
+            None,
+            skipped,
+        ));
     }
 
-    let Some(extractor) = extractor else {
-        // Content exists but no CLI is installed: nothing to spend, nothing to
-        // advance — a future run (once a CLI appears) can still harvest it.
-        let mut fields = LogFields::new(ctx, Outcome::NoCli, start.elapsed());
-        fields.sessions = assembled.slices.len();
-        fields.dropped_over_cap = assembled.dropped_over_cap;
-        fields.skipped = skipped.clone();
-        log_run(ctx, &fields);
-        let mut out = empty_outcome(ctx, Outcome::NoCli);
-        out.sessions = assembled.slices.len();
-        out.dropped_over_cap = assembled.dropped_over_cap;
-        out.skipped = skipped;
-        return Ok(out);
+    let extractor = match selection {
+        WorkerSelection::Chosen(extractor) => extractor,
+        WorkerSelection::Unsupported(unsupported) => {
+            // This is actionable but not a breaker failure: compatibility was
+            // rejected before the spend stamp and no extraction was attempted.
+            if !guard.still_held() {
+                return Ok(empty_outcome(ctx, Outcome::Fenced));
+            }
+            let cli = unsupported.cli_id.to_string();
+            let diagnostic = HarvestDiagnostic::UnsupportedCli(unsupported);
+            let mut fields = LogFields::new(ctx, Outcome::UnsupportedCli, start.elapsed());
+            fields.cli = Some(cli.clone());
+            fields.sessions = assembled.slices.len();
+            fields.dropped_over_cap = assembled.dropped_over_cap;
+            fields.skipped = skipped.clone();
+            fields.diagnostic = Some(diagnostic.clone());
+            log_run(ctx, &fields);
+            return Ok(RunOutcome {
+                outcome: Outcome::UnsupportedCli,
+                diagnostic: Some(diagnostic),
+                trigger: ctx.trigger,
+                cli: Some(cli),
+                model: None,
+                sessions: assembled.slices.len(),
+                candidates: 0,
+                quarantined: 0,
+                dropped_over_cap: assembled.dropped_over_cap,
+                duration_ms: start.elapsed().as_millis(),
+                skipped,
+            });
+        }
+        WorkerSelection::None => {
+            // Content exists but no CLI is installed: nothing to spend,
+            // nothing to advance — a future run can still harvest it.
+            if !guard.still_held() {
+                return Ok(empty_outcome(ctx, Outcome::Fenced));
+            }
+            let mut fields = LogFields::new(ctx, Outcome::NoCli, start.elapsed());
+            fields.sessions = assembled.slices.len();
+            fields.dropped_over_cap = assembled.dropped_over_cap;
+            fields.skipped = skipped.clone();
+            log_run(ctx, &fields);
+            let mut out = empty_outcome(ctx, Outcome::NoCli);
+            out.sessions = assembled.slices.len();
+            out.dropped_over_cap = assembled.dropped_over_cap;
+            out.skipped = skipped;
+            return Ok(out);
+        }
     };
 
     // Build the prompt (free) and ensure the work dir exists BEFORE writing the
@@ -467,22 +642,23 @@ fn run_body(
     // to the interval throttle, which would then re-spend on every tick — the
     // exact crash-loop cost the stamp exists to cap. A failed write therefore
     // aborts the run as a failure, making zero calls.
-    if let Err(e) = state::write_stamp(&ctx.spend_stamp) {
-        crate::warn_user!(
-            "learning: could not write the spend stamp ({e}); aborting before the extraction call"
-        );
-        if guard.still_held() {
-            state::record_failure_at(&ctx.learn_dir);
-            let mut fields = LogFields::new(ctx, Outcome::Failed, start.elapsed());
-            fields.cli = Some(extractor.cli_id().to_string());
-            fields.model = Some(extractor.model().to_string());
-            fields.sessions = assembled.slices.len();
-            fields.dropped_over_cap = assembled.dropped_over_cap;
-            fields.error = Some(format!("spend stamp write failed: {e}"));
-            fields.skipped = skipped.clone();
-            log_run(ctx, &fields);
-        }
-        return Ok(failed_outcome(ctx, extractor, &assembled, skipped));
+    if let Err(error) = state::write_stamp(&ctx.spend_stamp) {
+        let diagnostic = HarvestDiagnostic::SpendStampWriteFailed {
+            io_kind: error.kind(),
+            os_error: error.raw_os_error(),
+        };
+        crate::warn_user!("learning: {}", diagnostic.message());
+        return Ok(terminal_failure(
+            ctx,
+            guard,
+            start,
+            Outcome::Failed,
+            diagnostic,
+            Some(extractor),
+            Some(&assembled),
+            None,
+            skipped,
+        ));
     }
     if !guard.still_held() {
         return Ok(empty_outcome(ctx, Outcome::Fenced));
@@ -495,39 +671,42 @@ fn run_body(
     // --- Step 7: parse, gate, dedupe, fold, evidence ---------------------
     let out = match invoke {
         Ok(o) => o,
-        Err(e) => {
-            crate::warn_user!("learning extraction call failed: {e:#}");
-            state::record_failure_at(&ctx.learn_dir);
-            if guard.still_held() {
-                let mut fields = LogFields::new(ctx, Outcome::Failed, start.elapsed());
-                fields.cli = Some(extractor.cli_id().to_string());
-                fields.model = Some(extractor.model().to_string());
-                fields.sessions = assembled.slices.len();
-                fields.dropped_over_cap = assembled.dropped_over_cap;
-                fields.skipped = skipped.clone();
-                log_run(ctx, &fields);
-            }
-            return Ok(failed_outcome(ctx, extractor, &assembled, skipped));
+        Err(failure) => {
+            let usage = parse_usage(failure.usage.as_deref());
+            let diagnostic = HarvestDiagnostic::Invoke(failure);
+            crate::warn_user!("learning: {}", diagnostic.message());
+            return Ok(terminal_failure(
+                ctx,
+                guard,
+                start,
+                Outcome::Failed,
+                diagnostic,
+                Some(extractor),
+                Some(&assembled),
+                usage,
+                skipped,
+            ));
         }
     };
 
     let parsed = match extract::parse_output(&out.text) {
         Ok(p) => p,
-        Err(_) => {
+        Err(failure) => {
             // Malformed output: failed run. The spend stamp already burned the
             // tick — do NOT advance watermarks, do NOT write events.
-            state::record_failure_at(&ctx.learn_dir);
-            if guard.still_held() {
-                let mut fields = LogFields::new(ctx, Outcome::Failed, start.elapsed());
-                fields.cli = Some(extractor.cli_id().to_string());
-                fields.model = Some(extractor.model().to_string());
-                fields.sessions = assembled.slices.len();
-                fields.dropped_over_cap = assembled.dropped_over_cap;
-                fields.usage = parse_usage(out.usage.as_deref());
-                fields.skipped = skipped.clone();
-                log_run(ctx, &fields);
-            }
-            return Ok(failed_outcome(ctx, extractor, &assembled, skipped));
+            let diagnostic = HarvestDiagnostic::Parse(failure);
+            crate::warn_user!("learning: {}", diagnostic.message());
+            return Ok(terminal_failure(
+                ctx,
+                guard,
+                start,
+                Outcome::Failed,
+                diagnostic,
+                Some(extractor),
+                Some(&assembled),
+                parse_usage(out.usage.as_deref()),
+                skipped,
+            ));
         }
     };
 
@@ -642,23 +821,26 @@ fn run_body(
         return Ok(empty_outcome(ctx, Outcome::Fenced));
     }
     if !events.is_empty() {
-        if let Err(e) = journal::append_events_at(&ctx.inbox_dir, &ctx.machine_id, &events) {
+        if let Err(error) = journal::append_events_at(&ctx.inbox_dir, &ctx.machine_id, &events) {
             // The call already spent; a lost journal append must not also
             // advance the watermark (that would drop the content). Treat as a
             // failed run: log, record failure, do not advance.
-            crate::warn_user!("learning journal append failed: {e:#}");
-            state::record_failure_at(&ctx.learn_dir);
-            if guard.still_held() {
-                let mut fields = LogFields::new(ctx, Outcome::Failed, start.elapsed());
-                fields.cli = Some(extractor.cli_id().to_string());
-                fields.model = Some(extractor.model().to_string());
-                fields.sessions = assembled.slices.len();
-                fields.dropped_over_cap = assembled.dropped_over_cap;
-                fields.usage = parse_usage(out.usage.as_deref());
-                fields.skipped = skipped.clone();
-                log_run(ctx, &fields);
-            }
-            return Ok(failed_outcome(ctx, extractor, &assembled, skipped));
+            let diagnostic = HarvestDiagnostic::JournalAppendFailed {
+                io_kind: error.kind(),
+                os_error: error.raw_os_error(),
+            };
+            crate::warn_user!("learning: {}", diagnostic.message());
+            return Ok(terminal_failure(
+                ctx,
+                guard,
+                start,
+                Outcome::Failed,
+                diagnostic,
+                Some(extractor),
+                Some(&assembled),
+                parse_usage(out.usage.as_deref()),
+                skipped,
+            ));
         }
     }
     for (id, quotes) in &evidence {
@@ -718,6 +900,7 @@ fn run_body(
 
     Ok(RunOutcome {
         outcome: Outcome::Extracted,
+        diagnostic: None,
         trigger: ctx.trigger,
         cli: Some(extractor.cli_id().to_string()),
         model: Some(extractor.model().to_string()),
@@ -807,6 +990,7 @@ fn parse_usage(usage: Option<&str>) -> Option<serde_json::Value> {
 fn empty_outcome(ctx: &Ctx, outcome: Outcome) -> RunOutcome {
     RunOutcome {
         outcome,
+        diagnostic: None,
         trigger: ctx.trigger,
         cli: None,
         model: None,
@@ -819,24 +1003,49 @@ fn empty_outcome(ctx: &Ctx, outcome: Outcome) -> RunOutcome {
     }
 }
 
-/// A failed-run [`RunOutcome`] carrying the CLI/session counts (the tick was
-/// burned; nothing was journaled or advanced).
-fn failed_outcome(
+/// Record one terminal breaker failure. The fence check, counter update, log
+/// entry, duration, usage, and returned outcome are centralized here so they
+/// cannot disagree. If ownership was lost after spending, the spend stamp is
+/// deliberately the only durable evidence and this worker writes nothing.
+#[allow(clippy::too_many_arguments)]
+fn terminal_failure(
     ctx: &Ctx,
-    extractor: &dyn Extractor,
-    assembled: &slices::Assembled,
+    guard: &lock::LockGuard,
+    start: Instant,
+    outcome: Outcome,
+    diagnostic: HarvestDiagnostic,
+    extractor: Option<&dyn Extractor>,
+    assembled: Option<&slices::Assembled>,
+    usage: Option<serde_json::Value>,
     skipped: Vec<String>,
 ) -> RunOutcome {
+    if !guard.still_held() {
+        return empty_outcome(ctx, Outcome::Fenced);
+    }
+
+    state::record_failure_at(&ctx.learn_dir);
+    let elapsed = start.elapsed();
+    let mut fields = LogFields::new(ctx, outcome, elapsed);
+    fields.cli = extractor.map(|extractor| extractor.cli_id().to_string());
+    fields.model = extractor.map(|extractor| extractor.model().to_string());
+    fields.sessions = assembled.map_or(0, |assembled| assembled.slices.len());
+    fields.dropped_over_cap = assembled.map_or(0, |assembled| assembled.dropped_over_cap);
+    fields.usage = usage;
+    fields.skipped = skipped.clone();
+    fields.diagnostic = Some(diagnostic.clone());
+    log_run(ctx, &fields);
+
     RunOutcome {
-        outcome: Outcome::Failed,
+        outcome,
+        diagnostic: Some(diagnostic),
         trigger: ctx.trigger,
-        cli: Some(extractor.cli_id().to_string()),
-        model: Some(extractor.model().to_string()),
-        sessions: assembled.slices.len(),
+        cli: extractor.map(|extractor| extractor.cli_id().to_string()),
+        model: extractor.map(|extractor| extractor.model().to_string()),
+        sessions: assembled.map_or(0, |assembled| assembled.slices.len()),
         candidates: 0,
         quarantined: 0,
-        dropped_over_cap: assembled.dropped_over_cap,
-        duration_ms: 0,
+        dropped_over_cap: assembled.map_or(0, |assembled| assembled.dropped_over_cap),
+        duration_ms: elapsed.as_millis(),
         skipped,
     }
 }
@@ -854,7 +1063,7 @@ struct LogFields {
     duration_ms: u128,
     usage: Option<serde_json::Value>,
     skipped: Vec<String>,
-    error: Option<String>,
+    diagnostic: Option<HarvestDiagnostic>,
     ts: String,
 }
 
@@ -872,17 +1081,15 @@ impl LogFields {
             duration_ms: elapsed.as_millis(),
             usage: None,
             skipped: Vec::new(),
-            error: None,
+            diagnostic: None,
             ts: ctx.now_ts(),
         }
     }
 }
 
-/// One line of `state_dir/learn/log.jsonl`. Two fields are additive over the
-/// card's shape: `skipped` (contract C9 — per-store skip reasons the studio
-/// history panel can surface) and `error` (a short reason string on failed
-/// runs, e.g. a spend-stamp write failure; omitted from the wire when absent
-/// so ordinary entries keep the card's exact shape).
+/// One line of `state_dir/learn/log.jsonl`. Diagnostics are flattened to three
+/// optional strings so older readers ignore them and newer readers can consume
+/// the stage, stable code, and safe human message independently.
 #[derive(Serialize)]
 struct LogEntry<'a> {
     ts: &'a str,
@@ -898,12 +1105,17 @@ struct LogEntry<'a> {
     usage: Option<&'a serde_json::Value>,
     skipped: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
+    error_stage: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_code: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'a str>,
 }
 
 /// Append one run-log line (best-effort append, like `src/audit.rs`). The
 /// caller has already confirmed the fence still holds.
 fn log_run(ctx: &Ctx, f: &LogFields) {
+    let error = f.diagnostic.as_ref().map(HarvestDiagnostic::message);
     let entry = LogEntry {
         ts: &f.ts,
         trigger: f.trigger,
@@ -917,20 +1129,23 @@ fn log_run(ctx: &Ctx, f: &LogFields) {
         outcome: f.outcome.label(),
         usage: f.usage.as_ref(),
         skipped: &f.skipped,
-        error: f.error.as_deref(),
+        error_stage: f.diagnostic.as_ref().map(HarvestDiagnostic::stage),
+        error_code: f.diagnostic.as_ref().map(HarvestDiagnostic::code),
+        error: error.as_deref(),
     };
-    let Ok(line) = serde_json::to_string(&entry) else {
-        return;
+    let append = || -> std::io::Result<()> {
+        let line = serde_json::to_string(&entry).map_err(std::io::Error::other)?;
+        if let Some(parent) = ctx.log_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&ctx.log_path)?;
+        writeln!(file, "{line}")
     };
-    if let Some(parent) = ctx.log_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&ctx.log_path)
-    {
-        let _ = writeln!(file, "{line}");
+    if append().is_err() && (f.diagnostic.is_some() || matches!(f.outcome, Outcome::Extracted)) {
+        crate::warn_user!("learning: could not append the harvest run log");
     }
 }
 
@@ -967,6 +1182,14 @@ pub struct LogRecord {
     /// would instead REJECT the common object form and drop the whole log line.
     #[serde(default, deserialize_with = "de_usage_string")]
     pub usage: Option<String>,
+    /// Optional diagnostic fields. Each is parsed independently and leniently:
+    /// a foreign non-string value becomes `None` without dropping the line.
+    #[serde(default, deserialize_with = "de_optional_string")]
+    pub error_stage: Option<String>,
+    #[serde(default, deserialize_with = "de_optional_string")]
+    pub error_code: Option<String>,
+    #[serde(default, deserialize_with = "de_optional_string")]
+    pub error: Option<String>,
     pub outcome: String,
 }
 
@@ -985,6 +1208,14 @@ where
         serde_json::Value::String(s) => Some(s),
         other => Some(other.to_string()),
     }))
+}
+
+fn de_optional_string<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(value.and_then(|value| value.as_str().map(str::to_string)))
 }
 
 impl LogRecord {
@@ -1026,6 +1257,32 @@ pub fn latest_ambient_extraction(log_path: &Path) -> Option<LogRecord> {
         .find(|r| r.trigger == "ambient" && r.outcome == Outcome::Extracted.label())
 }
 
+/// Return the newest still-actionable breaker failure for this machine.
+///
+/// The consecutive-failure counter is authoritative: a reset makes all older
+/// log entries historical. While the counter is nonzero, scan backward only
+/// for outcomes that increment it and stop at a successful extraction. Empty,
+/// throttled, unsupported, and future unknown outcomes cannot hide a failure
+/// or accidentally become one.
+pub fn latest_unresolved_failure(learn_dir: &Path) -> Option<LogRecord> {
+    if state::consecutive_failures_at(learn_dir) == 0 {
+        return None;
+    }
+
+    for record in read_log(&learn_dir.join("log.jsonl")).into_iter().rev() {
+        if record.outcome == Outcome::Extracted.label() {
+            return None;
+        }
+        if matches!(
+            record.outcome.as_str(),
+            "failed" | "deadline_exceeded" | "corrupt_watermarks"
+        ) {
+            return Some(record);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1062,7 +1319,7 @@ mod tests {
             _prompt: &str,
             _work: &Path,
             _d: Duration,
-        ) -> Result<agent_cli::InvokeOut> {
+        ) -> Result<agent_cli::InvokeOut, agent_cli::InvokeFailure> {
             let n = self.calls.get();
             self.calls.set(n + 1);
             let text = self
@@ -1074,6 +1331,69 @@ mod tests {
                 text,
                 usage: Some(r#"{"input_tokens":10,"output_tokens":5}"#.to_string()),
             })
+        }
+    }
+
+    struct FailingExtractor {
+        failure: agent_cli::InvokeFailure,
+        calls: Cell<usize>,
+    }
+
+    struct FencingExtractor {
+        lock_path: PathBuf,
+        calls: Cell<usize>,
+    }
+
+    impl Extractor for FencingExtractor {
+        fn cli_id(&self) -> &str {
+            "claude"
+        }
+
+        fn model(&self) -> &str {
+            "haiku"
+        }
+
+        fn invoke(
+            &self,
+            _prompt: &str,
+            _work: &Path,
+            _d: Duration,
+        ) -> Result<agent_cli::InvokeOut, agent_cli::InvokeFailure> {
+            self.calls.set(self.calls.get() + 1);
+            let foreign =
+                r#"{"pid":999999,"started_at":1,"token":"ffffffffffffffffffffffffffffffff"}"#;
+            std::fs::write(&self.lock_path, foreign).unwrap();
+            Err(agent_cli::InvokeFailure {
+                provider: agent_cli::ProviderId::Claude,
+                kind: agent_cli::InvokeFailureKind::TimedOut,
+                exit_code: None,
+                signal: None,
+                stdout_bytes: 0,
+                stderr_bytes: 0,
+                io_kind: None,
+                os_error: None,
+                usage: None,
+            })
+        }
+    }
+
+    impl Extractor for FailingExtractor {
+        fn cli_id(&self) -> &str {
+            "claude"
+        }
+
+        fn model(&self) -> &str {
+            "haiku"
+        }
+
+        fn invoke(
+            &self,
+            _prompt: &str,
+            _work: &Path,
+            _d: Duration,
+        ) -> Result<agent_cli::InvokeOut, agent_cli::InvokeFailure> {
+            self.calls.set(self.calls.get() + 1);
+            Err(self.failure.clone())
         }
     }
 
@@ -1190,7 +1510,7 @@ mod tests {
         let stub = StubExtractor::new(&["unused"]);
         let guard = acquire(ctx);
 
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::Empty);
@@ -1206,6 +1526,27 @@ mod tests {
         assert_eq!(logs[0]["outcome"], "empty");
     }
 
+    #[test]
+    fn corrupt_watermarks_get_a_stable_preflight_diagnostic() {
+        let e = env(LearnScope::All, vec![]);
+        let ctx = &e.ctx;
+        std::fs::write(&ctx.watermarks_path, "not json").unwrap();
+        let guard = acquire(ctx);
+
+        let out = run_body(ctx, &guard, WorkerSelection::None).unwrap();
+        guard.release();
+
+        assert_eq!(out.outcome, Outcome::Corrupt);
+        assert_eq!(
+            out.diagnostic.as_ref().map(HarvestDiagnostic::code),
+            Some("watermark_store_corrupt")
+        );
+        assert_eq!(state::consecutive_failures_at(&ctx.learn_dir), 1);
+        let logs = log_lines(ctx);
+        assert_eq!(logs[0]["error_stage"], "preflight");
+        assert_eq!(logs[0]["error_code"], "watermark_store_corrupt");
+    }
+
     // --- ACCEPTANCE 2 + full cycle: valid extraction ----------------------
 
     #[test]
@@ -1217,9 +1558,10 @@ mod tests {
             "claude:sess-1",
             "Always use pnpm, never npm.",
         )]);
+        state::record_failure_at(&ctx.learn_dir);
         let guard = acquire(ctx);
 
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::Extracted);
@@ -1263,6 +1605,11 @@ mod tests {
         assert_eq!(logs[0]["candidates"], 1);
         assert_eq!(logs[0]["trigger"], "manual");
         assert!(logs[0]["usage"].is_object(), "usage blob recorded");
+        assert_eq!(state::consecutive_failures_at(&ctx.learn_dir), 0);
+        assert!(
+            latest_unresolved_failure(&ctx.learn_dir).is_none(),
+            "a later extraction clears the breaker"
+        );
     }
 
     // --- Fix N2: evidence quotes kept only for resolvable session_refs -----
@@ -1282,7 +1629,7 @@ mod tests {
         let response = r#"{"candidates":[{"claim":"Always use pnpm, never npm.","kind":"preference","evidence":[{"session_ref":"claude:sess-1","quote":"resolvable quote"},{"session_ref":"claude:ghost","quote":"unresolvable quote"}]}]}"#;
         let stub = StubExtractor::new(&[response]);
         let guard = acquire(ctx);
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::Extracted);
@@ -1306,14 +1653,19 @@ mod tests {
     fn malformed_output_writes_spend_stamp_but_no_marks_or_events() {
         let e = env(LearnScope::All, vec![]);
         let ctx = &e.ctx;
-        let src = write_claude_session(ctx, "sess-1", "Always use pnpm.");
-        let stub = StubExtractor::new(&["this is not valid json {"]);
+        let src = write_claude_session(ctx, "sess-1", "TRANSCRIPT_SENTINEL Always use pnpm.");
+        let sentinel = "RAW_MODEL_SENTINEL this is not valid json {";
+        let stub = StubExtractor::new(&[sentinel]);
         let guard = acquire(ctx);
 
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::Failed);
+        assert_eq!(
+            out.diagnostic.as_ref().map(HarvestDiagnostic::code),
+            Some("output_json_invalid")
+        );
         assert_eq!(
             stub.calls(),
             1,
@@ -1335,8 +1687,86 @@ mod tests {
         let logs = log_lines(ctx);
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0]["outcome"], "failed");
+        assert_eq!(logs[0]["error_stage"], "validate_output");
+        assert_eq!(logs[0]["error_code"], "output_json_invalid");
+        let raw_log = std::fs::read_to_string(&ctx.log_path).unwrap();
+        assert!(
+            !raw_log.contains("RAW_MODEL_SENTINEL"),
+            "raw model output must never enter log.jsonl: {raw_log}"
+        );
+        assert!(
+            !raw_log.contains("TRANSCRIPT_SENTINEL"),
+            "transcript text must never enter log.jsonl: {raw_log}"
+        );
         // One failure recorded → not yet paused.
         assert!(!state::paused_at(&ctx.learn_dir));
+    }
+
+    #[test]
+    fn invoke_failure_uses_one_diagnostic_for_outcome_log_and_counter() {
+        let e = env(LearnScope::All, vec![]);
+        let ctx = &e.ctx;
+        write_claude_session(ctx, "sess-1", "Always use pnpm.");
+        let stub = FailingExtractor {
+            failure: agent_cli::InvokeFailure {
+                provider: agent_cli::ProviderId::Claude,
+                kind: agent_cli::InvokeFailureKind::RateLimited,
+                exit_code: Some(1),
+                signal: None,
+                stdout_bytes: 123,
+                stderr_bytes: 45,
+                io_kind: None,
+                os_error: None,
+                usage: Some(r#"{"input_tokens":10}"#.to_string()),
+            },
+            calls: Cell::new(0),
+        };
+        let guard = acquire(ctx);
+
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(out.outcome, Outcome::Failed);
+        assert_eq!(stub.calls.get(), 1);
+        assert_eq!(
+            out.diagnostic.as_ref().map(HarvestDiagnostic::code),
+            Some("cli_rate_limited")
+        );
+        assert_eq!(state::consecutive_failures_at(&ctx.learn_dir), 1);
+        let logs = log_lines(ctx);
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["error_stage"], "cli_output");
+        assert_eq!(logs[0]["error_code"], "cli_rate_limited");
+        assert_eq!(logs[0]["usage"]["input_tokens"], 10);
+    }
+
+    #[test]
+    fn journal_append_failure_is_classified_without_advancing_watermarks() {
+        let mut e = env(LearnScope::All, vec![]);
+        let ctx = &mut e.ctx;
+        let src = write_claude_session(ctx, "sess-1", "Always use pnpm.");
+        std::fs::write(&ctx.inbox_dir, "not a directory").unwrap();
+        let stub = StubExtractor::new(&[valid_extraction("claude:sess-1", "Always use pnpm.")]);
+        let guard = acquire(ctx);
+
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(out.outcome, Outcome::Failed);
+        assert_eq!(
+            out.diagnostic.as_ref().map(HarvestDiagnostic::code),
+            Some("journal_append_failed")
+        );
+        assert_eq!(state::consecutive_failures_at(&ctx.learn_dir), 1);
+        assert!(
+            Watermarks::load_from(&ctx.watermarks_path)
+                .mark(&src.to_string_lossy())
+                .is_none(),
+            "a failed journal append must not advance the watermark"
+        );
+        let logs = log_lines(ctx);
+        assert_eq!(logs[0]["error_stage"], "persist_journal");
+        assert_eq!(logs[0]["error_code"], "journal_append_failed");
     }
 
     // --- money path: a spend-stamp write failure must not spend ------------
@@ -1357,7 +1787,7 @@ mod tests {
         let stub = StubExtractor::new(&[valid_extraction("claude:sess-1", "Always use pnpm.")]);
         let guard = acquire(ctx);
 
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::Failed);
@@ -1380,6 +1810,8 @@ mod tests {
         let logs = log_lines(ctx);
         assert_eq!(logs.len(), 1, "one attributable failure entry");
         assert_eq!(logs[0]["outcome"], "failed");
+        assert_eq!(logs[0]["error_stage"], "spend_guard");
+        assert_eq!(logs[0]["error_code"], "spend_stamp_write_failed");
         assert!(
             logs[0]["error"]
                 .as_str()
@@ -1410,7 +1842,7 @@ mod tests {
         plant_foreign_lock(ctx);
         assert!(!guard.still_held(), "the token is now foreign");
 
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
 
         assert_eq!(out.outcome, Outcome::Fenced);
         assert_eq!(stub.calls(), 0, "a fenced worker must not spawn the CLI");
@@ -1422,6 +1854,33 @@ mod tests {
             "a fenced-out worker writes no log"
         );
         assert!(!ctx.watermarks_path.exists(), "no watermark write");
+    }
+
+    #[test]
+    fn worker_fenced_after_spend_writes_no_failure_counter_or_log() {
+        let e = env(LearnScope::All, vec![]);
+        let ctx = &e.ctx;
+        write_claude_session(ctx, "sess-1", "Always use pnpm.");
+        let stub = FencingExtractor {
+            lock_path: ctx.learn_dir.join("lock.json"),
+            calls: Cell::new(0),
+        };
+        let guard = acquire(ctx);
+
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
+        guard.release();
+
+        assert_eq!(stub.calls.get(), 1);
+        assert_eq!(out.outcome, Outcome::Fenced);
+        assert!(
+            ctx.spend_stamp.exists(),
+            "the pre-call spend stamp remains the only durable spend evidence"
+        );
+        assert_eq!(state::consecutive_failures_at(&ctx.learn_dir), 0);
+        assert!(
+            log_lines(ctx).is_empty(),
+            "a post-spend worker that lost its fence must not append a competing log entry"
+        );
     }
 
     // --- C7: a reclaimed stale lock counts as one failure -----------------
@@ -1443,20 +1902,35 @@ mod tests {
         };
 
         plant_stale(ctx);
-        let out1 = run_harvest_ctx(ctx, None).unwrap();
+        let out1 = run_harvest_ctx(ctx, WorkerSelection::None).unwrap();
         assert_eq!(out1.outcome, Outcome::Empty);
+        let unresolved = latest_unresolved_failure(&ctx.learn_dir).unwrap();
+        assert_eq!(
+            unresolved.error_code.as_deref(),
+            Some("stale_lock_reclaimed")
+        );
         assert!(
             !state::paused_at(&ctx.learn_dir),
             "one reclaim → not yet paused"
         );
 
         plant_stale(ctx);
-        let out2 = run_harvest_ctx(ctx, None).unwrap();
+        let out2 = run_harvest_ctx(ctx, WorkerSelection::None).unwrap();
         assert_eq!(out2.outcome, Outcome::Empty);
         assert!(
             state::paused_at(&ctx.learn_dir),
             "a second reclaim → two failures → paused"
         );
+        let logs = log_lines(ctx);
+        assert_eq!(
+            logs.len(),
+            4,
+            "each reclaim is audited before its empty run"
+        );
+        assert_eq!(logs[0]["error_code"], "stale_lock_reclaimed");
+        assert_eq!(logs[1]["outcome"], "empty");
+        assert_eq!(logs[2]["error_code"], "stale_lock_reclaimed");
+        assert_eq!(logs[3]["outcome"], "empty");
     }
 
     // --- C8: a shrunk file advances the mark DOWN and is not re-harvested --
@@ -1476,7 +1950,7 @@ mod tests {
         let stub = StubExtractor::new(&[valid_extraction("claude:sess-1", "Always use pnpm.")]);
         {
             let guard = acquire(ctx);
-            let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+            let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
             guard.release();
             assert_eq!(out.outcome, Outcome::Extracted);
         }
@@ -1498,7 +1972,7 @@ mod tests {
         // to the new end via reset_file. The call is made (call #2).
         {
             let guard = acquire(ctx);
-            let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+            let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
             guard.release();
             assert_eq!(out.outcome, Outcome::Extracted);
         }
@@ -1514,7 +1988,7 @@ mod tests {
         // we kept the old (too-large) mark, run 3 would rewind and re-harvest.
         {
             let guard = acquire(ctx);
-            let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+            let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
             guard.release();
             assert_eq!(out.outcome, Outcome::Empty);
         }
@@ -1534,7 +2008,7 @@ mod tests {
         let src = write_claude_session(ctx, "sess-1", "Always use pnpm.");
         let guard = acquire(ctx);
 
-        let out = run_body(ctx, &guard, None).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::None).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::NoCli);
@@ -1547,6 +2021,45 @@ mod tests {
         let logs = log_lines(ctx);
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0]["outcome"], "no_cli");
+    }
+
+    #[test]
+    fn unsupported_cli_is_non_spending_and_does_not_increment_breaker() {
+        let e = env(LearnScope::All, vec![]);
+        let ctx = &e.ctx;
+        let src = write_claude_session(ctx, "sess-1", "Always use pnpm.");
+        let unsupported = agent_cli::UnsupportedCli {
+            cli_id: "claude",
+            installed_version: Some("2.1.205".to_string()),
+            minimum_version: agent_cli::CLAUDE_MIN_VERSION,
+            reason: agent_cli::UnsupportedReason::TooOld,
+        };
+        let guard = acquire(ctx);
+
+        let out = run_body(ctx, &guard, WorkerSelection::Unsupported(unsupported)).unwrap();
+        guard.release();
+
+        assert_eq!(out.outcome, Outcome::UnsupportedCli);
+        assert_eq!(
+            out.diagnostic.as_ref().map(HarvestDiagnostic::code),
+            Some("claude_structured_output_unsupported")
+        );
+        assert!(!ctx.spend_stamp.exists(), "unsupported CLI → no spend");
+        assert_eq!(state::consecutive_failures_at(&ctx.learn_dir), 0);
+        assert!(
+            Watermarks::load_from(&ctx.watermarks_path)
+                .mark(&src.to_string_lossy())
+                .is_none(),
+            "unsupported CLI → content is preserved"
+        );
+        let logs = log_lines(ctx);
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["outcome"], "unsupported_cli");
+        assert_eq!(logs[0]["error_stage"], "preflight");
+        assert_eq!(
+            logs[0]["error_code"],
+            "claude_structured_output_unsupported"
+        );
     }
 
     // --- dedupe against existing fragment descriptions --------------------
@@ -1563,7 +2076,7 @@ mod tests {
         let stub = StubExtractor::new(&[valid_extraction("claude:sess-1", "always use  pnpm.")]);
         let guard = acquire(ctx);
 
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::Extracted);
@@ -1599,7 +2112,7 @@ mod tests {
             "Always use pnpm, never npm.",
         )]);
         let guard = acquire(ctx);
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::Extracted);
@@ -1618,7 +2131,7 @@ mod tests {
 
         let stub = StubExtractor::new(&["unused"]);
         let guard = acquire(ctx);
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::Empty);
@@ -1650,7 +2163,7 @@ mod tests {
         let stub = StubExtractor::new(&["unused"]);
         let guard = acquire(ctx);
 
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(out.outcome, Outcome::Throttled);
@@ -1689,7 +2202,7 @@ mod tests {
         let stub = StubExtractor::new(&["unused"]);
         let guard = acquire(ctx);
 
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(
@@ -1723,7 +2236,7 @@ mod tests {
         )]);
         let guard = acquire(ctx);
 
-        let out = run_body(ctx, &guard, Some(&stub)).unwrap();
+        let out = run_body(ctx, &guard, WorkerSelection::Chosen(&stub)).unwrap();
         guard.release();
 
         assert_eq!(
@@ -1824,6 +2337,9 @@ mod tests {
             candidates: 0,
             duration_ms: None,
             usage: None,
+            error_stage: None,
+            error_code: None,
+            error: None,
             outcome: "extracted".to_string(),
         };
         assert!(good.ts_unix().is_some());
@@ -1851,13 +2367,15 @@ mod tests {
                 r#"{"ts":"2026-07-10T10:05:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"empty","usage":"raw-blob"}"#,
                 // absent usage + absent duration (older loadout)
                 r#"{"ts":"2026-07-10T10:10:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"empty"}"#,
+                // malformed foreign diagnostic fields must not drop the line
+                r#"{"ts":"2026-07-10T10:15:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"failed","error_stage":{"bad":true},"error_code":42,"error":["not","a","string"]}"#,
             ],
         );
 
         let records = read_log(&log_path);
         assert_eq!(
             records.len(),
-            3,
+            4,
             "no line dropped by a usage-shape mismatch"
         );
         assert_eq!(
@@ -1868,5 +2386,50 @@ mod tests {
         assert_eq!(records[1].usage.as_deref(), Some("raw-blob"));
         assert_eq!(records[2].usage, None);
         assert_eq!(records[2].duration_ms, None);
+        assert_eq!(records[3].error_stage, None);
+        assert_eq!(records[3].error_code, None);
+        assert_eq!(records[3].error, None);
+    }
+
+    #[test]
+    fn latest_unresolved_failure_survives_empty_and_reset_hides_history() {
+        let dir = tempfile::tempdir().unwrap();
+        write_log_lines(
+            &dir.path().join("log.jsonl"),
+            &[
+                r#"{"ts":"2026-07-10T10:00:00Z","trigger":"manual","sessions":1,"candidates":0,"outcome":"failed","error_stage":"validate_output","error_code":"output_json_invalid","error":"safe"}"#,
+                r#"{"ts":"2026-07-10T10:05:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"empty"}"#,
+            ],
+        );
+        state::record_failure_at(dir.path());
+
+        let unresolved = latest_unresolved_failure(dir.path()).unwrap();
+        assert_eq!(
+            unresolved.error_code.as_deref(),
+            Some("output_json_invalid")
+        );
+
+        state::reset_failures_at(dir.path());
+        assert!(
+            latest_unresolved_failure(dir.path()).is_none(),
+            "reset makes older log failures historical"
+        );
+    }
+
+    #[test]
+    fn latest_unresolved_failure_stops_at_later_extraction() {
+        let dir = tempfile::tempdir().unwrap();
+        write_log_lines(
+            &dir.path().join("log.jsonl"),
+            &[
+                r#"{"ts":"2026-07-10T10:00:00Z","trigger":"manual","sessions":1,"candidates":0,"outcome":"failed","error_code":"old_failure"}"#,
+                r#"{"ts":"2026-07-10T10:05:00Z","trigger":"manual","sessions":1,"candidates":1,"outcome":"extracted"}"#,
+                r#"{"ts":"2026-07-10T10:10:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"future_unknown"}"#,
+            ],
+        );
+        // Keep the counter nonzero deliberately to exercise the log boundary;
+        // production extraction resets it and returns even earlier.
+        state::record_failure_at(dir.path());
+        assert!(latest_unresolved_failure(dir.path()).is_none());
     }
 }

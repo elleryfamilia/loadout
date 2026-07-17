@@ -942,3 +942,5 @@ pre.error { color: var(--error-fg); padding: 16px; font-family: var(--mono); whi
 .log-outcome { text-transform: uppercase; letter-spacing: .05em; font-size: .8em; padding: .1em .5em; border-radius: 999px; border: 1px solid var(--border); }
 .log-outcome.log-extracted { color: var(--ok); border-color: currentColor; }
 .log-outcome.log-failed, .log-outcome.log-deadline_exceeded { color: var(--danger); border-color: currentColor; }
+.log-diagnostic { flex: 1 0 100%; min-width: 0; color: var(--error-fg); font-size: .85em; line-height: 1.35; overflow-wrap: anywhere; }
+.log-diagnostic-label { font-family: var(--mono); font-weight: 600; }

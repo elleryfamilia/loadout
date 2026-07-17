@@ -724,9 +724,9 @@ fn promote_modal(
 
 /// The run-log history panel. Fields come from [`worker::LogRecord`] (the
 /// stable read-back reader); it exposes ts, trigger, cli/model, sessions,
-/// candidates, run duration, token usage, and outcome. Duration and usage are
-/// the spend-audit signals — usage is shown verbatim so a metered run's cost is
-/// legible on the machine that harvested it.
+/// candidates, run duration, token usage, outcome, and safe diagnostics.
+/// Duration and usage are the spend-audit signals — usage is shown verbatim so
+/// a metered run's cost is legible on the machine that harvested it.
 fn history_fragment(records: &[LogRecord]) -> String {
     html! {
         div class="inbox" {
@@ -762,6 +762,18 @@ fn history_fragment(records: &[LogRecord]) -> String {
                             @if let Some(usage) = &r.usage {
                                 span class="log-usage muted" { "usage " (usage) }
                             }
+                            @if let Some((label, message)) = history_diagnostic(r) {
+                                // Older logs can contain provider-derived error
+                                // text. Keep it escaped through maud and capped
+                                // at render time; never use PreEscaped here.
+                                div class="log-diagnostic" {
+                                    @if let Some(label) = label {
+                                        span class="log-diagnostic-label" { (label) }
+                                        @if message.is_some() { " — " }
+                                    }
+                                    @if let Some(message) = message { (message) }
+                                }
+                            }
                         }
                     }
                 }
@@ -769,4 +781,25 @@ fn history_fragment(records: &[LogRecord]) -> String {
         }
     }
     .into_string()
+}
+
+/// Build the optional full-width diagnostic beneath a history row's metadata.
+/// New logs normally supply all three fields. Older logs may have only
+/// `error`, while partially written/foreign lines can omit either label part.
+fn history_diagnostic(r: &LogRecord) -> Option<(Option<String>, Option<String>)> {
+    let stage = r.error_stage.as_deref().filter(|s| !s.is_empty());
+    let code = r.error_code.as_deref().filter(|s| !s.is_empty());
+    let label = match (stage, code) {
+        (Some(stage), Some(code)) => Some(format!("{stage}/{code}")),
+        (Some(stage), None) => Some(stage.to_string()),
+        (None, Some(code)) => Some(code.to_string()),
+        (None, None) => None,
+    };
+    let message = r
+        .error
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(512).collect::<String>());
+
+    (label.is_some() || message.is_some()).then_some((label, message))
 }
