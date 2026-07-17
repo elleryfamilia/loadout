@@ -349,10 +349,13 @@ fn render_markdown(md: &str) -> Markup {
 
 // --- page shell --------------------------------------------------------------
 
-/// The full page: top bar (brand + tabs + staged indicator), the `#main` tab
-/// content, and the empty `#modal` container. `inbox_pending` is the count of
-/// pending learned candidates awaiting review — shown as a badge on the Inbox
-/// tab when nonzero.
+/// The full page: brand, the two-destination tab nav ([`tab_bar`]), a staged
+/// indicator, and three top-bar action icons — 🕒 (recents drawer), 📥 (inbox
+/// drawer), ⚙ (settings) — followed by the `#main` tab content and the empty
+/// `#modal`/`#drawer` containers those icons and other actions render into.
+/// `inbox_pending` is the count of pending learned candidates awaiting review —
+/// shown as a badge on the Inbox icon (which opens the review drawer) when
+/// nonzero.
 pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize) -> String {
     html! {
         (DOCTYPE)
@@ -371,40 +374,56 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
             body {
                 header class="topbar" {
                     div class="brand" { span class="brand-mark" { (brand_mark()) } span class="brand-name" { "Loadout" } }
-                    (tab_bar(active_tab, inbox_pending))
+                    (tab_bar(active_tab))
                     div class="topbar-right" {
                         div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
+                        button type="button" class="icon-btn" title="Recent artifacts"
+                            hx-get="/drawer/recents" hx-target="#drawer" { (icon("clock")) }
+                        button type="button" class="icon-btn" title="Review inbox"
+                            hx-get="/drawer/inbox" hx-target="#drawer" {
+                            (icon("inbox"))
+                            span id="inbox-badge" { (inbox_badge(inbox_pending)) }
+                        }
+                        button type="button" id="settings-btn"
+                            class=(if active_tab == "settings" { "icon-btn active" } else { "icon-btn" })
+                            title="Settings" hx-get="/settings" hx-target="#main" { (icon("gear")) }
                         button type="button" class="icon-btn" title="Show me around" hx-get="/onboarding/welcome" hx-target="#main" { (icon("help")) }
                         (theme_toggle())
                     }
                 }
                 main class="main" id="main" { (main) }
                 div id="modal" class="modal-root" {}
+                div id="drawer" class="drawer-root" {}
             }
         }
     }
     .into_string()
 }
 
-/// Top nav: four destinations. **Loadouts** is where you assemble a loadout;
+/// Top nav: two destinations. **Loadouts** is where you assemble a loadout;
 /// **Library** is the shared catalog of gear a loadout binds (fragments, targets,
-/// workflows); **Recents** lists rendered artifacts; **Inbox** is the review
-/// surface for learned candidate preferences (with a pending-count badge when
-/// nonzero). Anything reached *inside* the Library keeps `active_tab ==
+/// workflows). Anything reached *inside* the Library keeps `active_tab ==
 /// "library"`, so the Library button stays lit while you browse its categories.
-fn tab_bar(active: &str, inbox_pending: usize) -> Markup {
+/// The other three top-bar icons — 🕒 recents, 📥 inbox, ⚙ settings — live to
+/// the right of this nav (see [`shell`]), not as tabs here.
+fn tab_bar(active: &str) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
         nav class="tabs" {
             button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
             button class=(cls("library")) data-tab="library" hx-get="/tab/library" hx-target="#main" { (icon("book")) "Library" }
-            button class=(cls("recents")) data-tab="recents" hx-get="/tab/recents" hx-target="#main" { (icon("clock")) "Recents" }
-            button class=(cls("inbox")) data-tab="inbox" hx-get="/tab/inbox" hx-target="#main" {
-                (icon("inbox")) "Inbox"
-                @if inbox_pending > 0 { span class="tab-badge" { (inbox_pending) } }
-            }
         }
     }
+}
+
+/// The inbox icon's numeric badge (pending candidates). Empty markup at zero.
+pub fn inbox_badge(n: usize) -> Markup {
+    html! { @if n > 0 { span class="tab-badge" { (n) } } }
+}
+
+/// One-shot loader that re-pulls the badge after an inbox disposition.
+pub fn inbox_badge_loader() -> String {
+    html! { div hx-get="/inbox/badge" hx-trigger="load" hx-target="#inbox-badge" {} }.into_string()
 }
 
 /// The Library's category sub-nav (a pill row). Baked into the top of every
@@ -469,6 +488,31 @@ fn modal_close() -> Markup {
 /// re-render when a fragment was edited from inside a profile).
 pub fn modal_close_loader() -> String {
     modal_close().into_string()
+}
+
+/// Right-side drawer chrome: backdrop (click closes) + panel with a titled
+/// head, scrolling body, and optional pinned footer. One drawer at a time —
+/// fragments swap the whole `#drawer` container.
+pub fn drawer(title: &str, body: Markup, foot: Option<Markup>) -> String {
+    html! {
+        div class="drawer-backdrop" hx-get="/drawer/close" hx-target="#drawer" {}
+        aside class="drawer" role="dialog" aria-modal="true" aria-label=(title) {
+            div class="drawer-head" {
+                h2 { (title) }
+                button class="icon-btn" type="button" title="Close"
+                    hx-get="/drawer/close" hx-target="#drawer" { (icon("x")) }
+            }
+            div class="drawer-body" { (body) }
+            @if let Some(f) = foot { div class="drawer-foot" { (f) } }
+        }
+    }
+    .into_string()
+}
+
+/// A one-shot loader that closes the drawer (appended to a `#main` fragment
+/// that a drawer action navigated to, e.g. Settings opened from the inbox).
+pub fn drawer_close_loader() -> String {
+    html! { div hx-get="/drawer/close" hx-trigger="load" hx-target="#drawer" {} }.into_string()
 }
 
 // --- Profiles tab ------------------------------------------------------------
@@ -827,8 +871,8 @@ pub fn profile_detail_fragment(d: &ProfileDetail) -> String {
 
 // --- the Create-a-Loadout board ---------------------------------------------
 
-/// The board: the selected loadout shown as editable slots — Applies to
-/// (targets), Fragments, and a single Workflow — plus a readout. Fills
+/// The board: the selected loadout shown as editable slots — Targets, Context
+/// fragments, and a single Execution workflow — plus a readout. Fills
 /// `#profile-main` (the rail's select renders this). A "Preview" action swaps in
 /// the composed-document view ([`profile_detail`]).
 pub fn loadout_board(b: &BoardView) -> Markup {
@@ -866,7 +910,7 @@ pub fn loadout_board(b: &BoardView) -> Markup {
             div class="lo-board" {
                 (board_applies(b, &e))
                 (board_section(
-                    "box", "Fragments", Some(b.fragments.len()), "the guidance it composes",
+                    "box", "Context fragments", Some(b.fragments.len()), "the knowledge the agent carries",
                     Some(html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/fragments/new")) hx-target="#modal" { (icon("plus")) "Equip" } }),
                     html! {
                         @if b.fragments.is_empty() {
@@ -881,7 +925,7 @@ pub fn loadout_board(b: &BoardView) -> Markup {
                     },
                 ))
                 (board_section(
-                    "git-branch", "Workflow", None, "a single multi-step process, optional",
+                    "git-branch", "Execution workflow", None, "the process it works by — optional",
                     None, board_workflow_slot(b, &e),
                 ))
                 div class="provenance" {
@@ -927,13 +971,13 @@ fn board_section(
     }
 }
 
-/// The "Applies to" section — a locked explainer for the default loadout, or the
+/// The "Targets" section — a locked explainer for the default loadout, or the
 /// editable target chips + Add for a targeted one.
 fn board_applies(b: &BoardView, e: &str) -> Markup {
     if b.is_default {
         board_section(
             "globe",
-            "Applies to",
+            "Targets",
             None,
             "the default — applies when no other loadout matches",
             None,
@@ -950,9 +994,9 @@ fn board_applies(b: &BoardView, e: &str) -> Markup {
     } else {
         board_section(
             "target",
-            "Applies to",
+            "Targets",
             Some(b.targets.len()),
-            "repos this loadout is detected on",
+            "when this loadout applies",
             Some(
                 html! { button class="btn btn-sm" hx-get=(format!("/profiles/{e}/targets/new")) hx-target="#modal" { (icon("plus")) "Add" } },
             ),
@@ -1368,7 +1412,7 @@ pub fn workflows_result(view: &WorkflowsView, flash: &str) -> String {
     .into_string()
 }
 
-// --- Recents tab ---------------------------------------------------------
+// --- Recents drawer -------------------------------------------------------
 
 /// One Recents row, fully prepared by the server (no fs access in the view).
 pub struct RecentRow {
@@ -1390,65 +1434,60 @@ pub enum RecentBadge {
     None,
 }
 
-/// The Recents tab body. `readonly` = the store was written by a newer
-/// loadout: render the notice and no destructive controls (they would
-/// silently no-op).
-pub fn recents_tab_fragment(rows: &[RecentRow], readonly: bool) -> String {
-    html! {
-        div class="recents" {
-            div class="recents-head" {
-                h2 { "Recents" }
-                @if !rows.is_empty() && !readonly {
-                    button class="btn btn-ghost btn-sm" hx-post="/recents/clear" hx-target="#main"
-                        hx-confirm="Clear the recents list? Rendered files are not deleted." {
-                        (icon("trash")) "Clear"
-                    }
-                }
-            }
-            @if readonly {
-                p class="muted" { "Recents state was written by a newer loadout — upgrade to manage it." }
-            }
-            @if rows.is_empty() && !readonly {
-                p class="muted" { "Nothing recent yet — render a plan with " code { "load plan render" } " and it shows up here." }
-            }
-            @if !rows.is_empty() {
-                ul class="recents-list" {
-                    @for r in rows {
-                        li class=(if r.available { "recent-row" } else { "recent-row recent-unavailable" }) {
-                            span class="recent-kind" { (icon(if r.kind == "plan" { "layers" } else { "file" })) }
-                            // The kind, as TEXT — the icon alone is illegible
-                            // as an indicator once several artifact kinds
-                            // (plans, design docs, …) live side by side.
-                            // Unknown kinds label themselves automatically:
-                            // this renders the entry's own kind string.
-                            span class="recent-kind-label" { (r.kind) }
-                            @if r.available {
-                                a class="recent-title" href={ "/artifacts/" (r.id) } target="_blank" rel="noopener" { (r.title) }
-                            } @else {
-                                span class="recent-title" title="unavailable (unmounted volume?)" { (r.title) }
-                            }
-                            span class="recent-repo muted" title=(r.repo_full) { (r.repo_name) }
-                            @if !r.detail.is_empty() { span class="recent-detail muted" { (r.detail) } }
-                            span class="recent-age muted" { (r.age) }
-                            @match r.badge {
-                                RecentBadge::Stale => span class="recent-badge stale" title="the plan changed since this render — re-run load plan render" { "stale" },
-                                RecentBadge::Fresh => {},
-                                RecentBadge::None => {},
-                            }
-                            @if !r.available {
-                                span class="recent-badge missing" { "missing" }
-                            }
-                            @if !readonly {
-                                button class="icon-btn recent-remove" title="Remove from recents"
-                                    hx-delete={ "/recents/" (r.id) } hx-target="#main" { (icon("x")) }
-                            }
+/// The Recents drawer. Rows open artifacts in a new browser tab; remove/clear
+/// re-render the drawer. `readonly` (store written by a newer loadout) hides
+/// destructive controls and shows the upgrade notice.
+pub fn recents_drawer_fragment(rows: &[RecentRow], readonly: bool) -> String {
+    let body = html! {
+        @if readonly {
+            p class="muted" { "Recents state was written by a newer loadout — upgrade to manage it." }
+        }
+        @if rows.is_empty() && !readonly {
+            p class="muted" { "Nothing recent yet — render a plan with " code { "load plan render" } " and it shows up here." }
+        }
+        @if !rows.is_empty() {
+            ul class="recents-list" {
+                @for r in rows {
+                    li class=(if r.available { "recent-row" } else { "recent-row recent-unavailable" }) {
+                        span class="recent-kind" { (icon(if r.kind == "plan" { "layers" } else { "file" })) }
+                        // The kind, as TEXT — the icon alone is illegible
+                        // as an indicator once several artifact kinds
+                        // (plans, design docs, …) live side by side.
+                        // Unknown kinds label themselves automatically:
+                        // this renders the entry's own kind string.
+                        span class="recent-kind-label" { (r.kind) }
+                        @if r.available {
+                            a class="recent-title" href={ "/artifacts/" (r.id) } target="_blank" rel="noopener" { (r.title) }
+                        } @else {
+                            span class="recent-title" title="unavailable (unmounted volume?)" { (r.title) }
+                        }
+                        span class="recent-repo muted" title=(r.repo_full) { (r.repo_name) }
+                        @if !r.detail.is_empty() { span class="recent-detail muted" { (r.detail) } }
+                        span class="recent-age muted" { (r.age) }
+                        @match r.badge {
+                            RecentBadge::Stale => span class="recent-badge stale" title="the plan changed since this render — re-run load plan render" { "stale" },
+                            RecentBadge::Fresh => {},
+                            RecentBadge::None => {},
+                        }
+                        @if !r.available { span class="recent-badge missing" { "missing" } }
+                        @if !readonly {
+                            button class="icon-btn recent-remove" title="Remove from recents"
+                                hx-delete={ "/recents/" (r.id) } hx-target="#drawer" { (icon("x")) }
                         }
                     }
                 }
             }
         }
-    }
-    .into_string()
+    };
+    let foot = (!rows.is_empty() && !readonly).then(|| {
+        html! {
+            button class="btn btn-ghost btn-sm" hx-post="/recents/clear" hx-target="#drawer"
+                hx-confirm="Clear the recents list? Rendered files are not deleted." {
+                (icon("trash")) "Clear all"
+            }
+        }
+    });
+    drawer("Recents", body, foot)
 }
 
 /// One tiny gallery card: the workflow name + an "in use" marker (equipped on at
@@ -2678,6 +2717,7 @@ pub fn editor_preview_fragment(p: &PreviewOutcome) -> String {
 
 pub fn diff_view(
     diffs: &[FileDiff],
+    op_descriptions: &[String],
     leaks: &[String],
     fs_changed: &[std::path::PathBuf],
     staged: usize,
@@ -2690,6 +2730,15 @@ pub fn diff_view(
                     h1 { "Review staged changes" }
                 }
                 span class="pill" { (staged) " staged" }
+            }
+
+            @if !op_descriptions.is_empty() {
+                div class="staged-ops-summary" {
+                    h3 { "What's staged" }
+                    ul class="staged-ops" {
+                        @for desc in op_descriptions { li { (desc) } }
+                    }
+                }
             }
 
             @if !leaks.is_empty() {
@@ -2749,9 +2798,22 @@ pub fn fragment_result(lib: &LibraryView, flash: &str) -> String {
     .into_string()
 }
 
+/// The error banner markup shared by [`error_fragment`] and [`drawer_error`].
+fn error_banner(msg: &str) -> Markup {
+    html! { div class="banner error" { span class="banner-icon" { (icon("alert")) } div class="banner-body" { (msg) } } }
+}
+
 /// An inline error fragment (validation / config errors never 500).
 pub fn error_fragment(msg: &str) -> String {
-    html! { div class="banner error" { span class="banner-icon" { (icon("alert")) } div class="banner-body" { (msg) } } }.into_string()
+    error_banner(msg).into_string()
+}
+
+/// An error fragment wrapped in drawer chrome, for handlers whose `hx-target`
+/// is `#drawer`. `.drawer-root` only shows when it `:has(.drawer)`
+/// (`studio.css`), so swapping a bare `error_fragment` in there renders
+/// nothing and silently closes the drawer instead of showing the message.
+pub fn drawer_error(msg: &str) -> String {
+    drawer("Something went wrong", error_banner(msg), None)
 }
 
 /// A minimal full-page error (when the shell itself can't be assembled).
@@ -2811,8 +2873,11 @@ fn display_name(p: &Path) -> String {
         .unwrap_or_else(|| p.display().to_string())
 }
 
-/// Percent-encode a path segment (profile names can contain spaces / em-dashes).
-fn enc(s: &str) -> String {
+/// Percent-encode a path segment for a route: profile/fragment/target/
+/// workflow names can carry spaces or em-dashes, and candidate ids (sha-256
+/// hex, already URL-safe) are encoded defensively too — keeping every route
+/// honest regardless of what it names.
+pub fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {

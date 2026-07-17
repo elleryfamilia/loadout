@@ -36,17 +36,25 @@ pub struct StudioState {
     /// guided "review → you're set" beats instead of dropping straight into the
     /// Profiles tab; the first Apply disarms it.
     pub onboarding_active: bool,
-    /// The tab the user is currently on (`profiles`/`fragments`/`targets`/
-    /// `workflows`). Tracked so Apply re-renders the tab in place instead of
-    /// always bouncing back to Profiles.
+    /// The tab the user is currently on (`profiles`/`library`/`settings`).
+    /// Tracked so Apply re-renders the tab in place instead of always
+    /// bouncing back to Profiles. A drawer (recents/inbox) overlays whatever
+    /// tab is current and never sets this.
     pub active_tab: String,
     /// Where the per-machine recents registry lives (None: no state dir).
     /// Injected so route() tests point it at a fixture tempdir.
     pub recents_path: Option<PathBuf>,
-    /// Where the Inbox tab's journals + evidence + run log live (None: no
+    /// Where the Inbox drawer's journals + evidence + run log live (None: no
     /// config/state dir). Injected so route() tests point it at a fixture
     /// tempdir, the same seam as `recents_path`.
     pub inbox: Option<crate::studio::inbox::InboxPaths>,
+    /// Whether a landed `[learn] enabled` change should run the real hook
+    /// bootstrap (see `server::learn_bootstrap_after_apply`). True in
+    /// production; false in the studio route-test fixture — the bootstrap
+    /// resolves hook files under the real `$HOME` (`config::home_dir()`), and
+    /// there is no test seam to redirect that, so tests must skip the call
+    /// entirely rather than risk writing into a developer's real dotfiles.
+    pub bootstrap_learn_hooks: bool,
 }
 
 impl StudioState {
@@ -297,12 +305,12 @@ pub struct BoardWorkflow {
 }
 
 /// Everything the board needs to render one loadout as slots: its targets
-/// ("Applies to"), equipped fragments, and the single workflow binding. Built
+/// ("Targets"), equipped fragments, and the single workflow binding. Built
 /// from the *staged* config so it reflects unsaved edits.
 pub struct BoardView {
     pub name: String,
     pub disabled: bool,
-    /// No targets ⇒ the catch-all default loadout (locked "Applies to").
+    /// No targets ⇒ the catch-all default loadout (locked "Targets").
     pub is_default: bool,
     pub targets: Vec<TargetChip>,
     pub fragments: Vec<BoardFrag>,

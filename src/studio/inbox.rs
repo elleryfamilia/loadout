@@ -1,4 +1,4 @@
-//! The studio **Inbox** tab: the human review surface for learned candidate
+//! The studio **Inbox** drawer: the human review surface for learned candidate
 //! preferences. Nothing enters a profile without a promote here — this module
 //! is the own-your-markdown gate the release's trust story rests on.
 //!
@@ -45,14 +45,14 @@ use serde::Deserialize;
 use crate::learn::gate::{self, Gated};
 use crate::learn::journal::{self, Action, Candidate, CandidateStatus, Disposition, Event};
 use crate::learn::state as learn_state;
-use crate::learn::worker::{self, LogRecord};
 use crate::profile::FragmentRef;
 use crate::studio::edit::StagedOp;
 use crate::studio::server::{Req, Resp};
+use crate::studio::settings;
 use crate::studio::state::{self, StudioState};
 use crate::studio::views;
 
-/// Where the Inbox tab's three stores live, injected so router tests can point
+/// Where the Inbox drawer's three stores live, injected so router tests can point
 /// them at a fixture tempdir (the `recents_path` precedent).
 #[derive(Clone)]
 pub struct InboxPaths {
@@ -69,7 +69,7 @@ impl InboxPaths {
     fn evidence_dir(&self) -> PathBuf {
         self.learn_dir.join("evidence")
     }
-    fn log_path(&self) -> PathBuf {
+    pub(crate) fn log_path(&self) -> PathBuf {
         self.learn_dir.join("log.jsonl")
     }
 }
@@ -80,7 +80,7 @@ fn paths(state: &Arc<Mutex<StudioState>>) -> Option<InboxPaths> {
     state.lock().unwrap().inbox.clone()
 }
 
-/// The number of `Pending` candidates — the shell's Inbox-tab badge count.
+/// The number of `Pending` candidates — the shell's Inbox-icon badge count.
 /// `Quarantined` candidates are held, not pending, so they don't count (same
 /// number every discovery-line surface shows).
 pub fn pending_count(state: &Arc<Mutex<StudioState>>) -> usize {
@@ -111,46 +111,46 @@ fn values(pairs: &[(String, String)], key: &str) -> Vec<String> {
         .collect()
 }
 
-// --- GET /tab/inbox ----------------------------------------------------------
+// --- GET /drawer/inbox --------------------------------------------------------
 
-/// The Inbox tab body: pending/quarantined candidate cards + a dismissed list.
-pub fn tab(state: &Arc<Mutex<StudioState>>) -> Resp {
-    state.lock().unwrap().active_tab = "inbox".to_string();
-    render_tab(state, None)
+/// `GET /drawer/inbox` — the review-queue drawer. Never touches `active_tab`;
+/// the drawer overlays the current destination.
+pub fn drawer(state: &Arc<Mutex<StudioState>>) -> Resp {
+    render_drawer(state, None)
 }
 
-/// Fold the journals + read evidence (outside the mutex) and render the tab.
+/// Fold the journals + read evidence (outside the mutex) and render the drawer.
 /// `notice` is an optional `(is_error, message)` banner shown above the list.
-fn render_tab(state: &Arc<Mutex<StudioState>>, notice: Option<(bool, String)>) -> Resp {
+fn render_drawer(state: &Arc<Mutex<StudioState>>, notice: Option<(bool, String)>) -> Resp {
     let Some(paths) = paths(state) else {
-        return Resp::html(inbox_fragment(&[], &[], notice));
+        return Resp::html(inbox_drawer_fragment(&[], false, notice));
     };
     let fold = journal::fold_at(&paths.inbox_dir);
     let evidence_dir = paths.evidence_dir();
-
     let mut cards: Vec<CandidateCard> = Vec::new();
-    let mut dismissed: Vec<SuppressedRow> = Vec::new();
     for c in fold.candidates.values() {
-        match c.status {
-            CandidateStatus::Pending | CandidateStatus::Quarantined => {
-                cards.push(build_card(c, &evidence_dir))
-            }
-            CandidateStatus::Suppressed => dismissed.push(SuppressedRow {
-                id: c.id.clone(),
-                claim: c.claim.clone(),
-            }),
-            CandidateStatus::Promoted => {}
+        if matches!(
+            c.status,
+            CandidateStatus::Pending | CandidateStatus::Quarantined
+        ) {
+            cards.push(build_card(c, &evidence_dir));
         }
     }
     // Newest first (last_seen desc) so the freshest suggestions lead.
     cards.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
-
-    Resp::html(inbox_fragment(&cards, &dismissed, notice))
+    // Learning is "on here" when the synced flag is set AND this machine holds
+    // an activation ack — the same two-part gate `learn_active` uses.
+    let snap = state.lock().unwrap().snapshot();
+    let learn_on = state::staged_config(&snap)
+        .map(|cfg| cfg.learn.enabled)
+        .unwrap_or(false)
+        && learn_state::read_activation_at(&paths.learn_dir).is_some();
+    Resp::html(inbox_drawer_fragment(&cards, learn_on, notice))
 }
 
 /// One evidence file: `state_dir/learn/evidence/<id>.json`, written by the
 /// worker as `{ id, quotes: [{ session_ref, quote }] }`. Only `quote` is read
-/// here — session refs are display plumbing the tab doesn't surface.
+/// here — session refs are display plumbing the drawer doesn't surface.
 #[derive(Deserialize)]
 struct EvidenceFile {
     #[serde(default)]
@@ -214,23 +214,18 @@ struct CandidateCard {
     last_seen: String,
 }
 
-/// One dismissed candidate row (the un-dismiss list).
-struct SuppressedRow {
-    id: String,
-    claim: String,
-}
+// --- GET /inbox/<id>/promote (drawer) ----------------------------------------
 
-// --- GET /inbox/<id>/promote (modal) -----------------------------------------
-
-/// Render the promote modal for one candidate: editable claim, new-fragment vs
-/// merge-into-existing, and a profile multi-select.
+/// Render the promote form for one candidate, replacing the queue in the
+/// drawer: editable claim, new-fragment vs merge-into-existing, and a profile
+/// multi-select.
 pub fn promote_form(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let Some(paths) = paths(state) else {
-        return Resp::html(views::error_fragment("learning state is unavailable"));
+        return Resp::html(views::drawer_error("learning state is unavailable"));
     };
     let fold = journal::fold_at(&paths.inbox_dir);
     let Some(cand) = fold.candidates.get(id) else {
-        return Resp::html(views::error_fragment(
+        return Resp::html(views::drawer_error(
             "that suggestion is no longer in the inbox",
         ));
     };
@@ -250,7 +245,7 @@ pub fn promote_form(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         ),
         Err(_) => (Vec::new(), Vec::new()),
     };
-    Resp::html(promote_modal(
+    Resp::html(promote_drawer_fragment(
         &cand.id,
         &cand.claim,
         quarantined,
@@ -266,9 +261,9 @@ pub fn promote_form(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
 /// ORIGINAL candidate id. Nothing is written until the user Applies — the
 /// disposition then lands iff the config write lands.
 pub fn promote(state: &Arc<Mutex<StudioState>>, id: &str, req: &Req) -> Resp {
-    // Errors from this modal render inside it (its `#inbox-modal-msg` slot),
-    // not by replacing the tab behind the still-open modal.
-    let err = |msg: String| Resp::html_retarget(views::error_fragment(&msg), "#inbox-modal-msg");
+    // Errors from this form render inside the drawer's own message slot (its
+    // `#inbox-drawer-msg` slot), not by replacing the drawer's whole body.
+    let err = |msg: String| Resp::html_retarget(views::error_fragment(&msg), "#inbox-drawer-msg");
 
     let Some(paths) = paths(state) else {
         return err("learning state is unavailable".to_string());
@@ -415,10 +410,11 @@ pub fn promote(state: &Arc<Mutex<StudioState>>, id: &str, req: &Req) -> Resp {
         return err(e.to_string());
     }
 
-    // Success: close the modal, re-render the tab (the candidate still shows as
-    // Pending — the disposition is queued, not yet flushed), and refresh the
-    // staged indicator so Review/Apply appear.
-    let mut resp = render_tab(
+    // Success: re-render the drawer's queue (the candidate still shows as
+    // Pending — the disposition is queued, not yet flushed), refresh the
+    // badge, and refresh the staged indicator so Review/Apply appear. The form
+    // is gone because `render_drawer` re-renders the queue body wholesale.
+    let mut resp = render_drawer(
         state,
         Some((
             false,
@@ -426,7 +422,7 @@ pub fn promote(state: &Arc<Mutex<StudioState>>, id: &str, req: &Req) -> Resp {
         )),
     );
     resp.body
-        .extend_from_slice(views::modal_close_loader().as_bytes());
+        .extend_from_slice(views::inbox_badge_loader().as_bytes());
     resp.body
         .extend_from_slice(views::staged_indicator_loader().as_bytes());
     resp
@@ -446,17 +442,26 @@ fn default_name(claim: &str) -> String {
 
 // --- POST /inbox/<id>/dismiss ------------------------------------------------
 
-/// Append a `Dismiss` disposition immediately (no config change) and re-render.
+/// Append a `Dismiss` disposition immediately (no config change), re-render the
+/// drawer, and append a badge-refresh loader (the pending count just dropped).
 pub fn dismiss(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let Some(paths) = paths(state) else {
-        return Resp::html(views::error_fragment("learning state is unavailable"));
+        return Resp::html(views::drawer_error("learning state is unavailable"));
     };
     match append_disposition(&paths, id, Action::Dismiss) {
-        Ok(()) => render_tab(
-            state,
-            Some((false, "dismissed — Un-dismiss to restore".to_string())),
-        ),
-        Err(e) => Resp::html(views::error_fragment(&format!("could not dismiss: {e}"))),
+        Ok(()) => {
+            let mut resp = render_drawer(
+                state,
+                Some((
+                    false,
+                    "dismissed — restore it under Settings → Learning".to_string(),
+                )),
+            );
+            resp.body
+                .extend_from_slice(views::inbox_badge_loader().as_bytes());
+            resp
+        }
+        Err(e) => Resp::html(views::drawer_error(&format!("could not dismiss: {e}"))),
     }
 }
 
@@ -469,6 +474,9 @@ pub fn dismiss(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
 /// win the fold and demote it back to observation-derived status. We fold
 /// first, check the suppressed set, and refuse otherwise — an `Unsuppress` only
 /// ever lands on a candidate that a `Dismiss` currently governs.
+///
+/// The dismissed list lives under Settings → Learning (not the drawer), so
+/// both the refusal and the success path re-render the Settings page.
 pub fn unsuppress(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let Some(paths) = paths(state) else {
         return Resp::html(views::error_fragment("learning state is unavailable"));
@@ -482,7 +490,7 @@ pub fn unsuppress(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
             .get(id)
             .map(|c| status_word(c.status))
             .unwrap_or("not in the inbox");
-        return render_tab(
+        return settings::render_page(
             state,
             Some((
                 true,
@@ -491,7 +499,13 @@ pub fn unsuppress(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         );
     }
     match append_disposition(&paths, id, Action::Unsuppress) {
-        Ok(()) => render_tab(state, Some((false, "restored to the inbox".to_string()))),
+        Ok(()) => {
+            let mut resp =
+                settings::render_page(state, Some((false, "restored to the inbox".to_string())));
+            resp.body
+                .extend_from_slice(views::inbox_badge_loader().as_bytes());
+            resp
+        }
         Err(e) => Resp::html(views::error_fragment(&format!("could not un-dismiss: {e}"))),
     }
 }
@@ -517,82 +531,42 @@ fn append_disposition(paths: &InboxPaths, id: &str, action: Action) -> crate::Re
     Ok(())
 }
 
-// --- GET /inbox/history ------------------------------------------------------
-
-/// The run-log panel: every harvest run this machine logged, newest first.
-pub fn history(state: &Arc<Mutex<StudioState>>) -> Resp {
-    state.lock().unwrap().active_tab = "inbox".to_string();
-    let Some(paths) = paths(state) else {
-        return Resp::html(history_fragment(&[]));
-    };
-    let mut records = worker::read_log(&paths.log_path());
-    records.reverse(); // read_log is oldest-first; show newest first
-    Resp::html(history_fragment(&records))
-}
-
 // --- views -------------------------------------------------------------------
 
-/// Percent-encode a path segment for a route. Candidate ids are sha-256 hex
-/// (already URL-safe), but encoding defensively keeps the route honest.
-fn enc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
-/// The Inbox tab body. All strings shown here are candidate-derived; `maud`
-/// escapes them by construction and none are `PreEscaped`.
-fn inbox_fragment(
+/// The Inbox drawer body. All strings shown here are candidate-derived; `maud`
+/// escapes them by construction and none are `PreEscaped`. Dismissed rows and
+/// harvest history live under Settings → Learning — this drawer shows only
+/// the pending/quarantined queue, with a footer link to Settings.
+fn inbox_drawer_fragment(
     cards: &[CandidateCard],
-    dismissed: &[SuppressedRow],
+    learn_on: bool,
     notice: Option<(bool, String)>,
 ) -> String {
-    html! {
-        div class="inbox" {
-            div class="inbox-head" {
-                h2 { "Inbox" }
-                a class="btn btn-ghost btn-sm" hx-get="/inbox/history" hx-target="#main" {
-                    (views::icon("clock")) "History"
-                }
+    let body = html! {
+        @if let Some((is_error, msg)) = &notice {
+            div class=(if *is_error { "banner error" } else { "banner" }) {
+                span class="banner-icon" { (views::icon(if *is_error { "alert" } else { "check" })) }
+                div class="banner-body" { (msg) }
             }
-            @if let Some((is_error, msg)) = &notice {
-                div class=(if *is_error { "banner error" } else { "banner" }) {
-                    span class="banner-icon" { (views::icon(if *is_error { "alert" } else { "check" })) }
-                    div class="banner-body" { (msg) }
-                }
-            }
-            @if cards.is_empty() && dismissed.is_empty() {
-                p class="muted" {
-                    "Nothing staged yet. Once learning is on ("
-                    code { "load learn on" }
-                    "), preferences harvested from your own sessions show up here to review."
-                }
-            }
-            @for c in cards { (candidate_card(c)) }
-            @if !dismissed.is_empty() {
-                h3 class="inbox-subhead" { "Dismissed" }
-                ul class="suppressions" {
-                    @for s in dismissed {
-                        li class="suppression" {
-                            span class="suppression-claim" { (s.claim) }
-                            button class="btn btn-ghost btn-sm"
-                                hx-post=(format!("/inbox/{}/unsuppress", enc(&s.id))) hx-target="#main" {
-                                (views::icon("refresh")) "Un-dismiss"
-                            }
-                        }
-                    }
+        }
+        @if cards.is_empty() {
+            @if learn_on {
+                p class="muted" { "You're all caught up — nothing to review." }
+            } @else {
+                p class="muted" { "Learning is off." }
+                button class="btn btn-primary btn-sm" hx-get="/settings" hx-target="#main" {
+                    (views::icon("gear")) "Turn it on in Settings"
                 }
             }
         }
-    }
-    .into_string()
+        @for c in cards { (candidate_card(c)) }
+    };
+    let foot = Some(html! {
+        button class="btn btn-ghost btn-sm" hx-get="/settings" hx-target="#main" {
+            (views::icon("gear")) "Learning settings & history"
+        }
+    });
+    views::drawer("Inbox", body, foot)
 }
 
 fn candidate_card(c: &CandidateCard) -> Markup {
@@ -631,11 +605,11 @@ fn candidate_card(c: &CandidateCard) -> Markup {
             }
             div class="candidate-actions" {
                 button class="btn btn-primary btn-sm"
-                    hx-get=(format!("/inbox/{}/promote", enc(&c.id))) hx-target="#modal" {
+                    hx-get=(format!("/inbox/{}/promote", views::enc(&c.id))) hx-target="#drawer" {
                     (views::icon("check")) "Promote"
                 }
                 button class="btn btn-ghost btn-sm"
-                    hx-post=(format!("/inbox/{}/dismiss", enc(&c.id))) hx-target="#main"
+                    hx-post=(format!("/inbox/{}/dismiss", views::enc(&c.id))) hx-target="#drawer"
                     hx-confirm="Dismiss this suggestion? It won't return unless you un-dismiss it." {
                     (views::icon("x")) "Dismiss"
                 }
@@ -644,162 +618,75 @@ fn candidate_card(c: &CandidateCard) -> Markup {
     }
 }
 
-/// The promote modal. `claim` is the candidate's current text (escaped into the
-/// textarea); `quarantined` adds the edit-required banner. `fragments` feed the
-/// merge picker and `profiles` the multi-select.
-fn promote_modal(
+/// The promote form, rendered as the drawer's content (replacing the queue).
+/// `claim` is the candidate's current text (escaped into the textarea);
+/// `quarantined` adds the edit-required banner. `fragments` feed the merge
+/// picker and `profiles` the multi-select. Same form fields as ever —
+/// `promote()`'s parsing is unchanged.
+fn promote_drawer_fragment(
     id: &str,
     claim: &str,
     quarantined: bool,
     fragments: &[String],
     profiles: &[String],
 ) -> String {
-    html! {
-        div class="modal-backdrop" hx-get="/close" hx-target="#modal" {}
-        div class="modal modal-lg" {
-            form class="fragment-form" hx-post=(format!("/inbox/{}/promote", enc(id))) hx-target="#main" {
-                div class="modal-head" {
-                    h2 { "Promote suggestion" }
-                    button class="icon-btn" type="button" title="Close" hx-get="/close" hx-target="#modal" { (views::icon("x")) }
+    let body = html! {
+        form class="fragment-form" hx-post=(format!("/inbox/{}/promote", views::enc(id))) hx-target="#drawer" {
+            // Save errors land here (via HX-Retarget), inside the drawer.
+            div id="inbox-drawer-msg" class="wf-editor-msg" {}
+            @if quarantined {
+                div class="banner error" {
+                    span class="banner-icon" { (views::icon("shield")) }
+                    div class="banner-body" {
+                        p { "This claim was held by the injection lint. Edit it to remove the flagged text — the edit is re-checked when you promote." }
+                    }
                 }
-                div class="modal-body" {
-                    // Save errors land here (via HX-Retarget), inside the modal.
-                    div id="inbox-modal-msg" class="wf-editor-msg" {}
-                    @if quarantined {
-                        div class="banner error" {
-                            span class="banner-icon" { (views::icon("shield")) }
-                            div class="banner-body" {
-                                p { "This claim was held by the injection lint. Edit it to remove the flagged text — the edit is re-checked when you promote." }
-                            }
-                        }
+            }
+            label class="field" {
+                span class="field-label" { "claim" span class="field-hint" { "becomes the fragment's guidance" } }
+                // Untrusted claim text as the textarea's initial value.
+                textarea name="claim" class="wf-step-textarea" rows="3" required { (claim) }
+            }
+            fieldset class="field inbox-mode" {
+                label class="radio" {
+                    input type="radio" name="mode" value="new" checked;
+                    " New fragment"
+                }
+                label class="field" {
+                    span class="field-label" { "name" span class="field-hint" { "becomes the fragment id — optional" } }
+                    input type="text" name="name" placeholder="e.g. prefer-pnpm";
+                }
+                @if !fragments.is_empty() {
+                    label class="radio" {
+                        input type="radio" name="mode" value="merge";
+                        " Merge into an existing fragment"
                     }
                     label class="field" {
-                        span class="field-label" { "claim" span class="field-hint" { "becomes the fragment's guidance" } }
-                        // Untrusted claim text as the textarea's initial value.
-                        textarea name="claim" class="wf-step-textarea" rows="3" required { (claim) }
-                    }
-                    fieldset class="field inbox-mode" {
-                        label class="radio" {
-                            input type="radio" name="mode" value="new" checked;
-                            " New fragment"
-                        }
-                        label class="field" {
-                            span class="field-label" { "name" span class="field-hint" { "becomes the fragment id — optional" } }
-                            input type="text" name="name" placeholder="e.g. prefer-pnpm";
-                        }
-                        @if !fragments.is_empty() {
-                            label class="radio" {
-                                input type="radio" name="mode" value="merge";
-                                " Merge into an existing fragment"
-                            }
-                            label class="field" {
-                                span class="field-label" { "fragment" }
-                                select name="merge_id" {
-                                    @for f in fragments { option value=(f) { (f) } }
-                                }
-                            }
-                        }
-                    }
-                    @if !profiles.is_empty() {
-                        fieldset class="field inbox-profiles" {
-                            span class="field-label" { "add to loadouts" span class="field-hint" { "optional" } }
-                            @for p in profiles {
-                                label class="check" {
-                                    input type="checkbox" name="profiles" value=(p);
-                                    " " (p)
-                                }
-                            }
+                        span class="field-label" { "fragment" }
+                        select name="merge_id" {
+                            @for f in fragments { option value=(f) { (f) } }
                         }
                     }
                 }
-                div class="modal-foot" {
-                    button type="button" class="btn btn-ghost" hx-get="/close" hx-target="#modal" { "Cancel" }
-                    button type="submit" class="btn btn-primary" { (views::icon("check")) "Promote" }
+            }
+            @if !profiles.is_empty() {
+                fieldset class="field inbox-profiles" {
+                    span class="field-label" { "add to loadouts" span class="field-hint" { "optional" } }
+                    @for p in profiles {
+                        label class="check" {
+                            input type="checkbox" name="profiles" value=(p);
+                            " " (p)
+                        }
+                    }
                 }
+            }
+            div class="drawer-actions" {
+                button type="button" class="btn btn-ghost" hx-get="/drawer/inbox" hx-target="#drawer" {
+                    (views::icon("arrow-left")) "Back"
+                }
+                button type="submit" class="btn btn-primary" { (views::icon("check")) "Promote" }
             }
         }
-    }
-    .into_string()
-}
-
-/// The run-log history panel. Fields come from [`worker::LogRecord`] (the
-/// stable read-back reader); it exposes ts, trigger, cli/model, sessions,
-/// candidates, run duration, token usage, outcome, and safe diagnostics.
-/// Duration and usage are the spend-audit signals — usage is shown verbatim so
-/// a metered run's cost is legible on the machine that harvested it.
-fn history_fragment(records: &[LogRecord]) -> String {
-    html! {
-        div class="inbox" {
-            div class="inbox-head" {
-                h2 { "Harvest history" }
-                a class="btn btn-ghost btn-sm" hx-get="/tab/inbox" hx-target="#main" {
-                    (views::icon("arrow-left")) "Back to inbox"
-                }
-            }
-            @if records.is_empty() {
-                p class="muted" { "No harvest runs recorded on this machine yet." }
-            } @else {
-                ul class="learn-log" {
-                    @for r in records {
-                        li class="learn-log-row" {
-                            span class=(format!("log-outcome log-{}", r.outcome)) { (r.outcome) }
-                            span class="log-ts muted" { (r.ts) }
-                            span class="log-trigger muted" { (r.trigger) }
-                            @if let Some(cli) = &r.cli {
-                                span class="log-cli muted" {
-                                    (cli)
-                                    @if let Some(model) = &r.model { " (" (model) ")" }
-                                }
-                            }
-                            span class="log-counts muted" {
-                                (r.sessions) " sessions · " (r.candidates) " candidates"
-                            }
-                            @if let Some(ms) = r.duration_ms {
-                                span class="log-duration muted" { (ms) "ms" }
-                            }
-                            // Token usage — the spend-audit signal. Untrusted
-                            // CLI-derived text, escaped by maud.
-                            @if let Some(usage) = &r.usage {
-                                span class="log-usage muted" { "usage " (usage) }
-                            }
-                            @if let Some((label, message)) = history_diagnostic(r) {
-                                // Older logs can contain provider-derived error
-                                // text. Keep it escaped through maud and capped
-                                // at render time; never use PreEscaped here.
-                                div class="log-diagnostic" {
-                                    @if let Some(label) = label {
-                                        span class="log-diagnostic-label" { (label) }
-                                        @if message.is_some() { " — " }
-                                    }
-                                    @if let Some(message) = message { (message) }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    .into_string()
-}
-
-/// Build the optional full-width diagnostic beneath a history row's metadata.
-/// New logs normally supply all three fields. Older logs may have only
-/// `error`, while partially written/foreign lines can omit either label part.
-fn history_diagnostic(r: &LogRecord) -> Option<(Option<String>, Option<String>)> {
-    let stage = r.error_stage.as_deref().filter(|s| !s.is_empty());
-    let code = r.error_code.as_deref().filter(|s| !s.is_empty());
-    let label = match (stage, code) {
-        (Some(stage), Some(code)) => Some(format!("{stage}/{code}")),
-        (Some(stage), None) => Some(stage.to_string()),
-        (None, Some(code)) => Some(code.to_string()),
-        (None, None) => None,
     };
-    let message = r
-        .error
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .map(|s| s.chars().take(512).collect::<String>());
-
-    (label.is_some() || message.is_some()).then_some((label, message))
+    views::drawer("Promote suggestion", body, None)
 }

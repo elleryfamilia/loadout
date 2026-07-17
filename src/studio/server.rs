@@ -32,6 +32,7 @@ use crate::profile::LoadoutConfig;
 use crate::studio::assets;
 use crate::studio::edit::{Session, StagedOp};
 use crate::studio::inbox;
+use crate::studio::settings;
 use crate::studio::state::{self, LibraryView, PreviewOutcome, StudioState};
 use crate::studio::views;
 
@@ -146,6 +147,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/tab/workflows") => handle_library(state, "workflows"),
         ("GET", "/staged") => handle_staged(state),
         ("GET", "/close") => Resp::html(String::new()),
+        ("GET", "/drawer/close") => Resp::html(String::new()),
         ("GET", "/diff") => handle_diff(state),
         ("POST", "/apply") => handle_apply(state),
         ("POST", "/discard") => handle_discard(state),
@@ -162,10 +164,14 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/packs") => handle_packs(state),
         ("GET", "/skills/card") => handle_skill_card(),
         ("POST", "/skills/install") => handle_skill_install(),
-        ("GET", "/tab/recents") => handle_recents(state),
+        ("GET", "/drawer/recents") => handle_recents_drawer(state),
         ("POST", "/recents/clear") => handle_recents_clear(state),
-        ("GET", "/tab/inbox") => inbox::tab(state),
-        ("GET", "/inbox/history") => inbox::history(state),
+        ("GET", "/drawer/inbox") => inbox::drawer(state),
+        ("GET", "/inbox/badge") => handle_inbox_badge(state),
+        ("GET", "/settings") => settings::page(state),
+        ("POST", "/settings/agent") => settings::set_agent(state, req),
+        ("POST", "/settings/learn/enable") => settings::learn_enable(state),
+        ("POST", "/settings/learn/disable") => settings::learn_disable(state),
         (_, p) if p.starts_with("/inbox/") => handle_inbox_param(state, req),
         ("GET", p) if p.starts_with("/artifacts/") => {
             handle_artifact(state, p.strip_prefix("/artifacts/").unwrap_or(""))
@@ -223,8 +229,9 @@ fn handle_fragment_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
 }
 
 /// Route `/inbox/<id>/<action>` (mutations are POST, so they inherit the
-/// Origin/Referer guard). `/tab/inbox` and `/inbox/history` are exact matches
-/// handled in [`route`] before this catch-all.
+/// Origin/Referer guard). `/drawer/inbox` and `/inbox/badge` are exact matches
+/// handled in [`route`] before this catch-all (otherwise `id_and_action` would
+/// parse "badge" as a candidate id).
 fn handle_inbox_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let (id, action) = id_and_action(&req.path, "/inbox/");
     match (req.method.as_str(), action) {
@@ -234,6 +241,12 @@ fn handle_inbox_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "unsuppress") => inbox::unsuppress(state, &id),
         _ => Resp::not_found(),
     }
+}
+
+/// `GET /inbox/badge` — the inbox icon's badge fragment, re-pulled after a
+/// disposition via [`views::inbox_badge_loader`]. Empty markup at zero.
+fn handle_inbox_badge(state: &Arc<Mutex<StudioState>>) -> Resp {
+    Resp::html(views::inbox_badge(inbox::pending_count(state)).into_string())
 }
 
 fn handle_profile_param(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
@@ -1321,12 +1334,11 @@ fn skill_action_at(home: &Path, store: &Path, path: &str, method: &str) -> Resp 
 
 // --- Recents ------------------------------------------------------------
 
-/// The Recents destination. The store is read fresh per request, so renders
-/// done in another terminal appear on the next click with no cache dance.
-fn handle_recents(state: &Arc<Mutex<StudioState>>) -> Resp {
-    state.lock().unwrap().active_tab = "recents".to_string();
+/// `GET /drawer/recents` — the Recents drawer. Deliberately does NOT touch
+/// `active_tab`: the drawer overlays whatever destination is current.
+fn handle_recents_drawer(state: &Arc<Mutex<StudioState>>) -> Resp {
     let store = recents_store(state);
-    Resp::html(views::recents_tab_fragment(
+    Resp::html(views::recents_drawer_fragment(
         &recent_rows(&store),
         store.is_readonly(),
     ))
@@ -1335,21 +1347,19 @@ fn handle_recents(state: &Arc<Mutex<StudioState>>) -> Resp {
 fn handle_recents_clear(state: &Arc<Mutex<StudioState>>) -> Resp {
     let mut store = recents_store(state);
     if let Err(e) = store.clear() {
-        return Resp::html(views::error_fragment(&format!(
+        return Resp::html(views::drawer_error(&format!(
             "could not clear recents: {e}"
         )));
     }
-    handle_recents(state)
+    handle_recents_drawer(state)
 }
 
 fn handle_recents_remove(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
     let mut store = recents_store(state);
     if let Err(e) = store.remove_id(id) {
-        return Resp::html(views::error_fragment(&format!(
-            "could not remove entry: {e}"
-        )));
+        return Resp::html(views::drawer_error(&format!("could not remove entry: {e}")));
     }
-    handle_recents(state)
+    handle_recents_drawer(state)
 }
 
 /// Build display rows. All fs reads happen here (store snapshot already
@@ -1896,11 +1906,16 @@ fn profile_preview_or_empty(
 }
 
 fn handle_diff(state: &Arc<Mutex<StudioState>>) -> Resp {
-    let (diffs, texts, staged, fs_changed) = {
+    let (diffs, texts, op_descriptions, staged, fs_changed) = {
         let s = state.lock().unwrap();
         (
             s.session.diff(),
             s.session.staged_layer_texts(),
+            s.session
+                .ops()
+                .iter()
+                .map(|op| op.describe())
+                .collect::<Vec<_>>(),
             s.session.ops().len(),
             s.session.external_edits(),
         )
@@ -1914,7 +1929,13 @@ fn handle_diff(state: &Arc<Mutex<StudioState>>) -> Resp {
         .collect();
     leaks.sort();
     leaks.dedup();
-    Resp::html(views::diff_view(&diffs, &leaks, &fs_changed, staged))
+    Resp::html(views::diff_view(
+        &diffs,
+        &op_descriptions,
+        &leaks,
+        &fs_changed,
+        staged,
+    ))
 }
 
 /// `POST /fragments/try` — run the *draft* script from the editor form right now
@@ -1948,11 +1969,27 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
         s.onboarding_active
             .then(|| state::staged_summary(&s.session))
     };
+    // A learn toggle is about to be applied — captured before apply() clears
+    // the staged ops, so the post-write bootstrap below knows whether to run.
+    let touched_learn = state
+        .lock()
+        .unwrap()
+        .session
+        .ops()
+        .iter()
+        .any(|op| matches!(op, crate::studio::edit::StagedOp::SetLearnEnabled { .. }));
     // Apply mutates + writes atomically; it's the one serialized operation, so
     // holding the lock across its (brief, small-file) I/O is correct here.
     let result = state.lock().unwrap().session.apply();
     match result {
         Ok(written) => {
+            // A learn toggle landed: (de)register the learning hooks to match
+            // the new two-part gate (synced flag AND this machine's ack) — the
+            // same bootstrap `load learn on|off` runs. Best-effort: a hook
+            // hiccup must not fail an applied config write.
+            if touched_learn {
+                learn_bootstrap_after_apply(state);
+            }
             // Guided first-run: a profile actually landed → show the "you're set"
             // finish card (names `load <agent>`), then disarm the flow. If
             // nothing composed a profile, fall through to the normal flash.
@@ -1964,6 +2001,7 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
                         .unwrap_or_else(|_| "claude".to_string());
                     let mut html = views::onboarding_done(&summary, &agent);
                     html.push_str(&views::staged_indicator_loader());
+                    html.push_str(&views::inbox_badge_loader());
                     return Resp::html(html);
                 }
             }
@@ -1983,18 +2021,58 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
                     views::workflows_tab(&state::workflows_view(&snap, None), Some(&msg))
                         .into_string();
                 html.push_str(&views::staged_indicator_loader());
+                html.push_str(&views::inbox_badge_loader());
                 return Resp::html(html);
             }
-            profiles_tab_resp(state, None, Some(&msg), true)
+            // Apply is when a queued promote's disposition actually flushes, so
+            // this is the moment the pending count can drop; refresh the badge
+            // unconditionally (cheap, idempotent GET) on all three success arms.
+            let mut resp = profiles_tab_resp(state, None, Some(&msg), true);
+            resp.body
+                .extend_from_slice(views::inbox_badge_loader().as_bytes());
+            resp
         }
         Err(e) => Resp::html(views::error_fragment(&format!("apply failed: {e}"))),
+    }
+}
+
+/// Shared post-apply side effect for a landed `[learn] enabled` change: load
+/// the just-written config and (de)register the ambient-learning hooks to
+/// match the new two-part gate (synced flag AND this machine's activation
+/// ack) — the same bootstrap `load learn on|off` runs on the CLI path. Called
+/// from both `handle_apply` (the main Apply button) and
+/// `settings::apply_or_stage` (a clean-session settings toggle applying
+/// immediately), so the two apply paths can't drift. Best-effort: a hook
+/// hiccup must not fail an applied config write, so failures are swallowed.
+///
+/// Gated behind `StudioState::bootstrap_learn_hooks` (false in the studio
+/// route-test fixture, see `state_for`): the real bootstrap resolves hook
+/// files under `config::home_dir()` — i.e. the *real* `$HOME` — and the only
+/// home-explicit test seam (`bootstrap_hook_registrations_at`) is private to
+/// `adapters::mod`, so route tests have no way to redirect it. They must skip
+/// the call entirely rather than risk writing into a developer's real
+/// dotfiles.
+pub(crate) fn learn_bootstrap_after_apply(state: &Arc<Mutex<StudioState>>) {
+    let (repo_base, enabled) = {
+        let s = state.lock().unwrap();
+        (s.repo_base.clone(), s.bootstrap_learn_hooks)
+    };
+    if !enabled {
+        return;
+    }
+    if let Ok(cfg) = config::Config::load(&repo_base) {
+        let _ = crate::adapters::bootstrap_hook_registrations(
+            &cfg,
+            crate::learn::state::learn_active(&cfg),
+            false,
+        );
     }
 }
 
 /// Commit + push the global config after a studio apply, if `[sync] auto_push`
 /// is on and the config dir is a synced repo. Returns a short status to append
 /// to the flash (or `None` when sync isn't configured / nothing to push).
-fn auto_push_after_apply(state: &Arc<Mutex<StudioState>>) -> Option<String> {
+pub(crate) fn auto_push_after_apply(state: &Arc<Mutex<StudioState>>) -> Option<String> {
     let repo_base = state.lock().unwrap().repo_base.clone();
     let cfg = crate::config::Config::load(&repo_base).ok()?;
     if !cfg.sync.auto_push {
@@ -2131,6 +2209,7 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
             }),
             _ => None,
         },
+        bootstrap_learn_hooks: true,
     }));
 
     // `0`/`0s` disables the idle shutdown; anything else is the inactivity window.
@@ -2564,6 +2643,11 @@ mod tests {
                 inbox_dir: repo.join("inbox"),
                 learn_dir: repo.join("learn"),
             }),
+            // Never let a route test's settings auto-apply run the real hook
+            // bootstrap — it resolves hook files under the real $HOME, and
+            // there's no test seam to redirect that (see
+            // `learn_bootstrap_after_apply`).
+            bootstrap_learn_hooks: false,
         }))
     }
 
@@ -2789,24 +2873,56 @@ mod tests {
         // destinations Loadouts | Library.
         assert!(body.contains("Loadouts"));
         assert!(body.contains("Library"));
-        assert!(body.contains("Recents"));
     }
 
     #[test]
-    fn shell_nav_always_shows_recents() {
+    fn shell_gear_button_carries_a_stable_id_for_client_side_active_wiring() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         let r = route(&st, &req("GET", "/", "", &[HOST, COOKIE], ""));
         let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("Recents"));
-        assert!(body.contains("data-tab=\"recents\""));
+        assert!(
+            body.contains("id=\"settings-btn\""),
+            "studio.js wires the gear's active state off this id: {body}"
+        );
+    }
+
+    #[test]
+    fn shell_shows_recents_icon_not_tab() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            !body.contains("data-tab=\"recents\""),
+            "recents must no longer be a tab"
+        );
+        assert!(
+            body.contains("hx-get=\"/drawer/recents\""),
+            "clock icon opens the recents drawer"
+        );
+    }
+
+    #[test]
+    fn shell_has_drawer_container_and_drawer_close_empties_it() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("id=\"drawer\""),
+            "shell must carry the drawer container"
+        );
+        let r = route(&st, &req("GET", "/drawer/close", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        assert!(r.body.is_empty());
     }
 
     #[test]
     fn recents_tab_renders_instructive_empty_state() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
-        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let r = route(&st, &req("GET", "/drawer/recents", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Nothing recent yet"));
@@ -2829,7 +2945,7 @@ mod tests {
         )
         .unwrap();
         let id = seed_recents(d.path(), "Demo plan", "gen/demo.html", "sha256:old");
-        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let r = route(&st, &req("GET", "/drawer/recents", "", &[HOST, COOKIE], ""));
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Demo plan"));
         // The kind renders as text, not just an icon — with several artifact
@@ -2858,7 +2974,7 @@ mod tests {
         let st = state_for(d.path(), None);
         let _id = seed_recents(d.path(), "Gone plan", "gen/demo.html", "sha256:demo");
         std::fs::remove_file(d.path().join("gen/demo.html")).unwrap();
-        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let r = route(&st, &req("GET", "/drawer/recents", "", &[HOST, COOKIE], ""));
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("Gone plan"));
         assert!(body.contains("recent-unavailable"));
@@ -2939,7 +3055,7 @@ mod tests {
             r#"{"version":999,"entries":[]}"#,
         )
         .unwrap();
-        let r = route(&st, &req("GET", "/tab/recents", "", &[HOST, COOKIE], ""));
+        let r = route(&st, &req("GET", "/drawer/recents", "", &[HOST, COOKIE], ""));
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("newer loadout"));
         assert!(!body.contains("/recents/clear"));
@@ -3691,6 +3807,52 @@ mod tests {
     }
 
     #[test]
+    fn review_page_leads_with_plain_language_staged_op_summaries() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+
+        // Stage a fragment edit first via the create-fragment fixture flow
+        // used elsewhere in this file — this is what keeps the session dirty,
+        // so the learn toggle below stages alongside it instead of
+        // auto-applying and vanishing from the diff.
+        route(
+            &st,
+            &req(
+                "POST",
+                "/fragments",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "name=rc&kind=markdown&guidance=Use+clippy&scope=repo&visibility=public",
+            ),
+        );
+        // ...then a learn toggle — this is the case Ellery hit live: an
+        // anonymous config.toml hunk with no clue what was staged.
+        route(
+            &st,
+            &req(
+                "POST",
+                "/settings/learn/enable",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+
+        let diff = body_of(route(&st, &req("GET", "/diff", "", &[HOST, COOKIE], "")));
+        assert!(
+            diff.contains("turn ambient learning on"),
+            "the learn toggle's staged op must be described in plain language: {diff}"
+        );
+        // /fragments always stages EditFragment (an id-based upsert that
+        // creates when absent — see handle_fragment_save), so the described
+        // op is "edit fragment", not "new fragment".
+        assert!(
+            diff.contains("edit fragment \u{201c}rc\u{201d}"),
+            "the fragment edit's staged op must be described in plain language: {diff}"
+        );
+    }
+
+    #[test]
     fn discard_clears_staged_without_writing_disk() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
@@ -4159,14 +4321,14 @@ mod tests {
         assert!(body.contains("Select a loadout to see what it composes."));
         assert!(!body.contains("fragment-detail"));
         assert!(!body.contains("<h1>rust</h1>"));
-        // Explicitly selecting one renders its board (Applies to / Fragments /
-        // Workflow slots), not the composed-document cards.
+        // Explicitly selecting one renders its board (Targets / Context
+        // fragments / Execution workflow slots), not the composed-document cards.
         let detail = body_of(route(
             &st,
             &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
         ));
         assert!(detail.contains("<h1>rust</h1>") && detail.contains("lo-board"));
-        assert!(detail.contains("Applies to") && detail.contains("Workflow"));
+        assert!(detail.contains("Targets") && detail.contains("Execution workflow"));
         assert!(!detail.contains("fragment-detail"));
     }
 
@@ -4186,10 +4348,11 @@ mod tests {
         ));
         assert!(board.contains("lo-board"));
         assert!(
-            board.contains("Applies to")
-                && board.contains("Fragments")
-                && board.contains("Workflow")
+            board.contains("Targets")
+                && board.contains("Context fragments")
+                && board.contains("Execution workflow")
         );
+        assert!(board.contains("when this loadout applies"));
         assert!(board.contains("/profiles/rust/fragments/rc")); // rc chip's remove
 
         // Equip the second fragment → it stages and the readout counts both.
@@ -4284,7 +4447,7 @@ mod tests {
         let d = rust_repo();
         let st = state_for(d.path(), Some(cfg));
 
-        // The default's board: locked "Applies to", a Default badge, and no
+        // The default's board: locked "Targets", a Default badge, and no
         // rename/delete (it's always-present).
         let base = body_of(route(
             &st,
@@ -4799,7 +4962,7 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
     }
 
-    // --- Inbox tab -----------------------------------------------------------
+    // --- Inbox drawer ----------------------------------------------------------
 
     /// The config fixture the inbox promote tests author into: one existing
     /// fragment + one loadout to bind a promoted fragment onto.
@@ -4811,16 +4974,137 @@ mod tests {
     }
 
     #[test]
-    fn inbox_tab_lists_candidates_and_shell_shows_pending_badge() {
+    fn inbox_drawer_lists_pending_candidates() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+        let r = route(&st, &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Prefers pnpm over npm"), "{body}");
+        assert!(
+            body.contains("drawer"),
+            "renders inside drawer chrome: {body}"
+        );
+        assert!(!body.contains("data-tab=\"inbox\""));
+    }
+
+    #[test]
+    fn inbox_drawer_empty_state_reflects_learning_toggle() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        // No candidates, learning off (the default fixture state): the
+        // empty-state copy should point at turning learning on.
+        let body = body_of(route(
+            &st,
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("Learning is off"),
+            "empty + learning off shows the off copy: {body}"
+        );
+
+        // Seed a candidate: the empty-state copy — either variant — must not
+        // render alongside a real card.
+        seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+        let body = body_of(route(
+            &st,
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            !body.contains("Learning is off"),
+            "candidate present: off-copy should be absent: {body}"
+        );
+        assert!(
+            !body.contains("You're all caught up"),
+            "candidate present: caught-up copy should be absent: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_drawer_empty_state_shows_caught_up_when_learning_is_on() {
+        let d = rust_repo();
+        let st = state_for(d.path(), Some("[learn]\nenabled = true\n"));
+        // The two-part `learn_on` gate needs both the synced flag (above) AND
+        // this machine's activation ack — write it directly (`load learn on`'s
+        // effect), the same file `learn_enable`'s handler writes.
+        let learn_dir = d.path().join("learn");
+        std::fs::create_dir_all(&learn_dir).unwrap();
+        crate::learn::state::write_activation_at(
+            &learn_dir,
+            &crate::learn::state::Activation {
+                machine_id: "machine-a".to_string(),
+                hostname: "test-host".to_string(),
+                activated_at: "2026-07-11T10:00:00Z".to_string(),
+            },
+        )
+        .unwrap();
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("You're all caught up"),
+            "learning on + empty inbox shows the caught-up copy: {body}"
+        );
+        assert!(
+            !body.contains("Learning is off"),
+            "the off-copy must not render once learning is actually on: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_badge_fragment_counts_pending_and_hides_at_zero() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/inbox/badge", "", &[HOST, COOKIE], ""));
+        assert!(
+            String::from_utf8(r.body).unwrap().trim().is_empty(),
+            "no badge at zero"
+        );
+        seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+        let r = route(&st, &req("GET", "/inbox/badge", "", &[HOST, COOKIE], ""));
+        assert!(String::from_utf8(r.body).unwrap().contains('1'));
+    }
+
+    #[test]
+    fn dismiss_rerenders_drawer_and_refreshes_badge() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                &format!("/inbox/{id}/dismiss"),
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("hx-get=\"/inbox/badge\""),
+            "response carries the badge refresh loader: {body}"
+        );
+        assert!(
+            !body.contains("Prefers pnpm over npm"),
+            "dismissed candidate leaves the queue: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_drawer_lists_candidates_and_shell_shows_pending_badge() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         seed_candidate(d.path(), "machine-a", "Always use pnpm, never npm.");
         seed_candidate(d.path(), "machine-a", "Prefer rg over grep.");
 
-        // The tab body lists both candidate claims.
+        // The drawer body lists both candidate claims.
         let body = body_of(route(
             &st,
-            &req("GET", "/tab/inbox", "", &[HOST, COOKIE], ""),
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("Always use pnpm, never npm."),
@@ -4828,9 +5112,17 @@ mod tests {
         );
         assert!(body.contains("Prefer rg over grep."), "claim 2");
 
-        // The shell shows the Inbox nav with a pending-count badge (2).
+        // The tab bar no longer has an Inbox destination; the shell's inbox
+        // icon carries the pending-count badge (2) instead.
         let shell = body_of(route(&st, &req("GET", "/", "", &[HOST, COOKIE], "")));
-        assert!(shell.contains("data-tab=\"inbox\""), "inbox nav present");
+        assert!(
+            !shell.contains("data-tab=\"inbox\""),
+            "inbox nav removed from the tab bar: {shell}"
+        );
+        assert!(
+            shell.contains("id=\"inbox-badge\""),
+            "badge wrapper present on the inbox icon: {shell}"
+        );
         assert!(
             shell.contains("tab-badge"),
             "pending badge present: {shell}"
@@ -4851,7 +5143,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/tab/inbox", "", &[HOST, COOKIE], ""),
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("the user asked for pnpm everywhere"),
@@ -4884,6 +5176,18 @@ mod tests {
             staged.contains("staged promotion"),
             "promote staged: {staged}"
         );
+        assert!(
+            staged.contains("hx-get=\"/inbox/badge\""),
+            "promote response refreshes the inbox badge: {staged}"
+        );
+        assert!(
+            staged.contains("hx-get=\"/staged\""),
+            "promote response refreshes the staged indicator: {staged}"
+        );
+        assert!(
+            !staged.contains("hx-get=\"/close\""),
+            "no modal-close loader — the drawer isn't a modal: {staged}"
+        );
         // Not yet promoted — the disposition is queued, flushed only on apply.
         assert_eq!(
             inbox_fold(d.path()).candidates[&id].status,
@@ -4892,10 +5196,15 @@ mod tests {
         );
 
         // Apply writes the config AND flushes the disposition to the journal.
-        body_of(route(
+        let applied = body_of(route(
             &st,
             &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
         ));
+        assert!(
+            applied.contains("hx-get=\"/inbox/badge\""),
+            "apply refreshes the inbox badge — the pending count actually \
+             drops the moment the queued promote's disposition flushes: {applied}"
+        );
         let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
         assert!(
             on_disk.contains("id = \"prefer-pnpm\""),
@@ -4930,9 +5239,16 @@ mod tests {
                 "",
             ),
         ));
-        // The candidate now shows under the Dismissed list, not as pending.
-        assert!(body.contains("Dismissed"), "dismissed section: {body}");
-        assert!(body.contains("Un-dismiss"), "un-dismiss control present");
+        // The candidate leaves the drawer queue; the dismissed list itself
+        // moved to Settings (Task 7), so it no longer renders here.
+        assert!(
+            !body.contains("Always use pnpm."),
+            "dismissed candidate leaves the queue: {body}"
+        );
+        assert!(
+            body.contains("hx-get=\"/inbox/badge\""),
+            "badge refresh loader present: {body}"
+        );
 
         let fold = inbox_fold(d.path());
         assert!(
@@ -5048,6 +5364,8 @@ mod tests {
 
     #[test]
     fn inbox_history_renders_seeded_log_lines() {
+        // History moved from the drawer's own panel (`/inbox/history`) to the
+        // Settings → Learning section — same content, new home.
         let d = rust_repo();
         let st = state_for(d.path(), None);
         seed_log_line(d.path(), "empty", "claude", 0);
@@ -5055,7 +5373,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
         ));
         assert!(body.contains("Harvest history"), "history heading: {body}");
         assert!(body.contains("extracted"), "extracted run shown");
@@ -5066,11 +5384,11 @@ mod tests {
 
     /// XSS regression at the trust boundary: candidate claim text is ultimately
     /// third-party transcript content, so a claim carrying a `<script>` tag must
-    /// render HTML-escaped in the inbox tab and NEVER as a raw tag. `maud`
+    /// render HTML-escaped in the inbox drawer and NEVER as a raw tag. `maud`
     /// escapes by construction; this locks it (a future `PreEscaped` on this path
     /// would be a stored-XSS hole in the studio the user opens in their browser).
     #[test]
-    fn inbox_tab_escapes_script_tags_in_candidate_claim() {
+    fn inbox_drawer_escapes_script_tags_in_candidate_claim() {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         seed_candidate(
@@ -5081,7 +5399,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/tab/inbox", "", &[HOST, COOKIE], ""),
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
@@ -5104,8 +5422,12 @@ mod tests {
 
         let shell = body_of(route(&st, &req("GET", "/", "", &[HOST, COOKIE], "")));
         assert!(
-            shell.contains("tab-badge\">2<"),
-            "the badge must carry the pending count value 2: {shell}"
+            shell.contains("id=\"inbox-badge\""),
+            "badge lives on the inbox icon: {shell}"
+        );
+        assert!(
+            shell.contains("id=\"inbox-badge\"><span class=\"tab-badge\">2</span>"),
+            "the badge must carry the pending count value 2 inside the icon's badge span: {shell}"
         );
     }
 
@@ -5130,7 +5452,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("input_tokens"),
@@ -5160,7 +5482,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("class=\"log-diagnostic\""),
@@ -5184,7 +5506,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
         ));
         assert!(body.contains("3 sessions"), "run remains visible: {body}");
         assert!(
@@ -5214,7 +5536,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("failed"),
@@ -5248,7 +5570,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
         ));
         assert!(
             body.contains("&lt;img src=x onerror=alert(1)&gt;"),
@@ -5279,7 +5601,7 @@ mod tests {
 
         let body = body_of(route(
             &st,
-            &req("GET", "/inbox/history", "", &[HOST, COOKIE], ""),
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
         ));
         assert_eq!(
             body.chars().filter(|c| *c == 'α').count(),
@@ -5339,6 +5661,372 @@ mod tests {
         assert!(
             on_disk.contains("Prefer pnpm for all installs."),
             "the edited claim text is the written guidance: {on_disk}"
+        );
+    }
+
+    /// An error swapped into `#drawer` (a candidate that vanished from the
+    /// inbox between page-load and click) must still render as visible drawer
+    /// chrome — `.drawer-root` only shows when it `:has(.drawer)`, so a bare
+    /// error banner there would silently close the drawer instead of showing
+    /// the message.
+    #[test]
+    fn promote_form_error_for_unknown_id_renders_drawer_chrome() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "GET",
+                "/inbox/does-not-exist/promote",
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("class=\"drawer\""),
+            "error still renders inside drawer chrome, not a bare banner: {body}"
+        );
+        assert!(
+            body.contains("no longer in the inbox"),
+            "the error message itself is present: {body}"
+        );
+    }
+
+    /// The promote form now renders as the drawer's own content (replacing the
+    /// queue), not a separate modal stacked on top of it — a back button
+    /// returns to the queue and errors have their own in-drawer slot.
+    #[test]
+    fn promote_form_renders_in_drawer_with_back_button() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+
+        let r = route(
+            &st,
+            &req(
+                "GET",
+                &format!("/inbox/{id}/promote"),
+                "",
+                &[HOST, COOKIE],
+                "",
+            ),
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("class=\"drawer\""),
+            "form renders inside drawer chrome, not a modal: {body}"
+        );
+        assert!(!body.contains("class=\"modal"), "no modal markup: {body}");
+        assert!(
+            body.contains("hx-get=\"/drawer/inbox\""),
+            "back button returns to the queue: {body}"
+        );
+        assert!(
+            body.contains("id=\"inbox-drawer-msg\""),
+            "in-drawer error slot present: {body}"
+        );
+    }
+
+    /// A validation error on promote (merge mode with no fragment picked) must
+    /// retarget into the drawer's own message slot, not `#main` or a modal slot
+    /// that no longer exists.
+    #[test]
+    fn promote_error_retargets_into_drawer_msg_slot() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_candidate(d.path(), "machine-a", "Prefers pnpm over npm");
+
+        // merge mode without a merge_id → validation error
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                &format!("/inbox/{id}/promote"),
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "mode=merge",
+            ),
+        );
+        let (_, target) = r
+            .headers
+            .iter()
+            .find(|(k, _)| k == "HX-Retarget")
+            .expect("promote error must set HX-Retarget");
+        assert_eq!(target, "#inbox-drawer-msg");
+    }
+
+    // --- Settings page -------------------------------------------------------
+
+    #[test]
+    fn settings_page_renders_sections_and_gear_is_active() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/settings", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("Learning"));
+        assert!(body.contains("Default agent"));
+        assert!(
+            body.contains("hx-get=\"/drawer/close\""),
+            "opening settings closes any open drawer"
+        );
+        assert_eq!(st.lock().unwrap().active_tab, "settings");
+        // The picker only lists launchable agents — "generic" has no `launch`
+        // program (it's AGENTS.md-style, wired by hand), so `load run` could
+        // never actually use it as a default.
+        assert!(
+            body.contains("value=\"claude\""),
+            "a launchable agent is offered: {body}"
+        );
+        assert!(
+            !body.contains("value=\"generic\""),
+            "generic has no launch program and must not appear: {body}"
+        );
+    }
+
+    #[test]
+    fn set_agent_auto_applies_on_clean_session() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/settings/agent",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "agent=codex",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(
+            st.lock().unwrap().session.ops().len(),
+            0,
+            "a clean session applies immediately instead of staying staged"
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("hx-get=\"/staged\""),
+            "staged indicator refresh loader"
+        );
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
+        assert!(
+            on_disk.contains("agent = \"codex\""),
+            "the submitted agent landed on disk, not just any op: {on_disk}"
+        );
+    }
+
+    #[test]
+    fn learn_enable_auto_applies_on_clean_session_and_writes_activation_ack() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/settings/learn/enable",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(
+            st.lock().unwrap().session.ops().len(),
+            0,
+            "a clean session applies immediately instead of staying staged"
+        );
+        assert!(
+            crate::learn::state::read_activation_at(&d.path().join("learn")).is_some(),
+            "activation ack written at confirm time"
+        );
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
+        assert!(
+            on_disk.contains("enabled = true"),
+            "the toggle turned learning ON, not off, on disk: {on_disk}"
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("learn-on-pill"),
+            "the settings page shows the green on-state right after auto-apply: {body}"
+        );
+    }
+
+    #[test]
+    fn learn_disable_auto_applies_on_clean_session_and_removes_activation_ack() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        // start from an activated machine
+        route(
+            &st,
+            &req(
+                "POST",
+                "/settings/learn/enable",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/settings/learn/disable",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(
+            st.lock().unwrap().session.ops().len(),
+            0,
+            "a clean session applies immediately instead of staying staged"
+        );
+        assert!(crate::learn::state::read_activation_at(&d.path().join("learn")).is_none());
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
+        assert!(
+            on_disk.contains("enabled = false"),
+            "the toggle turned learning OFF on disk: {on_disk}"
+        );
+    }
+
+    #[test]
+    fn settings_stage_not_apply_when_content_edits_pending() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        // Stage a fragment edit first — content edits always wait for Apply,
+        // so the session is now "dirty".
+        route(
+            &st,
+            &req(
+                "POST",
+                "/fragments",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "name=rc&kind=markdown&guidance=Use+clippy&scope=repo&visibility=public",
+            ),
+        );
+        assert_eq!(st.lock().unwrap().session.ops().len(), 1, "fragment staged");
+
+        let r = route(
+            &st,
+            &req(
+                "POST",
+                "/settings/agent",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "agent=codex",
+            ),
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(
+            st.lock().unwrap().session.ops().len(),
+            2,
+            "the settings op is staged alongside the pending fragment edit, not applied"
+        );
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap_or_default();
+        assert!(
+            !on_disk.contains("agent = \"codex\""),
+            "not applied yet — nothing should have landed on disk: {on_disk}"
+        );
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(
+            body.contains("staged alongside your pending edits"),
+            "banner explains it queued rather than applied: {body}"
+        );
+    }
+
+    #[test]
+    fn settings_learning_section_carries_consent_copy_before_enable() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/settings", "", &[HOST, COOKIE], ""));
+        let body = String::from_utf8(r.body).unwrap();
+        // The consent block is a product commitment: what runs, when, the cap.
+        assert!(body.contains("load harvest --ambient"));
+        assert!(body.contains("once per 6h"));
+        assert!(body.contains("review"));
+    }
+
+    #[test]
+    fn settings_page_shows_harvest_history_and_suppressions() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        seed_log_line(d.path(), "extracted", "claude", 3);
+        let id = seed_candidate(d.path(), "machine-a", "Dislikes emoji in commit messages");
+        seed_disposition(
+            d.path(),
+            "machine-a",
+            &id,
+            crate::learn::journal::Action::Dismiss,
+            "2026-07-11T10:00:00Z",
+        );
+
+        let body = body_of(route(
+            &st,
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(body.contains("3 sessions"), "run log renders: {body}");
+        assert!(
+            body.contains("Dislikes emoji in commit messages"),
+            "suppression listed: {body}"
+        );
+        assert!(
+            body.contains("unsuppress"),
+            "un-dismiss control present: {body}"
+        );
+    }
+
+    #[test]
+    fn unsuppress_from_settings_restores_and_rerenders_settings() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let id = seed_candidate(d.path(), "machine-a", "Dislikes emoji in commit messages");
+        seed_disposition(
+            d.path(),
+            "machine-a",
+            &id,
+            crate::learn::journal::Action::Dismiss,
+            "2026-07-11T10:00:00Z",
+        );
+
+        let body = body_of(route(
+            &st,
+            &req(
+                "POST",
+                &format!("/inbox/{id}/unsuppress"),
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "",
+            ),
+        ));
+        assert!(
+            body.contains("Settings"),
+            "responds with the settings page: {body}"
+        );
+        assert!(
+            body.contains("hx-get=\"/inbox/badge\""),
+            "badge refresh loader (restored → pending): {body}"
+        );
+        assert!(
+            !body.contains("Dislikes emoji in commit messages"),
+            "restored candidate must drop out of the dismissed list: {body}"
+        );
+    }
+
+    #[test]
+    fn inbox_drawer_footer_links_to_settings() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let body = body_of(route(
+            &st,
+            &req("GET", "/drawer/inbox", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            body.contains("hx-get=\"/settings\""),
+            "drawer footer links to settings: {body}"
         );
     }
 }

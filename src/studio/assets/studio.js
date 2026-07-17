@@ -162,19 +162,33 @@
     document.addEventListener("keydown", onKey, true);
   }
 
-  // Active-state for the top tabs and the profile rail (chrome only; the swap
-  // itself is hx-driven). Delegated so it survives fragment swaps: clicking a
-  // [data-tab] or [data-profile] marks it active among its same-attribute peers.
+  // Active-state for the top tabs, the profile rail, and the settings gear
+  // (chrome only; the swap itself is hx-driven). Delegated so it survives
+  // fragment swaps: clicking a [data-tab] or [data-profile] marks it active
+  // among its same-attribute peers. The gear (#settings-btn) sits outside the
+  // tab group, so it's handled as a third case: clicking it clears every tab's
+  // active state and lights the gear instead; clicking a tab clears the gear.
   function wireActiveGroups() {
     document.addEventListener("click", function (ev) {
       var el = ev.target.closest
-        ? ev.target.closest("[data-tab],[data-profile]")
+        ? ev.target.closest("[data-tab],[data-profile],#settings-btn")
         : null;
       if (!el) return;
+      if (el.id === "settings-btn") {
+        document.querySelectorAll("[data-tab]").forEach(function (t) {
+          t.classList.remove("active");
+        });
+        el.classList.add("active");
+        return;
+      }
       var attr = el.hasAttribute("data-tab") ? "data-tab" : "data-profile";
       var peers = el.parentNode.querySelectorAll("[" + attr + "]");
       for (var i = 0; i < peers.length; i++) peers[i].classList.remove("active");
       el.classList.add("active");
+      if (attr === "data-tab") {
+        var gear = document.getElementById("settings-btn");
+        if (gear) gear.classList.remove("active");
+      }
     });
   }
 
@@ -360,10 +374,20 @@
     applyTheme(document.documentElement.dataset.themePref || "auto");
   }
 
+  // Esc closes an open drawer (backdrop click already does; keyboard parity).
+  function wireDrawerEsc() {
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") return;
+      var backdrop = document.querySelector("#drawer .drawer-backdrop");
+      if (backdrop) backdrop.click();
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     process(document.body);
     wireActiveGroups();
     wireTheme();
+    wireDrawerEsc();
     enhanceCode(document.body);
     enhancePager(document.body);
   });

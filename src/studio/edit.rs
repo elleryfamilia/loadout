@@ -85,6 +85,13 @@ pub enum StagedOp {
     },
     /// Remove the workflow with this id from a layer.
     DeleteWorkflow { layer: Layer, id: String },
+    /// Set `[defaults] agent` — the default launch agent.
+    SetDefaultAgent { layer: Layer, agent: String },
+    /// Set `[learn] enabled` — the synced ambient-learning intent flag. The
+    /// machine-local side effects (activation ack, hook registration) are NOT
+    /// part of the op: they belong to the settings handlers / post-apply hook
+    /// (see `handle_apply`), keeping the op a pure config mutation.
+    SetLearnEnabled { layer: Layer, enabled: bool },
 }
 
 impl StagedOp {
@@ -101,8 +108,50 @@ impl StagedOp {
             | StagedOp::DeleteTarget { layer, .. }
             | StagedOp::CreateWorkflow { layer, .. }
             | StagedOp::EditWorkflow { layer, .. }
-            | StagedOp::DeleteWorkflow { layer, .. } => *layer,
+            | StagedOp::DeleteWorkflow { layer, .. }
+            | StagedOp::SetDefaultAgent { layer, .. }
+            | StagedOp::SetLearnEnabled { layer, .. } => *layer,
             StagedOp::DuplicatePaletteItem { to_layer, .. } => *to_layer,
+        }
+    }
+
+    /// One plain-language sentence describing this op, for the review page's
+    /// "What's staged" summary. Names the item id/name so the reader can tell
+    /// staged ops apart without reading the file diff below.
+    pub fn describe(&self) -> String {
+        match self {
+            StagedOp::CreateFragment { cap, .. } => {
+                format!("new fragment \u{201c}{}\u{201d}", cap.id)
+            }
+            StagedOp::EditFragment { id, .. } => format!("edit fragment \u{201c}{id}\u{201d}"),
+            StagedOp::DeleteFragment { id, .. } => format!("delete fragment \u{201c}{id}\u{201d}"),
+            StagedOp::CreateProfile { profile, .. } => {
+                format!("new loadout \u{201c}{}\u{201d}", profile.name)
+            }
+            StagedOp::EditProfile { name, .. } => format!("edit loadout \u{201c}{name}\u{201d}"),
+            StagedOp::DeleteProfile { name, .. } => {
+                format!("delete loadout \u{201c}{name}\u{201d}")
+            }
+            StagedOp::DuplicatePaletteItem { id, .. } => {
+                format!("adopt palette fragment \u{201c}{id}\u{201d}")
+            }
+            StagedOp::EditTarget { id, .. } => format!("edit target \u{201c}{id}\u{201d}"),
+            StagedOp::DeleteTarget { id, .. } => format!("delete target \u{201c}{id}\u{201d}"),
+            StagedOp::CreateWorkflow { workflow, .. } => {
+                format!("new workflow \u{201c}{}\u{201d}", workflow.id)
+            }
+            StagedOp::EditWorkflow { id, .. } => format!("edit workflow \u{201c}{id}\u{201d}"),
+            StagedOp::DeleteWorkflow { id, .. } => format!("delete workflow \u{201c}{id}\u{201d}"),
+            StagedOp::SetDefaultAgent { agent, .. } => {
+                format!("set the default agent to \u{201c}{agent}\u{201d}")
+            }
+            StagedOp::SetLearnEnabled { enabled, .. } => {
+                if *enabled {
+                    "turn ambient learning on \u{2014} adds [learn] enabled = true".to_string()
+                } else {
+                    "turn ambient learning off \u{2014} sets [learn] enabled = false".to_string()
+                }
+            }
         }
     }
 }
@@ -136,7 +185,7 @@ pub struct Session {
     /// config write succeeds — the studio-inbox analogue of `pending_trust`.
     /// Same guarantee: the disposition lands **iff** the config write lands
     /// (queued on stage, flushed in `apply()`, dropped by `discard()`). Used by
-    /// the Inbox tab's promote flow so a candidate is only marked `Promoted` if
+    /// the Inbox drawer's promote flow so a candidate is only marked `Promoted` if
     /// its fragment actually reached the config files.
     pub(crate) pending_dispositions: Vec<crate::learn::journal::Disposition>,
     /// Where [`pending_dispositions`](Self::pending_dispositions) flush:
@@ -554,6 +603,12 @@ fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
         StagedOp::DeleteWorkflow { id, .. } => {
             remove(aot_mut(doc, "workflows"), "id", id);
         }
+        StagedOp::SetDefaultAgent { agent, .. } => {
+            table_mut(doc, "defaults")["agent"] = toml_edit::value(agent.as_str());
+        }
+        StagedOp::SetLearnEnabled { enabled, .. } => {
+            table_mut(doc, "learn")["enabled"] = toml_edit::value(*enabled);
+        }
     }
     Ok(())
 }
@@ -567,6 +622,15 @@ fn aot_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut ArrayOfTables {
     doc[key]
         .as_array_of_tables_mut()
         .expect("just inserted an array-of-tables")
+}
+
+/// Get (or create) a plain table at `key` (the `[defaults]`/`[learn]`/`[env]`
+/// settings tables — sibling of `aot_mut` for arrays-of-tables).
+fn table_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
+    if doc.get(key).and_then(Item::as_table).is_none() {
+        doc.insert(key, Item::Table(Table::new()));
+    }
+    doc[key].as_table_mut().expect("just inserted a table")
 }
 
 /// Replace the entry whose `field` equals `val`, or push when absent.
@@ -1219,5 +1283,81 @@ mod tests {
             !inbox.join("journal-machine-a.jsonl").exists(),
             "a discarded disposition must never be written"
         );
+    }
+
+    // --- StagedOp::describe (review page's plain-language summary) -----------
+
+    #[test]
+    fn describe_create_fragment_names_the_id() {
+        let op = StagedOp::CreateFragment {
+            layer: Layer::Global,
+            cap: Box::new(cap("rc", "Use clippy")),
+        };
+        assert_eq!(op.describe(), "new fragment \u{201c}rc\u{201d}");
+    }
+
+    #[test]
+    fn describe_set_default_agent_names_the_agent() {
+        let op = StagedOp::SetDefaultAgent {
+            layer: Layer::Global,
+            agent: "codex".into(),
+        };
+        assert_eq!(
+            op.describe(),
+            "set the default agent to \u{201c}codex\u{201d}"
+        );
+    }
+
+    #[test]
+    fn describe_set_learn_enabled_differs_on_and_off() {
+        let on = StagedOp::SetLearnEnabled {
+            layer: Layer::Global,
+            enabled: true,
+        };
+        assert_eq!(
+            on.describe(),
+            "turn ambient learning on \u{2014} adds [learn] enabled = true"
+        );
+        let off = StagedOp::SetLearnEnabled {
+            layer: Layer::Global,
+            enabled: false,
+        };
+        assert_eq!(
+            off.describe(),
+            "turn ambient learning off \u{2014} sets [learn] enabled = false"
+        );
+    }
+
+    #[test]
+    fn scalar_ops_write_defaults_and_learn_tables() {
+        let d = tempfile::tempdir().unwrap();
+        let gdir = d.path().join("global");
+        std::fs::create_dir_all(&gdir).unwrap();
+        std::fs::write(
+            gdir.join("config.toml"),
+            "# my config\n[learn]\nenabled = false\n",
+        )
+        .unwrap();
+        let mut s = Session::open(d.path(), Some(&gdir)).unwrap();
+        s.stage(StagedOp::SetDefaultAgent {
+            layer: Layer::Global,
+            agent: "codex".into(),
+        })
+        .unwrap();
+        s.stage(StagedOp::SetLearnEnabled {
+            layer: Layer::Global,
+            enabled: true,
+        })
+        .unwrap();
+        s.apply().unwrap();
+        let text = std::fs::read_to_string(gdir.join("config.toml")).unwrap();
+        assert!(text.contains("# my config"), "comment preserved");
+        assert!(text.contains("agent = \"codex\""));
+        assert!(text.contains("enabled = true"));
+        // The written config must round-trip through the real loader.
+        let cfg =
+            crate::config::Config::load_from(Some(&gdir.join("config.toml")), d.path()).unwrap();
+        assert_eq!(cfg.default_agent, "codex");
+        assert!(cfg.learn.enabled);
     }
 }
