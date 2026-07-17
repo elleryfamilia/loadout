@@ -1,6 +1,6 @@
 [package]
 name = "loadout"
-version = "0.17.0"
+version = "0.18.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Equip the right context for the job — detect the project, select the loadout that fits, and render your global context as an agent-specific instruction overlay."

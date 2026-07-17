@@ -8,16 +8,45 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased
+## 0.18.0 — 2026-07-16
+
+### Added
+
+- **Studio Settings page** — a gear icon in the top bar opens a minimal
+  settings surface: turn ambient learning on or off (same consent story as
+  `load learn on`; the activation ack is written at confirm time and stays
+  inert until the change applies), and pick the default agent `load run`
+  launches. Harvest history — including the new failure diagnostics — and
+  dismissed suggestions live here too, moved off the old Inbox tab. Changes
+  apply immediately on a clean session, or stage alongside your other pending
+  edits. Deliberately not here (TOML-only, by design): `[env]`, `[sync]`,
+  `[codex]`, and `[learn]`'s tuning knobs.
 
 ### Changed
 
+- **Studio navigation: four tabs → two** — the shell is now just
+  **Loadouts | Library**. The Inbox tab became a top-bar icon with a
+  live-refreshing pending-count badge that opens a right-side drawer;
+  promote and dismiss run inside the drawer, with in-drawer errors and back
+  navigation. Recents likewise moved from a tab to a clock-icon drawer. The
+  review page now leads with plain-language summaries of what each staged
+  change will do.
 - **npm bootstrapper 0.2.0** — running `npx @ellery/loadout …` with `load`
   already installed now checks the latest GitHub release and, when yours is
   older, offers to run `load update` before delegating (consent-prompted, like
   the install; non-interactive runs get a one-line hint on stderr instead).
   The check times out after 2.5s and is skipped when offline — it never blocks
   the run. npm-package-only change; the `load` CLI itself is unchanged.
+
+### Fixed
+
+- **Harvest extraction is stricter and failures are legible** — the Claude
+  extraction call now enforces structured output instead of trusting
+  free-form text, a failed run records a safe diagnostic (stage/code plus a
+  bounded, escaped message — never raw provider output), and the same reason
+  now shows consistently in `load harvest`, `load learn status`,
+  `load doctor`, and the studio's harvest history. Model pins also stay on
+  the provider they were set for instead of leaking across CLIs.
 
 ## 0.17.0 — 2026-07-12
 
