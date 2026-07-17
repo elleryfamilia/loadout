@@ -314,6 +314,24 @@ fn check_learn_at(
     home: &Path,
     now: SystemTime,
 ) -> Vec<checks::Finding> {
+    let selection =
+        if cfg.learn.enabled && crate::learn::state::read_activation_at(learn_dir).is_some() {
+            crate::learn::agent_cli::select(&cfg.learn)
+        } else {
+            crate::learn::agent_cli::Selection::None
+        };
+    check_learn_at_with_selection(cfg, learn_dir, home, now, &selection)
+}
+
+/// Selection-explicit core for deterministic tests of current CLI
+/// compatibility. The production wrapper probes the real configured CLI once.
+fn check_learn_at_with_selection(
+    cfg: &config::Config,
+    learn_dir: &Path,
+    home: &Path,
+    now: SystemTime,
+    selection: &crate::learn::agent_cli::Selection,
+) -> Vec<checks::Finding> {
     use checks::Finding;
     let mut out = Vec::new();
 
@@ -358,19 +376,64 @@ fn check_learn_at(
     // Last run + outcome (log/stamps), shown once there's history or while
     // learning is on and waiting for a first run.
     let log = crate::learn::worker::read_log(&learn_dir.join("log.jsonl"));
+    let unresolved = active
+        .then(|| crate::learn::worker::latest_unresolved_failure(learn_dir))
+        .flatten();
+    let latest_is_unresolved = match (log.last(), unresolved.as_ref()) {
+        (Some(latest), Some(failure)) => {
+            latest.ts == failure.ts
+                && latest.trigger == failure.trigger
+                && latest.outcome == failure.outcome
+                && latest.error_stage == failure.error_stage
+                && latest.error_code == failure.error_code
+        }
+        _ => false,
+    };
     if enabled || !log.is_empty() {
         match log.last() {
-            Some(r) => out.push(Finding::ok(format!(
-                "last run: {} — {} ({}), {} session{}, {} candidate{}",
-                r.ts,
-                r.outcome,
-                r.cli.as_deref().unwrap_or("?"),
-                r.sessions,
-                plural(r.sessions),
-                r.candidates,
-                plural(r.candidates),
-            ))),
+            Some(r) => {
+                let summary = format!(
+                    "last run: {} — {} ({}), {} session{}, {} candidate{}",
+                    r.ts,
+                    r.outcome,
+                    r.cli.as_deref().unwrap_or("?"),
+                    r.sessions,
+                    plural(r.sessions),
+                    r.candidates,
+                    plural(r.candidates),
+                );
+                if latest_is_unresolved {
+                    out.push(Finding::warn(format!(
+                        "{summary} — {}",
+                        super::harvest::format_logged_diagnostic(r)
+                    )));
+                } else {
+                    out.push(Finding::ok(summary));
+                }
+            }
             None => out.push(Finding::ok("last run: none yet")),
+        }
+    }
+
+    // Breaker history is actionable only for an active learner. The worker's
+    // counter-aware lookup deliberately survives later empty/no-op log rows.
+    if active {
+        if let Some(failure) = unresolved.as_ref().filter(|_| !latest_is_unresolved) {
+            out.push(Finding::warn(format!(
+                "unresolved harvest failure: {}",
+                super::harvest::format_logged_diagnostic(failure)
+            )));
+        }
+
+        // Unsupported selection is pre-spend and does not increment the
+        // breaker, so surface it independently even with no sessions or log.
+        if let crate::learn::agent_cli::Selection::Unsupported(unsupported) = selection {
+            let diagnostic =
+                crate::learn::worker::HarvestDiagnostic::UnsupportedCli(unsupported.clone());
+            out.push(Finding::warn(format!(
+                "current extraction CLI is unsupported: {}",
+                super::harvest::format_diagnostic(&diagnostic)
+            )));
         }
     }
 
@@ -386,7 +449,7 @@ fn check_learn_at(
     }
 
     // Paused after repeated failures.
-    if crate::learn::state::paused_at(learn_dir) {
+    if active && crate::learn::state::paused_at(learn_dir) {
         out.push(Finding::warn(
             "learning paused after repeated failures — a successful `load harvest` \
              or `load learn on` clears it",
@@ -1086,11 +1149,138 @@ mod learn_tests {
         let e = env();
         crate::learn::state::record_failure_at(&e.learn_dir);
         crate::learn::state::record_failure_at(&e.learn_dir); // 2 → paused
-        let cfg = Config::defaults();
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        activate(&e.learn_dir);
         let findings = check_learn_at(&cfg, &e.learn_dir, &e.home, now());
         let f = find(&findings, "paused after repeated failures").expect("must warn: {findings:?}");
         assert_eq!(f.status, Status::Warn);
         assert!(f.message.contains("load harvest") && f.message.contains("load learn on"));
+    }
+
+    #[test]
+    fn disabled_learning_treats_breaker_failure_and_pause_as_history() {
+        let e = env();
+        std::fs::write(
+            e.learn_dir.join("log.jsonl"),
+            concat!(
+                r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","sessions":1,"candidates":0,"outcome":"failed","error_stage":"validate_output","error_code":"output_json_invalid","error":"The extraction CLI returned invalid JSON output."}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        crate::learn::state::record_failure_at(&e.learn_dir);
+        crate::learn::state::record_failure_at(&e.learn_dir);
+
+        let cfg = Config::defaults();
+        let findings = check_learn_at_with_selection(
+            &cfg,
+            &e.learn_dir,
+            &e.home,
+            now(),
+            &crate::learn::agent_cli::Selection::None,
+        );
+        assert!(find(&findings, "unresolved harvest failure").is_none());
+        assert!(find(&findings, "paused after repeated failures").is_none());
+        assert!(find(&findings, "output_json_invalid").is_none());
+    }
+
+    #[test]
+    fn latest_breaker_failure_is_one_warn_last_run_finding() {
+        let e = env();
+        activate(&e.learn_dir);
+        std::fs::write(
+            e.learn_dir.join("log.jsonl"),
+            concat!(
+                r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","sessions":1,"candidates":0,"outcome":"failed","error_stage":"validate_output","error_code":"output_json_invalid","error":"SECRET_FORGED_ERROR"}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        crate::learn::state::record_failure_at(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+
+        let findings = check_learn_at_with_selection(
+            &cfg,
+            &e.learn_dir,
+            &e.home,
+            now(),
+            &crate::learn::agent_cli::Selection::None,
+        );
+        let last = find(&findings, "last run:").expect("must show last run: {findings:?}");
+        assert_eq!(last.status, Status::Warn);
+        assert!(last.message.contains("validate_output/output_json_invalid"));
+        assert!(last.message.contains("returned invalid JSON output"));
+        assert!(!last.message.contains("SECRET_FORGED_ERROR"));
+        assert!(
+            find(&findings, "unresolved harvest failure").is_none(),
+            "latest failure must not get a duplicate warning: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn later_empty_is_ok_last_run_plus_one_unresolved_warning() {
+        let e = env();
+        activate(&e.learn_dir);
+        std::fs::write(
+            e.learn_dir.join("log.jsonl"),
+            concat!(
+                r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","sessions":1,"candidates":0,"outcome":"failed","error_stage":"validate_output","error_code":"output_json_invalid","error":"SECRET_FORGED_ERROR"}"#,
+                "\n",
+                r#"{"ts":"2026-07-10T10:05:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"empty"}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        crate::learn::state::record_failure_at(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+
+        let findings = check_learn_at_with_selection(
+            &cfg,
+            &e.learn_dir,
+            &e.home,
+            now(),
+            &crate::learn::agent_cli::Selection::None,
+        );
+        let last = find(&findings, "last run:").expect("must show last run: {findings:?}");
+        assert_eq!(last.status, Status::Ok);
+        assert!(last.message.contains("empty"));
+        let failure = find(&findings, "unresolved harvest failure")
+            .expect("must preserve breaker reason: {findings:?}");
+        assert_eq!(failure.status, Status::Warn);
+        assert!(failure
+            .message
+            .contains("validate_output/output_json_invalid"));
+        assert!(!failure.message.contains("SECRET_FORGED_ERROR"));
+    }
+
+    #[test]
+    fn active_unsupported_selection_warns_without_log_history() {
+        let e = env();
+        activate(&e.learn_dir);
+        let mut cfg = Config::defaults();
+        cfg.learn.enabled = true;
+        cfg.learn.cli = Some("claude".into());
+        let selection = crate::learn::agent_cli::Selection::Unsupported(
+            crate::learn::agent_cli::UnsupportedCli {
+                cli_id: "claude",
+                installed_version: Some("2.1.210".into()),
+                minimum_version: crate::learn::agent_cli::CLAUDE_MIN_VERSION,
+                reason: crate::learn::agent_cli::UnsupportedReason::TooOld,
+            },
+        );
+
+        let findings =
+            check_learn_at_with_selection(&cfg, &e.learn_dir, &e.home, now(), &selection);
+        let f = find(&findings, "current extraction CLI is unsupported")
+            .expect("must warn: {findings:?}");
+        assert_eq!(f.status, Status::Warn);
+        assert!(f
+            .message
+            .contains("preflight/claude_structured_output_unsupported"));
+        assert!(f.message.contains("Upgrade to 2.1.211 or newer"));
     }
 
     // --- corrupt watermarks -----------------------------------------------------

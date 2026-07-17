@@ -249,9 +249,18 @@ pub fn reset_failures_at(dir: &Path) {
     write_failures(&dir.join(FAILURES_FILE), FailuresFile { consecutive: 0 });
 }
 
+/// Read the current consecutive-failure count.
+///
+/// Missing, unreadable, and malformed state all fail closed to zero, matching
+/// [`paused_at`]. This is the read-only key used to decide whether an older run
+/// log failure is still actionable.
+pub fn consecutive_failures_at(dir: &Path) -> u32 {
+    read_failures(&dir.join(FAILURES_FILE)).consecutive
+}
+
 /// Whether ambient triggering is paused: 2 or more consecutive failures.
 pub fn paused_at(dir: &Path) -> bool {
-    read_failures(&dir.join(FAILURES_FILE)).consecutive >= 2
+    consecutive_failures_at(dir) >= 2
 }
 
 #[cfg(test)]
@@ -399,6 +408,7 @@ mod tests {
 
         let first = record_failure_at(dir.path());
         assert_eq!(first, 1);
+        assert_eq!(consecutive_failures_at(dir.path()), 1);
         assert!(!paused_at(dir.path()), "one failure → not yet paused");
 
         let second = record_failure_at(dir.path());
@@ -411,6 +421,16 @@ mod tests {
         assert!(paused_at(dir.path()));
 
         reset_failures_at(dir.path());
+        assert_eq!(consecutive_failures_at(dir.path()), 0);
         assert!(!paused_at(dir.path()), "reset clears the pause");
+    }
+
+    #[test]
+    fn consecutive_failures_is_zero_for_missing_or_malformed_state() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(consecutive_failures_at(dir.path()), 0);
+
+        std::fs::write(dir.path().join(FAILURES_FILE), "not json").unwrap();
+        assert_eq!(consecutive_failures_at(dir.path()), 0);
     }
 }

@@ -191,6 +191,18 @@ fn learning_section(
                             @if let Some(usage) = &r.usage {
                                 span class="log-usage muted" { "usage " (usage) }
                             }
+                            @if let Some((label, message)) = history_diagnostic(r) {
+                                // Older logs can contain provider-derived error
+                                // text. Keep it escaped through maud and capped
+                                // at render time; never use PreEscaped here.
+                                div class="log-diagnostic" {
+                                    @if let Some(label) = label {
+                                        span class="log-diagnostic-label" { (label) }
+                                        @if message.is_some() { " — " }
+                                    }
+                                    @if let Some(message) = message { (message) }
+                                }
+                            }
                         }
                     }
                 }
@@ -212,6 +224,27 @@ fn learning_section(
             }
         }
     }
+}
+
+/// Build the optional full-width diagnostic beneath a history row's metadata.
+/// New logs normally supply all three fields. Older logs may have only
+/// `error`, while partially written/foreign lines can omit either label part.
+fn history_diagnostic(r: &LogRecord) -> Option<(Option<String>, Option<String>)> {
+    let stage = r.error_stage.as_deref().filter(|s| !s.is_empty());
+    let code = r.error_code.as_deref().filter(|s| !s.is_empty());
+    let label = match (stage, code) {
+        (Some(stage), Some(code)) => Some(format!("{stage}/{code}")),
+        (Some(stage), None) => Some(stage.to_string()),
+        (None, Some(code)) => Some(code.to_string()),
+        (None, None) => None,
+    };
+    let message = r
+        .error
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(512).collect::<String>());
+
+    (label.is_some() || message.is_some()).then_some((label, message))
 }
 
 fn agent_section(current: &str, agents: &[String]) -> Markup {
