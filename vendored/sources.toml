@@ -156,37 +156,69 @@ ref_strategy = "release"
 release = "1.23.0"
 commit = "c67c9bdbfb43b0ecd69b52d37aeb4ab2d5386271"
 note = """
-16-icon subset for `Phase.icon`/`PlanTask.icon` (see `plan::icons`): \
-book-open, bug, database, file-text, flask-conical, git-branch, globe, \
-layout-dashboard, package, paintbrush, rocket, search, shield, terminal, \
-wrench, zap. Each SVG is vendored byte-for-byte from `icons/<name>.svg` at \
-the pinned commit — the renderer strips the outer <svg> wrapper at render \
-time (see `render::icon_markup`) rather than the vendored file being \
-pre-edited, so a drift diff against upstream stays a straight file compare. \
-Upstream has no `icons/layout.svg` (renamed); `layout-dashboard` is used in \
-its place.
+16-icon subset naming the `Phase.icon`/`PlanTask.icon` vocabulary (see \
+`plan::icons`): book-open, bug, database, file-text, flask-conical, \
+git-branch, globe, layout-dashboard, package, paintbrush, rocket, search, \
+shield, terminal, wrench, zap. Each SVG is vendored byte-for-byte from \
+`icons/<name>.svg` at the pinned commit, so a drift diff against upstream \
+stays a straight file compare. Upstream has no `icons/layout.svg` \
+(renamed); `layout-dashboard` is used in its place.
 
-A 17th file, chevron-right, is also vendored from the same pinned commit but \
-is NOT part of that vocabulary — it's fixed UI chrome (the `<details>` \
-disclosure marker; see `plan::icons::ui_chevron`), not a name a `plan.json` \
-author can set via `Phase.icon`/`PlanTask.icon`.
+NOTE (2026-07-30): the rendered page no longer DRAWS any of these. The plan \
+viewer's redesign carries hierarchy with type, rules, and colour instead of \
+glyphs, so `render.rs` emits no <svg> icons. The names are still validated, \
+so an existing plan.json setting `icon` stays valid rather than becoming a \
+hard error — which is the only reason these files are still here. If the \
+field is ever formally dropped, this whole source entry and \
+`plan::icons::icon_svg` go with it.
+
+A 17th file, chevron-right, is also vendored from the same pinned commit and \
+was the <details> disclosure marker. That marker is now a text character set \
+in the mono face, so this file is likewise retained but undrawn.
 """
 
 [[source]]
-id = "inter"
-repo = "rsms/inter"
-homepage = "https://rsms.me/inter/"
-license = "OFL-1.1 (see vendored/inter/LICENSE, upstream LICENSE.txt verbatim)"
+id = "newsreader"
+repo = "productiontype/Newsreader"
+homepage = "https://github.com/productiontype/Newsreader"
+license = "OFL-1.1 (see vendored/newsreader/OFL.txt, upstream verbatim)"
 ref_strategy = "commit"
-commit = "google-fonts-api-v20"
+commit = "google-fonts-api-v26"
 note = """
-Inter 400 (Inter-Regular.woff2) and 600 (Inter-SemiBold.woff2), latin \
-subset only, as served by the Google Fonts static woff2 endpoint \
-(fonts.gstatic.com/s/inter/v20/…, resolved via \
-fonts.googleapis.com/css2?family=Inter:wght@400;600 with a Chrome UA on \
-2026-07-08). Google Fonts versions its static files by the v20 path \
-segment rather than a git commit, so that's what's pinned above. The two \
-files are base64-embedded into src/plan/assets/plan.css's @font-face \
-rules (the page's CSP has font-src data: and nothing else); the vendored \
-copies here are the canonical originals those data: URIs must match.
+Newsreader upright and italic, latin subset only, as served by the Google \
+Fonts static woff2 endpoint (fonts.gstatic.com/s/newsreader/v26/…, resolved \
+via the fonts.googleapis.com/css2 URL recorded in tools/build-plan-fonts.py \
+with a Chrome UA on 2026-07-30). Google Fonts versions its static files by \
+the v26 path segment rather than a git commit, so that's what's pinned above.
+
+These are the canonical originals. What ships in \
+src/plan/assets/plan.css's @font-face rules is DERIVED from them by \
+tools/build-plan-fonts.py: the optical-size axis is pinned to 16 and the \
+weight axis clipped (300-600 upright, a single 400 instance italic), which \
+is what takes the pair from 279 KB to 77 KB. Re-derive with \
+`tools/build-plan-fonts.py --write`; never hand-edit the base64.
+
+Newsreader is the plan viewer's prose face — everything a reader reads as \
+content. See plan.css's header for the serif/mono split.
+"""
+
+[[source]]
+id = "jetbrains-mono"
+repo = "JetBrains/JetBrainsMono"
+homepage = "https://github.com/JetBrains/JetBrainsMono"
+license = "OFL-1.1 (see vendored/jetbrains-mono/OFL.txt, upstream verbatim)"
+ref_strategy = "commit"
+commit = "google-fonts-api-v24"
+note = """
+JetBrains Mono upright, latin subset only, from the same Google Fonts static \
+endpoint and resolved the same way (fonts.gstatic.com/s/jetbrainsmono/v24/…, \
+2026-07-30). No italic is vendored: nothing on the page sets monospace \
+emphasis, since markdown cannot nest <em> inside a code span.
+
+As with Newsreader, plan.css embeds a DERIVED copy (weight axis clipped to \
+400-600) built by tools/build-plan-fonts.py.
+
+JetBrains Mono is the plan viewer's metadata face — every label, count, id, \
+badge, and status. If a run of text is content it is serif; if it is \
+something the page says ABOUT that content it is mono.
 """

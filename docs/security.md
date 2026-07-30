@@ -76,10 +76,12 @@ defends on several layers:
   latent XSS. It's closed now, in both surfaces.
 - **`icon` is a closed vocabulary, not free text.** A phase's or task's
   `icon` field must name one of 16 vendored Lucide icons (`unknown_icon`
-  rejects anything else); the renderer inlines the matching SVG directly,
-  which is only safe *because* the value can never be attacker-controlled
-  markup — it's a lookup key into loadout's own vendored assets, not
-  `plan.json`-supplied SVG content.
+  rejects anything else) — a lookup key into loadout's own vendored assets,
+  never `plan.json`-supplied SVG content. The renderer used to inline the
+  matching SVG, which was only safe *because* of that closed vocabulary; the
+  redesigned viewer draws no icons at all, so today the value reaches nothing
+  but the validator. The vocabulary check stays regardless: it is what keeps
+  the field from becoming an injection point if drawing ever returns.
 - **The embedded JSON data island is escaped, not just serialized.** The
   rendered page includes a `<script type="application/json">` copy of the
   plan for the client-side comment tooling. Before embedding, `<`, `>`, `&`,

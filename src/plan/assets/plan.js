@@ -180,6 +180,149 @@
     ]);
   }
 
+  /* ---- theme --------------------------------------------------------
+
+     The page follows the OS by default; the toggle records an explicit
+     override on <html data-theme>, which plan.css ranks above its
+     prefers-color-scheme block. The choice is per-plan-viewer, not
+     per-plan, so it lives under one fixed key and carries across every
+     rendered plan a reader opens.
+
+     Storage is best-effort throughout: a file:// document in some browsers
+     has an opaque origin where localStorage throws on access, and a theme
+     toggle is not worth breaking the page over. */
+  const THEME_KEY = "loadout-plan:theme";
+
+  function storedTheme() {
+    try {
+      const v = window.localStorage.getItem(THEME_KEY);
+      return v === "light" || v === "dark" ? v : null;
+    } catch (e) { return null; }
+  }
+
+  function applyTheme(mode, animate) {
+    const root = document.documentElement;
+    /* Colour transitions are gated on a class so first paint lands on the
+       final colours instantly -- without the gate the page would visibly
+       fade in from whatever the previous theme was. */
+    if (animate) {
+      root.classList.add("theme-anim");
+      window.setTimeout(function () { root.classList.remove("theme-anim"); }, 260);
+    }
+    if (mode) {
+      root.setAttribute("data-theme", mode);
+      try { window.localStorage.setItem(THEME_KEY, mode); } catch (e) { /* see above */ }
+    } else {
+      root.removeAttribute("data-theme");
+      try { window.localStorage.removeItem(THEME_KEY); } catch (e) { /* see above */ }
+    }
+    document.querySelectorAll("[data-theme-set]").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-theme-set") === current()));
+    });
+  }
+
+  /* What the page is actually showing right now -- the explicit override if
+     there is one, else whatever the OS is asking for. The toggle needs this
+     to light the correct half of the control on load. */
+  function current() {
+    const explicit = document.documentElement.getAttribute("data-theme");
+    if (explicit) return explicit;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
+  }
+
+  function mountThemeToggle() {
+    const host = document.querySelector(".pv-topbar-right");
+    if (!host) return;
+    const group = document.createElement("div");
+    group.className = "pv-theme";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Colour theme");
+    ["light", "dark"].forEach(function (mode) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("data-theme-set", mode);
+      btn.textContent = mode === "light" ? "Light" : "Dark";
+      btn.addEventListener("click", function () { applyTheme(mode, true); });
+      group.appendChild(btn);
+    });
+    host.appendChild(group);
+    applyTheme(storedTheme(), false);
+  }
+
+  /* ---- reading chrome -----------------------------------------------
+
+     Two position cues, both driven by IntersectionObserver rather than a
+     scroll handler so neither costs anything per frame:
+
+       1. the topbar lifts off the page once it is no longer at the top,
+       2. the phase ledger marks the row for the phase currently on screen.
+
+     Both are decoration over information the page already carries, so a
+     browser without IntersectionObserver simply gets neither. */
+  function mountScrollCues() {
+    const bar = document.querySelector(".pv-topbar");
+    if (!bar || !("IntersectionObserver" in window)) return;
+
+    /* A zero-height probe above the topbar: once it scrolls out of view the
+       bar is stuck. Cheaper and steadier than reading scrollY. */
+    const probe = document.createElement("div");
+    probe.setAttribute("aria-hidden", "true");
+    probe.style.cssText = "position:absolute;top:0;height:1px;width:1px;";
+    bar.parentNode.insertBefore(probe, bar);
+    new IntersectionObserver(function (entries) {
+      bar.classList.toggle("is-stuck", !entries[0].isIntersecting);
+    }).observe(probe);
+
+    const phases = document.querySelectorAll("details.phase");
+    if (!phases.length) return;
+    /* Fire when a phase crosses the upper third of the viewport: the row
+       highlights for the phase a reader is reading, not the one that
+       happens to be tallest on screen. */
+    const spy = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          const id = entry.target.getAttribute("data-plan-ref");
+          if (!id) return;
+          const phaseId = id.slice("phase:".length);
+          document.querySelectorAll("[data-phase-row]").forEach(function (row) {
+            row.classList.toggle("is-current", row.getAttribute("data-phase-row") === phaseId);
+          });
+        });
+      },
+      { rootMargin: "-10% 0px -70% 0px" }
+    );
+    phases.forEach(function (p) { spy.observe(p); });
+  }
+
+  /* Where a commentable block wants its comment button and its draft box.
+     Every block type on the page pairs a heading row (where the button
+     belongs, on the title's line) with a body column (where the box
+     belongs, under the text it is about). Returning nulls is fine: the
+     caller falls back to the block itself. */
+  function commentSlots(el) {
+    if (el.classList.contains("task")) {
+      return { btn: el.querySelector(".task-head"), box: el.querySelector(".task-body") };
+    }
+    if (el.classList.contains("pv-row")) {
+      const body = el.querySelector(".pv-row-body");
+      return { btn: el.querySelector(".pv-row-head") || body, box: body };
+    }
+    if (el.classList.contains("plan-summary")) {
+      const exec = el.querySelector(".summary-exec");
+      return { btn: exec, box: exec };
+    }
+    if (el.tagName === "DETAILS") {
+      return {
+        btn: el.querySelector("summary .phase-head-line"),
+        box: el.querySelector(".phase-body"),
+      };
+    }
+    return { btn: null, box: null };
+  }
+
   /* First 80 chars of the element's heading text: the element itself when
      it is a heading, else the first h1–h6 descendant, else its own
      trimmed text as a last-resort fallback. */
@@ -314,6 +457,12 @@
   }
 
   function init() {
+    /* Chrome first, and outside the island guard: the theme toggle and the
+       scroll cues are properties of the page, not of the plan data, so a
+       document whose island failed to parse still gets a usable shell. */
+    mountThemeToggle();
+    mountScrollCues();
+
     const islandEl = document.getElementById("plan-data");
     if (!islandEl) return;
     const plan = core.parseIsland(islandEl.textContent);
@@ -342,6 +491,13 @@
       bar.appendChild(restoredNote);
     }
 
+    /* Blocking comments get their own readout ahead of the total: the
+       difference between "4 comments" and "4 comments, one of which blocks
+       approval" is the whole verdict the feedback document will carry. */
+    const blockingCount = document.createElement("span");
+    blockingCount.className = "feedback-bar-blocking";
+    bar.appendChild(blockingCount);
+
     const count = document.createElement("span");
     count.className = "feedback-bar-count";
     bar.appendChild(count);
@@ -360,6 +516,8 @@
 
     function renderCount() {
       count.textContent = comments.length + (comments.length === 1 ? " comment" : " comments");
+      const blocking = comments.filter(function (c) { return c.blocking; }).length;
+      blockingCount.textContent = blocking > 0 ? blocking + " blocking" : "";
       /* Nothing to copy until something has been added. */
       copyBtn.disabled = comments.length === 0;
       copyBtn.title = comments.length === 0 ? "Add a comment or answer first" : "";
@@ -371,7 +529,13 @@
       copyToClipboard(feedback.combined, function () {
         const original = "Copy feedback";
         copyBtn.textContent = "Copied ✓";
-        window.setTimeout(function () { copyBtn.textContent = original; }, 2000);
+        /* One short pulse: the label change alone is easy to miss on a
+           button the reader is still looking at when it fires. */
+        copyBtn.classList.add("is-copied");
+        window.setTimeout(function () {
+          copyBtn.textContent = original;
+          copyBtn.classList.remove("is-copied");
+        }, 2000);
       });
     });
 
@@ -462,44 +626,48 @@
         persist();
       });
 
-      /* Append rather than chase the heading's exact DOM position: a
-         heading found by querySelector may be nested several levels
-         below el (e.g. inside a <summary>), and el.insertBefore requires
-         a direct child as the reference node. Appending is always valid
-         regardless of el's internal structure; plan.css positions
-         .comment-btn absolutely so it still reads as "next to" the
-         heading visually. */
-      el.appendChild(btn);
-      el.appendChild(box);
+      /* Each commentable block is a grid or a flex column with named
+         slots, so the button and the box go into the slots rather than
+         being appended to the block itself -- appending to a .task would
+         make them extra grid items and blow the two-column layout apart.
+         Unknown shapes fall back to the block itself, which is always
+         valid markup even if the placement is plain. */
+      const slots = commentSlots(el);
+      (slots.btn || el).appendChild(btn);
+      (slots.box || el).appendChild(box);
     });
 
     /* ---- expand/collapse all ---- */
     const firstPhase = document.querySelector("details.phase");
     if (firstPhase) {
       function collapsibles() {
-        return document.querySelectorAll("details.phase, details.graph");
+        return document.querySelectorAll("details.phase");
       }
 
-      const ctl = document.createElement("div");
-      ctl.className = "expand-ctl";
+      /* The markup ships an empty actions slot on the Phases section rule
+         (render.rs's `section_rule`), so these land on the divider rather
+         than floating above the list as a stray toolbar. */
+      const ctl = document.getElementById("phases-actions") || document.createElement("div");
 
       const expandBtn = document.createElement("button");
       expandBtn.type = "button";
-      expandBtn.textContent = "Expand all";
+      expandBtn.className = "pv-textbtn";
+      expandBtn.textContent = "expand all";
       expandBtn.addEventListener("click", function () {
         collapsibles().forEach(function (d) { d.open = true; });
       });
 
       const collapseBtn = document.createElement("button");
       collapseBtn.type = "button";
-      collapseBtn.textContent = "Collapse all";
+      collapseBtn.className = "pv-textbtn";
+      collapseBtn.textContent = "collapse all";
       collapseBtn.addEventListener("click", function () {
         collapsibles().forEach(function (d) { d.open = false; });
       });
 
       ctl.appendChild(expandBtn);
       ctl.appendChild(collapseBtn);
-      firstPhase.parentNode.insertBefore(ctl, firstPhase);
+      if (!ctl.isConnected) firstPhase.parentNode.insertBefore(ctl, firstPhase);
 
       /* Printing (or a reader stepping through word-by-word with find-in-
          page) needs every phase/graph visible -- expand everything just
@@ -578,26 +746,22 @@
       return label;
     }
 
+    /* Both toggles land on their block's heading ROW (.phase-head-line,
+       .task-head) rather than inside the heading element itself: the row is
+       already a baseline-aligned flex line built to carry the title plus its
+       badges, so a control added to it lines up with them for free. */
     document.querySelectorAll("details.phase").forEach(function (details) {
       const ref = details.getAttribute("data-plan-ref");
-      const heading = details.querySelector("summary h2");
-      if (!ref || !heading) return;
-      /* Before the teaser (a block-level span), so the toggle stays on the
-         title line instead of wrapping under the description. */
-      const teaser = heading.querySelector(".phase-teaser");
-      const toggle = addReviewedBox(details, ref);
-      if (teaser) {
-        heading.insertBefore(toggle, teaser);
-      } else {
-        heading.appendChild(toggle);
-      }
+      const line = details.querySelector("summary .phase-head-line");
+      if (!ref || !line) return;
+      line.appendChild(addReviewedBox(details, ref));
     });
 
     taskEls.forEach(function (el) {
       const ref = el.getAttribute("data-plan-ref");
       if (!ref) return;
-      const heading = el.querySelector("h3") || el;
-      heading.appendChild(addReviewedBox(el, ref));
+      const line = el.querySelector(".task-head") || el;
+      line.appendChild(addReviewedBox(el, ref));
     });
 
     renderReviewedCount();

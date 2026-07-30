@@ -5,6 +5,16 @@
 //! an unknown name is a hard error (`unknown_icon`) whose hint names every
 //! icon here, so an agent authoring `plan.json` always sees the full menu.
 //!
+//! **The rendered page no longer draws any of these.** The viewer's redesign
+//! carries hierarchy with type, rules, and colour rather than glyphs, so
+//! `render.rs` emits no `<svg>` icons and the `<details>` disclosure marker
+//! is a text character. What survives here is the NAME LIST, which
+//! `model::validate` still checks so that an existing `plan.json` setting
+//! `icon` keeps validating instead of turning into a hard error overnight.
+//! `icon_svg`/`ui_chevron` are consequently unreferenced by the renderer —
+//! kept so the vocabulary stays a straight file compare against upstream, and
+//! so reintroducing glyphs is a rendering change and nothing more.
+//!
 //! This module only exposes lookups over static, compile-time-embedded data
 //! (`include_str!`) — no filesystem access at runtime, so a rendered
 //! `plan.html` stays self-contained and byte-stable for a given input.
@@ -64,14 +74,15 @@ pub fn icon_svg(name: &str) -> Option<&'static str> {
 }
 
 /// The vendored `chevron-right` SVG (same pinned Lucide commit as the
-/// vocabulary above — see `vendored/sources.toml`'s lucide note) — the
-/// disclosure-triangle replacement the renderer draws at the start of every
-/// `<details>` summary line (phases + the phase-dependency graph).
+/// vocabulary above — see `vendored/sources.toml`'s lucide note). This was
+/// the `<details>` disclosure marker; the redesigned page sets that marker as
+/// a text character in the mono face instead, so nothing draws this today
+/// (see this module's own doc comment).
 ///
 /// Deliberately NOT part of `icon_names()`/`icon_svg()`: it isn't something a
 /// `plan.json` author can select via `Phase.icon`/`PlanTask.icon`, it's fixed
-/// UI chrome the renderer always draws — so it stays out of the vocabulary,
-/// `unknown_icon`'s hint, and `reference.md`'s documented icon list.
+/// UI chrome — so it stays out of the vocabulary, `unknown_icon`'s hint, and
+/// `reference.md`'s documented icon list.
 pub fn ui_chevron() -> &'static str {
     include_str!("../../vendored/lucide/chevron-right.svg")
 }
