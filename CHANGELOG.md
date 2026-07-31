@@ -29,6 +29,13 @@ version and date (see [RELEASING.md](RELEASING.md)).
 - `Phase.icon` and `PlanTask.icon` are **still accepted and still validated**
   against the same 16-name vocabulary, so existing `plan.json` files keep
   working — the redesigned page just doesn't draw them.
+- **Phases now open and shut with a short animation** instead of appearing
+  and disappearing between one frame and the next. Expanding a phase used to
+  shove the rest of the page down in a single jump; it now grows into place
+  over about a quarter of a second, and its chevron turns with the click.
+  Clicking again part-way through reverses from wherever it had got to.
+  Expand all and collapse all move the same way. If your system asks for
+  reduced motion, the change stays instant.
 
 ### Fixed
 
@@ -44,6 +51,9 @@ version and date (see [RELEASING.md](RELEASING.md)).
 - The summary's phase ledger dropped its `Est · risk` column when no task in
   the plan carries an estimate or a risk rating, instead of showing that
   header over a column of empty cells.
+- Adding a comment to a phase collapsed that phase, hiding the editor the
+  click had just opened. The Comment button sits on the phase's header row,
+  which is the element a browser toggles the phase with.
 
 ## 0.18.0 — 2026-07-16
 

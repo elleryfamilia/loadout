@@ -176,6 +176,56 @@
         throw new Error("system not marked pressed");
       }
     });
+    check("phases open and shut with motion", function () {
+      const phase = document.querySelector("details.phase");
+      if (!phase) throw new Error("no phases on the page");
+      const body = phase.querySelector(".phase-body");
+      if (!body) throw new Error("phase has no body to animate");
+      /* No Web Animations API, or a reader who asked for reduced motion:
+         instant IS the correct behaviour, and there would be nothing for
+         `heightAnimations` to report. Nothing to assert. */
+      if (!canDisclose() || !body.getAnimations) return;
+
+      setPhaseOpen(phase, false, false);
+
+      setPhaseOpen(phase, true, true);
+      if (!phase.open) throw new Error("opening did not open the phase");
+      if (phase.classList.contains("is-closing")) throw new Error("opening left is-closing set");
+      const opening = heightAnimations(body);
+      if (!opening.length) throw new Error("opening was not animated");
+      /* It must start from collapsed, or the box would appear at full size
+         and merely fade -- which is the jump, with a fade over it. */
+      const first = opening[0].effect.getKeyframes()[0];
+      if (parseFloat(first.height) !== 0 || parseFloat(first.paddingBottom) !== 0) {
+        throw new Error("opening starts at height=" + first.height
+          + " paddingBottom=" + first.paddingBottom + ", not from nothing");
+      }
+      opening.forEach(function (a) { a.finish(); });
+
+      /* The three things that make a close look right, and each of which
+         has to be got wrong deliberately to break: the body is still on the
+         page so there is something to shrink, the open styling is ALREADY
+         off so the chevron turns with the click rather than after it, and
+         the height really is being animated. */
+      setPhaseOpen(phase, false, true);
+      if (!phase.open) throw new Error("closing dropped the body before it could shrink");
+      if (!phase.classList.contains("is-closing")) throw new Error("closing left the open styling on");
+      const closing = heightAnimations(body);
+      if (!closing.length) throw new Error("closing was not animated");
+      const last = closing[0].effect.getKeyframes().slice(-1)[0];
+      if (parseFloat(last.height) !== 0 || parseFloat(last.paddingBottom) !== 0) {
+        throw new Error("closing ends at height=" + last.height
+          + " paddingBottom=" + last.paddingBottom + ", not at nothing");
+      }
+
+      /* And the instant path settles everything the animated one leaves in
+         flight -- otherwise a print or a second click could strand a phase
+         half-open, or leave its body permanently clipped. */
+      setPhaseOpen(phase, false, false);
+      if (phase.open) throw new Error("the instant path left the phase open");
+      if (phase.classList.contains("is-closing")) throw new Error("the instant path left is-closing set");
+      if (body.style.overflow) throw new Error("the instant path left the body clipped");
+    });
     if (location.protocol !== "file:" || window.parent !== window) {
       /* Non-plain-file contexts only — a real http(s) serving, or the CI
          harness that frames this page in a sandboxed iframe to give it the
@@ -418,6 +468,163 @@
       { rootMargin: "-10% 0px -70% 0px" }
     );
     phases.forEach(function (p) { spy.observe(p); });
+  }
+
+  /* ---- disclosure ----------------------------------------------------
+
+     A <details> element has no motion of its own: its body appears and
+     disappears between one frame and the next, so opening a phase shoves
+     everything below it down the page in a single jump, and shutting one
+     yanks it back. `setPhaseOpen` gives that change a duration by animating
+     the body's height, and every path a READER can trigger goes through it
+     -- the summary itself, the expand-all and collapse-all buttons, and a
+     comment button that has to open the phase it lives on.
+
+     Programmatic paths deliberately do not. Printing and the self-test pass
+     `false` for `animate` and stay instant: they want the end state, not a
+     transition to it.
+
+     Nothing here is load-bearing. A browser with no Web Animations API, or
+     a reader who has asked their system for reduced motion, falls straight
+     through to setting `.open` -- which is exactly the behaviour this page
+     had before. */
+
+  /* The animation currently running on a phase, if any, so a second click
+     part-way through can take the phase over rather than fight it. */
+  const disclosing = new WeakMap();
+
+  /* Duration and easing for a disclosure, read out of plan.css. A value that
+     is missing (no stylesheet) or unparseable falls back to a sane pair
+     rather than to a zero-length -- and therefore invisible -- animation. */
+  function discloseTiming() {
+    const root = window.getComputedStyle(document.documentElement);
+    const raw = root.getPropertyValue("--t-disclose").trim();
+    const ms = raw.slice(-2) === "ms" ? parseFloat(raw) : parseFloat(raw) * 1000;
+    return {
+      duration: ms > 0 ? ms : 240,
+      easing: root.getPropertyValue("--ease").trim() || "ease",
+    };
+  }
+
+  /* Whether to animate at all. plan.css's prefers-reduced-motion block can
+     only reach CSS animations and transitions, so motion driven from here
+     has to consult the same query itself or it would ignore the one setting
+     the whole budget is meant to answer to. */
+  function canDisclose() {
+    if (!window.Element || typeof Element.prototype.animate !== "function") return false;
+    if (!window.matchMedia) return true;
+    return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  /* Whether a phase reads as SHUT to the person looking at it: either really
+     closed, or open-but-mid-close. A click during a close has to re-open. */
+  function phaseIsShut(details) {
+    return !details.open || details.classList.contains("is-closing");
+  }
+
+  function bottomPadding(el) {
+    return window.getComputedStyle(el).paddingBottom || "0px";
+  }
+
+  /* The disclosure animations on an element, and only those. `getAnimations`
+     also returns anything CSS has left lying around with a fill, so a bare
+     length check would pass whether or not this file animated anything --
+     the keyframes are what identify ours. */
+  function heightAnimations(el) {
+    if (!el.getAnimations) return [];
+    return el.getAnimations().filter(function (a) {
+      const frames = a.effect && a.effect.getKeyframes ? a.effect.getKeyframes() : [];
+      return frames.some(function (f) { return f.height !== undefined; });
+    });
+  }
+
+  /* Open or shut one phase.
+
+     Opening is the straightforward direction: set `open` (so the chevron,
+     the numeral and every other [open] rule in plan.css start their own
+     transitions on the same frame), then grow the body from nothing into
+     its natural height.
+
+     Closing cannot do that in reverse, because clearing `open` removes the
+     body from the page immediately and leaves nothing to shrink. So `open`
+     stays set until the animation finishes, and the `is-closing` class tells
+     plan.css to treat the phase as visually shut in the meantime -- see the
+     `:not(.is-closing)` rules on the summary. */
+  function setPhaseOpen(details, want, animate) {
+    const body = details.querySelector(".phase-body");
+    const running = disclosing.get(details);
+
+    if (!body || animate === false || !canDisclose()) {
+      if (running) { disclosing.delete(details); running.cancel(); }
+      if (body) body.style.overflow = "";
+      details.classList.remove("is-closing");
+      details.open = want;
+      return;
+    }
+
+    /* Clip first, measure second. `overflow: hidden` makes the body a block
+       formatting context, so its children's margins stop collapsing through
+       it -- measuring before setting it would return a height the box never
+       actually has while animating, and the phase would jump at the end by
+       the difference. */
+    body.style.overflow = "hidden";
+    /* Where the box is NOW. Mid-animation these read the animated values, so
+       a click part-way through a close carries on from where it got to
+       instead of restarting. Note the state is taken from `open`, never from
+       the measurement: a shut <details> keeps reporting the size its body
+       had when it was last open. */
+    const from = details.open
+      ? { h: body.getBoundingClientRect().height, pad: bottomPadding(body) }
+      : { h: 0, pad: "0px" };
+    if (running) { disclosing.delete(details); running.cancel(); }
+
+    if (want) {
+      details.classList.remove("is-closing");
+      details.open = true;
+    } else {
+      details.classList.add("is-closing");
+    }
+    /* And where it is going. Measured after the cancel above, so these are
+       the element's own resting values, not another animation's. */
+    const to = want
+      ? { h: body.getBoundingClientRect().height, pad: bottomPadding(body) }
+      : { h: 0, pad: "0px" };
+
+    const timing = discloseTiming();
+    const anim = body.animate(
+      /* Padding travels with the height. The body carries 2.25rem of bottom
+         padding and `box-sizing: border-box`, so a height of 0 alone still
+         leaves a 36px stub on screen -- the last thing a close did was drop
+         it, which is precisely the jump this is here to remove. Opacity
+         travels with them so the content fades rather than being sliced off
+         by the clip edge. */
+      [
+        { height: from.h + "px", paddingBottom: from.pad, opacity: want ? 0 : 1 },
+        { height: to.h + "px", paddingBottom: to.pad, opacity: want ? 1 : 0 },
+      ],
+      {
+        duration: timing.duration,
+        easing: timing.easing,
+        /* A close holds its last frame. Without the fill the body would
+           spring back to full height for the one frame between the
+           animation ending and `open` being cleared below. */
+        fill: want ? "none" : "forwards",
+      }
+    );
+    disclosing.set(details, anim);
+    anim.onfinish = function () {
+      /* A later call already took this phase over; the cleanup is its job
+         now. (Cancelling does not fire this handler, so reaching here with
+         a stale animation means the phase was re-clicked mid-flight.) */
+      if (disclosing.get(details) !== anim) return;
+      disclosing.delete(details);
+      if (!want) {
+        details.open = false;
+        details.classList.remove("is-closing");
+      }
+      body.style.overflow = "";
+      anim.cancel();
+    };
   }
 
   /* Where a commentable block wants its comment button and its draft box.
@@ -727,9 +934,25 @@
       box.appendChild(blockingRow);
       box.appendChild(actions);
 
-      btn.addEventListener("click", function () {
+      btn.addEventListener("click", function (e) {
+        /* The same guard the reviewed toggle carries below, for the same
+           reason: on a PHASE this button is placed inside the <summary>
+           (see commentSlots), and a click that reaches the summary triggers
+           its toggle. Commenting on an open phase used to shut it, hiding
+           the very box the click had just opened. */
+        e.stopPropagation();
         box.hidden = !box.hidden;
-        if (!box.hidden) textarea.focus();
+        if (box.hidden) return;
+        if (el.tagName === "DETAILS" && phaseIsShut(el)) {
+          /* The button is in the summary but the box is in the body, which
+             only exists while the phase is open -- so open it. Focus without
+             scrolling: the body is mid-animation and clipped, and scrolling
+             into it now would leave the clip box scrolled once it settles. */
+          setPhaseOpen(el, true, true);
+          textarea.focus({ preventScroll: true });
+          return;
+        }
+        textarea.focus();
       });
 
       cancelBtn.addEventListener("click", function () {
@@ -767,6 +990,20 @@
         return document.querySelectorAll("details.phase");
       }
 
+      /* A <summary>'s built-in default action is "toggle, instantly". Take
+         it over so a click gets the animation instead. Keyboard activation
+         (Enter or Space on the focused summary) dispatches a click of its
+         own, so it comes through the same handler and behaves the same. */
+      collapsibles().forEach(function (d) {
+        const summary = d.querySelector("summary");
+        if (!summary) return;
+        summary.addEventListener("click", function (e) {
+          if (e.defaultPrevented) return;
+          e.preventDefault();
+          setPhaseOpen(d, phaseIsShut(d), true);
+        });
+      });
+
       /* The markup ships an empty actions slot on the Phases section rule
          (render.rs's `section_rule`), so these land on the divider rather
          than floating above the list as a stray toolbar. */
@@ -777,7 +1014,7 @@
       expandBtn.className = "pv-textbtn";
       expandBtn.textContent = "expand all";
       expandBtn.addEventListener("click", function () {
-        collapsibles().forEach(function (d) { d.open = true; });
+        collapsibles().forEach(function (d) { setPhaseOpen(d, true, true); });
       });
 
       const collapseBtn = document.createElement("button");
@@ -785,7 +1022,7 @@
       collapseBtn.className = "pv-textbtn";
       collapseBtn.textContent = "collapse all";
       collapseBtn.addEventListener("click", function () {
-        collapsibles().forEach(function (d) { d.open = false; });
+        collapsibles().forEach(function (d) { setPhaseOpen(d, false, true); });
       });
 
       ctl.appendChild(expandBtn);
@@ -797,12 +1034,15 @@
          before print, then restore whatever state the user had before. */
       let preprintState = null;
       window.addEventListener("beforeprint", function () {
-        preprintState = Array.from(collapsibles()).map(function (d) { return d.open; });
-        collapsibles().forEach(function (d) { d.open = true; });
+        /* `phaseIsShut`, not `.open`: a phase caught mid-close is still
+           technically open, and restoring it as open afterwards would leave
+           the reader with a phase they had just clicked shut. */
+        preprintState = Array.from(collapsibles()).map(function (d) { return !phaseIsShut(d); });
+        collapsibles().forEach(function (d) { setPhaseOpen(d, true, false); });
       });
       window.addEventListener("afterprint", function () {
         if (!preprintState) return;
-        collapsibles().forEach(function (d, i) { d.open = preprintState[i]; });
+        collapsibles().forEach(function (d, i) { setPhaseOpen(d, preprintState[i], false); });
         preprintState = null;
       });
     }
