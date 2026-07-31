@@ -96,15 +96,29 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* The sheet's inner margin. Every full-bleed band (topbar, banner) pads to
-     this, so their contents line up with the body column exactly. */
-  --gutter: clamp(1.25rem, 0.4rem + 3.2vw, 3.75rem);
+     this, so their contents line up with the body column exactly. The sheet is
+     a visible object -- its own background, its own shadow -- so this has to
+     read as a document margin, not a container's padding: at the 1180px cap
+     that means ~76px, and the ramp is steep enough to reach it just below the
+     narrowest common laptop rather than only on a wide monitor. */
+  --gutter: clamp(1.25rem, 5.5vw, 4.75rem);
   /* The phase-numeral column, and therefore the indent of an expanded phase's
      body. One token so the numeral, its heading, and its tasks can never
      drift apart. */
   --numeral-col: 5.375rem;
   --numeral-gap: 1.5rem;
-  /* Vertical rhythm between top-level sections. */
-  --gap-section: 2.75rem;
+  /* Vertical rhythm, coarse to fine. --gap-section separates the page's
+     top-level sections, --gap-block separates the stacked pieces inside one,
+     and --gap-row is the padding a repeating row (a task, a risk, a phase
+     header) carries above and below its content. Three steps, named, so a
+     nudge to one never has to be repeated in nine places. */
+  --gap-section: 3.5rem;
+  --gap-block: 1.75rem;
+  --gap-row: 1.625rem;
+  /* The task metadata rail: its width, and the space that keeps it from
+     colliding with the controls at the right edge of the task body. */
+  --rail-col: 13.75rem;
+  --rail-gap: 2.5rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -263,6 +277,9 @@ body {
   background: var(--page);
   box-shadow: var(--shadow-page);
   min-height: 100vh;
+  /* The last thing on the page is usually a graph legend or a task row, and
+     without this it sits directly on the sheet's bottom edge. */
+  padding-bottom: 3.5rem;
 }
 
 /* Anything the page can be scrolled TO clears the sticky topbar. Set on the
@@ -371,7 +388,7 @@ code {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  padding: 0.875rem var(--gutter);
+  padding: 1.0625rem var(--gutter);
   background: var(--page);
   border-bottom: 1px solid var(--rule);
   transition: box-shadow var(--t-mid) var(--ease);
@@ -486,9 +503,9 @@ code {
 .pv-banner {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: 1.25rem 2.5rem;
   flex-wrap: wrap;
-  padding: 0.75rem var(--gutter);
+  padding: 1.125rem var(--gutter);
   background: var(--accent-wash);
   border-bottom: 1px solid var(--rule);
 }
@@ -520,7 +537,7 @@ code {
    --------------------------------------------------------------------------- */
 
 .pv-main {
-  padding: 2.5rem var(--gutter) 0;
+  padding: 3.25rem var(--gutter) 0;
 }
 
 /* The masthead: eyebrow, title, goal. */
@@ -528,7 +545,7 @@ code {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  margin-bottom: 2.125rem;
+  margin-bottom: 2.75rem;
 }
 
 .pv-eyebrow {
@@ -572,7 +589,7 @@ code {
   flex-wrap: wrap;
   border-top: 1px solid var(--rule);
   border-bottom: 1px solid var(--rule);
-  margin-bottom: 3rem;
+  margin-bottom: var(--gap-section);
 }
 
 /* Cells share the width, but only up to a point: a plan with two cells would
@@ -584,8 +601,8 @@ code {
   max-width: 17rem;
   display: flex;
   flex-direction: column;
-  gap: 0.375rem;
-  padding: 1.125rem 1.5rem;
+  gap: 0.5rem;
+  padding: 1.5rem 1.75rem;
   border-left: 1px solid var(--rule);
 }
 
@@ -626,7 +643,7 @@ code {
   display: flex;
   align-items: center;
   gap: 0.875rem;
-  margin: 0 0 1.375rem;
+  margin: 0 0 1.625rem;
 }
 
 .pv-rule-line {
@@ -645,9 +662,9 @@ code {
 .pv-rule-actions:empty { display: none; }
 
 /* A rule nested INSIDE a block (the Acceptance divider in a task) is a
-   sub-heading, not a section opener -- it sits tight to the rows it labels so
-   the two read as one unit. */
-.task-body .pv-rule { margin: 0.375rem 0 0.25rem; }
+   sub-heading, not a section opener -- it sits closer to the rows it labels
+   than to the block above, so the label and its list read as one unit. */
+.task-body .pv-rule { margin: 0.875rem 0 0.375rem; }
 
 /* Text buttons that live on a rule (expand all / collapse all). Quiet until
    pointed at -- they are affordances, not calls to action. */
@@ -749,8 +766,8 @@ code {
 .pv-note {
   display: flex;
   flex-direction: column;
-  gap: 0.5625rem;
-  padding: 0.8125rem 0.9375rem;
+  gap: 0.625rem;
+  padding: 1rem 1.125rem;
   background: var(--surface);
   border-left: 2px solid var(--rule);
   max-width: 70ch;
@@ -804,7 +821,7 @@ code {
   display: grid;
   gap: 2rem;
   align-items: start;
-  margin: 0 0 1.75rem;
+  margin: 0 0 var(--gap-block);
 }
 
 /* Two zones on a wide viewport: prose left at its reading measure, the phase
@@ -847,7 +864,7 @@ code {
    dingbat survives in both a serif and the reader's fallback font. */
 .summary-keypoints {
   list-style: none;
-  margin: 0 0 1.5rem;
+  margin: 0 0 var(--gap-block);
   padding: 0;
   max-width: 72ch;
   font-size: 1.03rem;
@@ -925,8 +942,13 @@ code {
   font-size: 1rem;
 }
 
-.pv-ledger th:last-child,
-.pv-ledger td:last-child { text-align: right; }
+/* The figure column hangs off the right edge -- matched as "a second cell",
+   not as "the last cell", because a plan whose tasks carry no estimates and no
+   risk ratings drops that column entirely (see render.rs's
+   `ledger_has_figures`) and the phase names must stay left-aligned when it
+   does. */
+.pv-ledger th + th,
+.pv-ledger td + td { text-align: right; }
 
 .pv-ledger td a {
   color: var(--ink);
@@ -961,7 +983,7 @@ code {
   display: flex;
   align-items: baseline;
   gap: 0.5625rem;
-  padding: 1rem 0 0;
+  padding: 1.25rem 0 0;
   font-family: var(--font-mono);
   font-size: 0.813rem;
   line-height: 1.4;
@@ -986,8 +1008,8 @@ code {
 .pv-row {
   display: grid;
   grid-template-columns: 6rem minmax(0, 1fr);
-  gap: 1.5rem;
-  padding: 1.375rem 0;
+  gap: 1.75rem;
+  padding: var(--gap-row) 0;
   border-bottom: 1px solid var(--rule);
   align-items: start;
 }
@@ -1019,7 +1041,11 @@ code {
   flex-wrap: wrap;
 }
 
-.pv-row-head h3 { flex: 1 1 20rem; min-width: 0; }
+/* A risk leads with a title, an open question leads with the question itself
+   (prose, because it can be a paragraph). Either way the heading line's first
+   child takes the slack so the actions after it land at the right margin. */
+.pv-row-head h3,
+.pv-row-head > .pv-prose { flex: 1 1 20rem; min-width: 0; }
 
 .pv-row-body > p,
 .pv-prose {
@@ -1049,14 +1075,38 @@ summary::-webkit-details-marker { display: none; }
 
 /* The phase row, in both states: numeral | content | marker. The numeral
    column is a token so an expanded phase's body (which is margin-indented by
-   the same amount below) lines up under the content, never under the numeral. */
+   the same amount below) lines up under the content, never under the numeral.
+
+   The marker column is `auto` here and widened below to match the task rail --
+   see the note on that rule. */
 details.phase > summary {
   display: grid;
   grid-template-columns: var(--numeral-col) minmax(0, 1fr) auto;
   gap: var(--numeral-gap);
   align-items: center;
-  padding: 1.375rem 0;
+  padding: var(--gap-row) 0;
   transition: background var(--t-fast) var(--ease);
+}
+
+/* Wherever a task row HAS a rail (the same breakpoint, from the other side),
+   the phase's marker column is widened to swallow exactly what that rail
+   costs, so the phase's content column ends where a task's body column ends.
+   Both rows push their controls to the right edge of their content column, so
+   every Comment button and Mark-reviewed box on the page stacks on one
+   vertical line instead of stepping in and out by the rail's width as the eye
+   travels down. The subtraction is because grid has a single column-gap: the
+   marker column absorbs the difference between the rail's gap and the
+   numeral's. */
+@media (min-width: 58.0625rem) {
+  details.phase > summary {
+    grid-template-columns:
+      var(--numeral-col)
+      minmax(0, 1fr)
+      calc(var(--rail-col) + var(--rail-gap) - var(--numeral-gap));
+  }
+  /* The marker itself still belongs at the sheet's right margin -- it is the
+     row's own affordance, not part of the rail it borrows width from. */
+  details.phase > summary .phase-marker { justify-self: end; }
 }
 
 details.phase > summary:hover { background: var(--accent-wash); }
@@ -1065,7 +1115,7 @@ details.phase > summary:hover { background: var(--accent-wash); }
    because the content below it is now several blocks tall. */
 details.phase[open] > summary {
   align-items: start;
-  padding-bottom: 1.25rem;
+  padding-bottom: 1.5rem;
 }
 
 .phase-numeral {
@@ -1084,14 +1134,17 @@ details.phase > summary:hover .phase-numeral { color: var(--accent); }
 .phase-head {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.4375rem;
   min-width: 0;
 }
 
+/* Same gap as `.task-head`, deliberately: both lines end in the same pair of
+   controls, and a different gap would land them two pixels apart on the
+   vertical line the column widths just went to some trouble to share. */
 .phase-head-line {
   display: flex;
   align-items: baseline;
-  gap: 0.75rem;
+  gap: 0.875rem;
   flex-wrap: wrap;
 }
 
@@ -1128,7 +1181,7 @@ details.phase > summary:hover .phase-marker { color: var(--accent); }
    content came from. */
 details.phase > .phase-body {
   margin-left: calc(var(--numeral-col) + var(--numeral-gap));
-  padding-bottom: 1.5rem;
+  padding-bottom: 2.25rem;
   animation: pv-reveal var(--t-slow) var(--ease) both;
 }
 
@@ -1139,18 +1192,18 @@ details.phase > .phase-body {
 }
 
 .phase-summary-rest {
-  margin: 0 0 1.25rem;
+  margin: 0 0 var(--gap-block);
 }
 
 /* --- dependency block --------------------------------------------------- */
 
-.pv-deps { margin: 0 0 1.5rem; }
+.pv-deps { margin: 0 0 2rem; }
 
 .pv-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
-  padding-top: 0.5rem;
+  padding-top: 0.875rem;
   font-family: var(--font-mono);
   font-size: 0.719rem;
   color: var(--ink-3);
@@ -1172,9 +1225,9 @@ details.phase > .phase-body {
 
 .task {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 13.75rem;
-  gap: 1.5rem;
-  padding: 1.25rem 0;
+  grid-template-columns: minmax(0, 1fr) var(--rail-col);
+  gap: var(--rail-gap);
+  padding: 1.5rem 0;
   border-top: 1px solid var(--rule);
   align-items: start;
   transition: background var(--t-fast) var(--ease);
@@ -1209,8 +1262,8 @@ details.phase > .phase-body {
 .task-rail {
   display: flex;
   flex-direction: column;
-  gap: 0.4375rem;
-  padding-top: 0.25rem;
+  gap: 0.5625rem;
+  padding-top: 0.375rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
   line-height: 1;
@@ -1237,11 +1290,11 @@ details.phase > .phase-body {
 
 .files {
   list-style: none;
-  margin: 0.25rem 0 0;
+  margin: 0.375rem 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.4375rem;
   max-width: 70ch;
 }
 
@@ -1286,7 +1339,7 @@ details.phase > .phase-body {
   grid-template-columns: 1.75rem minmax(0, 1fr);
   gap: 0.75rem;
   align-items: baseline;
-  padding: 0.375rem 2rem 0.375rem 0;
+  padding: 0.5625rem 2rem 0.5625rem 0;
   border-bottom: 1px solid var(--rule-soft);
   position: relative;
   font-size: 1rem;
@@ -1309,11 +1362,11 @@ details.phase > .phase-body {
 
 .validation {
   list-style: none;
-  margin: 0.25rem 0 0;
+  margin: 0.5rem 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.375rem;
   max-width: 70ch;
 }
 
@@ -1323,7 +1376,7 @@ details.phase > .phase-body {
   color: var(--ink-2);
   background: var(--surface);
   border-left: 2px solid var(--rule);
-  padding: 0.375rem 0.625rem;
+  padding: 0.5rem 0.75rem;
   overflow-x: auto;
 }
 
@@ -1340,10 +1393,10 @@ details.phase > .phase-body {
    --------------------------------------------------------------------------- */
 
 pre {
-  margin: 0.375rem 0 0;
+  margin: 0.5rem 0 0;
   background: var(--surface);
   border-left: 2px solid var(--rule);
-  padding: 0.75rem 0.875rem;
+  padding: 0.875rem 1rem;
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: 0.813rem;

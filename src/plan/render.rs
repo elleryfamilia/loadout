@@ -414,6 +414,18 @@ fn phase_estimate_dist(phase: &Phase) -> String {
         .join(" · ")
 }
 
+/// Whether the summary ledger's right-hand column would carry anything at
+/// all: true as soon as one phase has an estimate distribution or a risk
+/// heat. A plan whose tasks are all unestimated and unrated fills that column
+/// with nothing in every row, and an `EST · RISK` header over a stack of empty
+/// cells reads as a rendering failure rather than as "not stated" — so the
+/// column is dropped instead (see the ledger markup).
+fn ledger_has_figures(plan: &Plan) -> bool {
+    plan.phases
+        .iter()
+        .any(|p| !phase_estimate_dist(p).is_empty() || !phase_risk_heat(p).is_empty())
+}
+
 /// The rail's phase cell: the head of a `title — subtitle` name, capped for
 /// the narrow column (the full title is one click away on the phase row
 /// itself). Titles without the separator just truncate.
@@ -680,9 +692,13 @@ pub fn render(plan: &Plan) -> String {
                                 // reads as a rendering failure.
                                 aside.summary-glance {
                                     @if !plan.phases.is_empty() {
+                                        @let figures = ledger_has_figures(plan);
                                         table.pv-ledger {
                                             thead {
-                                                tr { th { "Phase" } th { "Est · risk" } }
+                                                tr {
+                                                    th { "Phase" }
+                                                    @if figures { th { "Est · risk" } }
+                                                }
                                             }
                                             tbody {
                                                 @for phase in &plan.phases {
@@ -692,16 +708,18 @@ pub fn render(plan: &Plan) -> String {
                                                                 (short_phase_title(&phase.title))
                                                             }
                                                         }
-                                                        @let heat = phase_risk_heat(phase);
-                                                        td class=(
-                                                            if heat.contains("high") {
-                                                                "pv-ledger-fig is-hot"
-                                                            } else {
-                                                                "pv-ledger-fig"
+                                                        @if figures {
+                                                            @let heat = phase_risk_heat(phase);
+                                                            td class=(
+                                                                if heat.contains("high") {
+                                                                    "pv-ledger-fig is-hot"
+                                                                } else {
+                                                                    "pv-ledger-fig"
+                                                                }
+                                                            ) {
+                                                                (phase_estimate_dist(phase))
+                                                                @if !heat.is_empty() { " · " (heat) }
                                                             }
-                                                        ) {
-                                                            (phase_estimate_dist(phase))
-                                                            @if !heat.is_empty() { " · " (heat) }
                                                         }
                                                     }
                                                 }
@@ -787,8 +805,20 @@ pub fn render(plan: &Plan) -> String {
                                             if q.blocking { "Blocking" } else { "Open" },
                                         ))
                                         div.pv-row-body {
-                                            div.pv-prose {
-                                                (PreEscaped(crate::markdown::render_markdown(&q.question_md)))
+                                            // The question is this row's
+                                            // heading line, even though it is
+                                            // prose rather than an <h3>. It
+                                            // gets the heading wrapper so the
+                                            // Answer button plan.js injects
+                                            // lands beside it at the right
+                                            // margin, the way a risk's Comment
+                                            // button does — without it the
+                                            // button drops onto a line of its
+                                            // own under a one-line question.
+                                            div.pv-row-head {
+                                                div.pv-prose {
+                                                    (PreEscaped(crate::markdown::render_markdown(&q.question_md)))
+                                                }
                                             }
                                         }
                                     }
@@ -1224,6 +1254,26 @@ mod tests {
         assert!(html.contains("<table class=\"pv-ledger\">"), "{html}");
         assert!(html.contains("href=\"#phase-p-core\""), "{html}");
         assert!(html.contains("id=\"phase-p-core\""), "{html}");
+        // This plan's tasks carry estimates and risk ratings, so the ledger's
+        // figure column is present. (`no_summary_shows_missing_note_and_ready_state`
+        // covers the plan that drops it.)
+        assert!(html.contains("<th>Est · risk</th>"), "{html}");
+
+        // (f2) an open question's text is wrapped as the row's heading line,
+        // so the Answer button plan.js injects lands beside it rather than
+        // dropping onto a line of its own. Same wrapper a risk row uses.
+        let q_pos = html
+            .find("id=\"question-q-ttl\"")
+            .expect("blocking question row");
+        assert!(
+            html[q_pos..].starts_with(
+                "id=\"question-q-ttl\" data-plan-ref=\"question:q-ttl\">\
+                 <span class=\"pv-chip pv-chip-high\">Blocking</span>\
+                 <div class=\"pv-row-body\"><div class=\"pv-row-head\"><div class=\"pv-prose\">"
+            ),
+            "question row: chip, then a heading line wrapping the prose: {}",
+            &html[q_pos..q_pos + 260]
+        );
 
         // (g) order by byte position: summary block pieces in document
         // order, "Summary" heading < summary card < open questions < risks <
@@ -1332,6 +1382,12 @@ mod tests {
         // Nothing has started, so the banner says so rather than narrating
         // progress that does not exist.
         assert!(html.contains("nothing is built yet."), "{html}");
+        // No task here carries an estimate or a risk rating, so the ledger is
+        // one column: an `Est · risk` header over a stack of empty cells reads
+        // as a rendering failure, not as "not stated".
+        assert!(html.contains("<table class=\"pv-ledger\">"), "{html}");
+        assert!(!html.contains("Est · risk"), "{html}");
+        assert!(!html.contains("pv-ledger-fig\">"), "{html}");
     }
 
     #[test]

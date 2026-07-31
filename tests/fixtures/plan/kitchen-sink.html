@@ -97,15 +97,29 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* The sheet's inner margin. Every full-bleed band (topbar, banner) pads to
-     this, so their contents line up with the body column exactly. */
-  --gutter: clamp(1.25rem, 0.4rem + 3.2vw, 3.75rem);
+     this, so their contents line up with the body column exactly. The sheet is
+     a visible object -- its own background, its own shadow -- so this has to
+     read as a document margin, not a container's padding: at the 1180px cap
+     that means ~76px, and the ramp is steep enough to reach it just below the
+     narrowest common laptop rather than only on a wide monitor. */
+  --gutter: clamp(1.25rem, 5.5vw, 4.75rem);
   /* The phase-numeral column, and therefore the indent of an expanded phase's
      body. One token so the numeral, its heading, and its tasks can never
      drift apart. */
   --numeral-col: 5.375rem;
   --numeral-gap: 1.5rem;
-  /* Vertical rhythm between top-level sections. */
-  --gap-section: 2.75rem;
+  /* Vertical rhythm, coarse to fine. --gap-section separates the page's
+     top-level sections, --gap-block separates the stacked pieces inside one,
+     and --gap-row is the padding a repeating row (a task, a risk, a phase
+     header) carries above and below its content. Three steps, named, so a
+     nudge to one never has to be repeated in nine places. */
+  --gap-section: 3.5rem;
+  --gap-block: 1.75rem;
+  --gap-row: 1.625rem;
+  /* The task metadata rail: its width, and the space that keeps it from
+     colliding with the controls at the right edge of the task body. */
+  --rail-col: 13.75rem;
+  --rail-gap: 2.5rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -264,6 +278,9 @@ body {
   background: var(--page);
   box-shadow: var(--shadow-page);
   min-height: 100vh;
+  /* The last thing on the page is usually a graph legend or a task row, and
+     without this it sits directly on the sheet's bottom edge. */
+  padding-bottom: 3.5rem;
 }
 
 /* Anything the page can be scrolled TO clears the sticky topbar. Set on the
@@ -372,7 +389,7 @@ code {
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  padding: 0.875rem var(--gutter);
+  padding: 1.0625rem var(--gutter);
   background: var(--page);
   border-bottom: 1px solid var(--rule);
   transition: box-shadow var(--t-mid) var(--ease);
@@ -487,9 +504,9 @@ code {
 .pv-banner {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: 1.25rem 2.5rem;
   flex-wrap: wrap;
-  padding: 0.75rem var(--gutter);
+  padding: 1.125rem var(--gutter);
   background: var(--accent-wash);
   border-bottom: 1px solid var(--rule);
 }
@@ -521,7 +538,7 @@ code {
    --------------------------------------------------------------------------- */
 
 .pv-main {
-  padding: 2.5rem var(--gutter) 0;
+  padding: 3.25rem var(--gutter) 0;
 }
 
 /* The masthead: eyebrow, title, goal. */
@@ -529,7 +546,7 @@ code {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  margin-bottom: 2.125rem;
+  margin-bottom: 2.75rem;
 }
 
 .pv-eyebrow {
@@ -573,7 +590,7 @@ code {
   flex-wrap: wrap;
   border-top: 1px solid var(--rule);
   border-bottom: 1px solid var(--rule);
-  margin-bottom: 3rem;
+  margin-bottom: var(--gap-section);
 }
 
 /* Cells share the width, but only up to a point: a plan with two cells would
@@ -585,8 +602,8 @@ code {
   max-width: 17rem;
   display: flex;
   flex-direction: column;
-  gap: 0.375rem;
-  padding: 1.125rem 1.5rem;
+  gap: 0.5rem;
+  padding: 1.5rem 1.75rem;
   border-left: 1px solid var(--rule);
 }
 
@@ -627,7 +644,7 @@ code {
   display: flex;
   align-items: center;
   gap: 0.875rem;
-  margin: 0 0 1.375rem;
+  margin: 0 0 1.625rem;
 }
 
 .pv-rule-line {
@@ -646,9 +663,9 @@ code {
 .pv-rule-actions:empty { display: none; }
 
 /* A rule nested INSIDE a block (the Acceptance divider in a task) is a
-   sub-heading, not a section opener -- it sits tight to the rows it labels so
-   the two read as one unit. */
-.task-body .pv-rule { margin: 0.375rem 0 0.25rem; }
+   sub-heading, not a section opener -- it sits closer to the rows it labels
+   than to the block above, so the label and its list read as one unit. */
+.task-body .pv-rule { margin: 0.875rem 0 0.375rem; }
 
 /* Text buttons that live on a rule (expand all / collapse all). Quiet until
    pointed at -- they are affordances, not calls to action. */
@@ -750,8 +767,8 @@ code {
 .pv-note {
   display: flex;
   flex-direction: column;
-  gap: 0.5625rem;
-  padding: 0.8125rem 0.9375rem;
+  gap: 0.625rem;
+  padding: 1rem 1.125rem;
   background: var(--surface);
   border-left: 2px solid var(--rule);
   max-width: 70ch;
@@ -805,7 +822,7 @@ code {
   display: grid;
   gap: 2rem;
   align-items: start;
-  margin: 0 0 1.75rem;
+  margin: 0 0 var(--gap-block);
 }
 
 /* Two zones on a wide viewport: prose left at its reading measure, the phase
@@ -848,7 +865,7 @@ code {
    dingbat survives in both a serif and the reader's fallback font. */
 .summary-keypoints {
   list-style: none;
-  margin: 0 0 1.5rem;
+  margin: 0 0 var(--gap-block);
   padding: 0;
   max-width: 72ch;
   font-size: 1.03rem;
@@ -926,8 +943,13 @@ code {
   font-size: 1rem;
 }
 
-.pv-ledger th:last-child,
-.pv-ledger td:last-child { text-align: right; }
+/* The figure column hangs off the right edge -- matched as "a second cell",
+   not as "the last cell", because a plan whose tasks carry no estimates and no
+   risk ratings drops that column entirely (see render.rs's
+   `ledger_has_figures`) and the phase names must stay left-aligned when it
+   does. */
+.pv-ledger th + th,
+.pv-ledger td + td { text-align: right; }
 
 .pv-ledger td a {
   color: var(--ink);
@@ -962,7 +984,7 @@ code {
   display: flex;
   align-items: baseline;
   gap: 0.5625rem;
-  padding: 1rem 0 0;
+  padding: 1.25rem 0 0;
   font-family: var(--font-mono);
   font-size: 0.813rem;
   line-height: 1.4;
@@ -987,8 +1009,8 @@ code {
 .pv-row {
   display: grid;
   grid-template-columns: 6rem minmax(0, 1fr);
-  gap: 1.5rem;
-  padding: 1.375rem 0;
+  gap: 1.75rem;
+  padding: var(--gap-row) 0;
   border-bottom: 1px solid var(--rule);
   align-items: start;
 }
@@ -1020,7 +1042,11 @@ code {
   flex-wrap: wrap;
 }
 
-.pv-row-head h3 { flex: 1 1 20rem; min-width: 0; }
+/* A risk leads with a title, an open question leads with the question itself
+   (prose, because it can be a paragraph). Either way the heading line's first
+   child takes the slack so the actions after it land at the right margin. */
+.pv-row-head h3,
+.pv-row-head > .pv-prose { flex: 1 1 20rem; min-width: 0; }
 
 .pv-row-body > p,
 .pv-prose {
@@ -1050,14 +1076,38 @@ summary::-webkit-details-marker { display: none; }
 
 /* The phase row, in both states: numeral | content | marker. The numeral
    column is a token so an expanded phase's body (which is margin-indented by
-   the same amount below) lines up under the content, never under the numeral. */
+   the same amount below) lines up under the content, never under the numeral.
+
+   The marker column is `auto` here and widened below to match the task rail --
+   see the note on that rule. */
 details.phase > summary {
   display: grid;
   grid-template-columns: var(--numeral-col) minmax(0, 1fr) auto;
   gap: var(--numeral-gap);
   align-items: center;
-  padding: 1.375rem 0;
+  padding: var(--gap-row) 0;
   transition: background var(--t-fast) var(--ease);
+}
+
+/* Wherever a task row HAS a rail (the same breakpoint, from the other side),
+   the phase's marker column is widened to swallow exactly what that rail
+   costs, so the phase's content column ends where a task's body column ends.
+   Both rows push their controls to the right edge of their content column, so
+   every Comment button and Mark-reviewed box on the page stacks on one
+   vertical line instead of stepping in and out by the rail's width as the eye
+   travels down. The subtraction is because grid has a single column-gap: the
+   marker column absorbs the difference between the rail's gap and the
+   numeral's. */
+@media (min-width: 58.0625rem) {
+  details.phase > summary {
+    grid-template-columns:
+      var(--numeral-col)
+      minmax(0, 1fr)
+      calc(var(--rail-col) + var(--rail-gap) - var(--numeral-gap));
+  }
+  /* The marker itself still belongs at the sheet's right margin -- it is the
+     row's own affordance, not part of the rail it borrows width from. */
+  details.phase > summary .phase-marker { justify-self: end; }
 }
 
 details.phase > summary:hover { background: var(--accent-wash); }
@@ -1066,7 +1116,7 @@ details.phase > summary:hover { background: var(--accent-wash); }
    because the content below it is now several blocks tall. */
 details.phase[open] > summary {
   align-items: start;
-  padding-bottom: 1.25rem;
+  padding-bottom: 1.5rem;
 }
 
 .phase-numeral {
@@ -1085,14 +1135,17 @@ details.phase > summary:hover .phase-numeral { color: var(--accent); }
 .phase-head {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.4375rem;
   min-width: 0;
 }
 
+/* Same gap as `.task-head`, deliberately: both lines end in the same pair of
+   controls, and a different gap would land them two pixels apart on the
+   vertical line the column widths just went to some trouble to share. */
 .phase-head-line {
   display: flex;
   align-items: baseline;
-  gap: 0.75rem;
+  gap: 0.875rem;
   flex-wrap: wrap;
 }
 
@@ -1129,7 +1182,7 @@ details.phase > summary:hover .phase-marker { color: var(--accent); }
    content came from. */
 details.phase > .phase-body {
   margin-left: calc(var(--numeral-col) + var(--numeral-gap));
-  padding-bottom: 1.5rem;
+  padding-bottom: 2.25rem;
   animation: pv-reveal var(--t-slow) var(--ease) both;
 }
 
@@ -1140,18 +1193,18 @@ details.phase > .phase-body {
 }
 
 .phase-summary-rest {
-  margin: 0 0 1.25rem;
+  margin: 0 0 var(--gap-block);
 }
 
 /* --- dependency block --------------------------------------------------- */
 
-.pv-deps { margin: 0 0 1.5rem; }
+.pv-deps { margin: 0 0 2rem; }
 
 .pv-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
-  padding-top: 0.5rem;
+  padding-top: 0.875rem;
   font-family: var(--font-mono);
   font-size: 0.719rem;
   color: var(--ink-3);
@@ -1173,9 +1226,9 @@ details.phase > .phase-body {
 
 .task {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 13.75rem;
-  gap: 1.5rem;
-  padding: 1.25rem 0;
+  grid-template-columns: minmax(0, 1fr) var(--rail-col);
+  gap: var(--rail-gap);
+  padding: 1.5rem 0;
   border-top: 1px solid var(--rule);
   align-items: start;
   transition: background var(--t-fast) var(--ease);
@@ -1210,8 +1263,8 @@ details.phase > .phase-body {
 .task-rail {
   display: flex;
   flex-direction: column;
-  gap: 0.4375rem;
-  padding-top: 0.25rem;
+  gap: 0.5625rem;
+  padding-top: 0.375rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
   line-height: 1;
@@ -1238,11 +1291,11 @@ details.phase > .phase-body {
 
 .files {
   list-style: none;
-  margin: 0.25rem 0 0;
+  margin: 0.375rem 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.4375rem;
   max-width: 70ch;
 }
 
@@ -1287,7 +1340,7 @@ details.phase > .phase-body {
   grid-template-columns: 1.75rem minmax(0, 1fr);
   gap: 0.75rem;
   align-items: baseline;
-  padding: 0.375rem 2rem 0.375rem 0;
+  padding: 0.5625rem 2rem 0.5625rem 0;
   border-bottom: 1px solid var(--rule-soft);
   position: relative;
   font-size: 1rem;
@@ -1310,11 +1363,11 @@ details.phase > .phase-body {
 
 .validation {
   list-style: none;
-  margin: 0.25rem 0 0;
+  margin: 0.5rem 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.375rem;
   max-width: 70ch;
 }
 
@@ -1324,7 +1377,7 @@ details.phase > .phase-body {
   color: var(--ink-2);
   background: var(--surface);
   border-left: 2px solid var(--rule);
-  padding: 0.375rem 0.625rem;
+  padding: 0.5rem 0.75rem;
   overflow-x: auto;
 }
 
@@ -1341,10 +1394,10 @@ details.phase > .phase-body {
    --------------------------------------------------------------------------- */
 
 pre {
-  margin: 0.375rem 0 0;
+  margin: 0.5rem 0 0;
   background: var(--surface);
   border-left: 2px solid var(--rule);
-  padding: 0.75rem 0.875rem;
+  padding: 0.875rem 1rem;
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: 0.813rem;
@@ -1745,9 +1798,9 @@ pre code { font-size: 1em; }
 </div><aside class="summary-glance"><table class="pv-ledger"><thead><tr><th>Phase</th><th>Est · risk</th></tr></thead><tbody><tr data-phase-row="p-core"><td><a href="#phase-p-core">Core</a></td><td class="pv-ledger-fig">1s · 1m · 1 medium</td></tr><tr data-phase-row="p-backend"><td><a href="#phase-p-backend">Backend</a></td><td class="pv-ledger-fig is-hot">1l · 1 high</td></tr></tbody></table><p class="summary-ask has-blocking"><span class="pv-dot pv-dot-high" aria-hidden="true"></span><span>1 blocking question(s) must be resolved before implementation: <a href="#question-q-ttl">Session TTL?</a></span></p></aside></div><ul class="summary-keypoints"><li><p><strong>Trait extraction</strong> decouples session persistence from its backing store, gated behind a config flag.</p>
 </li><li><p><strong>Redis backend</strong> (<code>t-redis</code>) is blocked on the trait boundary landing first.</p>
 </li><li><p><strong>Lock contention</strong> (<code>r-locking</code>) is mitigated by sharding the store, not by removing the lock.</p>
-</li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p></section><div class="pv-rule"><span class="pv-label">Open questions</span><span class="pv-rule-line"></span></div><section class="pv-rows questions"><div class="pv-row" id="question-q-ttl" data-plan-ref="question:q-ttl"><span class="pv-chip pv-chip-high">Blocking</span><div class="pv-row-body"><div class="pv-prose"><p>Session TTL?</p>
-</div></div></div><div class="pv-row" id="question-q-name" data-plan-ref="question:q-name"><span class="pv-chip pv-chip-planned">Open</span><div class="pv-row-body"><div class="pv-prose"><p>Trait name?</p>
-</div></div></div></section><div class="pv-rule"><span class="pv-label">Risks</span><span class="pv-rule-line"></span></div><section class="pv-rows risks"><div class="pv-row" data-plan-ref="risk:r-locking"><span class="pv-chip pv-chip-high">high</span><div class="pv-row-body"><div class="pv-row-head"><h3 id="risk-r-locking">Lock contention</h3></div><div class="pv-prose"><p>Shard the store.</p>
+</li></ul><p class="summary-outofscope"><strong>Out of scope: </strong>Migrating existing sessions between backends, Multi-region session replication</p></section><div class="pv-rule"><span class="pv-label">Open questions</span><span class="pv-rule-line"></span></div><section class="pv-rows questions"><div class="pv-row" id="question-q-ttl" data-plan-ref="question:q-ttl"><span class="pv-chip pv-chip-high">Blocking</span><div class="pv-row-body"><div class="pv-row-head"><div class="pv-prose"><p>Session TTL?</p>
+</div></div></div></div><div class="pv-row" id="question-q-name" data-plan-ref="question:q-name"><span class="pv-chip pv-chip-planned">Open</span><div class="pv-row-body"><div class="pv-row-head"><div class="pv-prose"><p>Trait name?</p>
+</div></div></div></div></section><div class="pv-rule"><span class="pv-label">Risks</span><span class="pv-rule-line"></span></div><section class="pv-rows risks"><div class="pv-row" data-plan-ref="risk:r-locking"><span class="pv-chip pv-chip-high">high</span><div class="pv-row-body"><div class="pv-row-head"><h3 id="risk-r-locking">Lock contention</h3></div><div class="pv-prose"><p>Shard the store.</p>
 </div></div></div></section><div class="pv-rule"><span class="pv-label">Phases</span><span class="pv-rule-line"></span><span class="pv-rule-actions" id="phases-actions"></span></div><div class="pv-phases"><details class="phase" id="phase-p-core" data-plan-ref="phase:p-core"><summary><span class="phase-numeral" aria-hidden="true">01</span><div class="phase-head"><div class="phase-head-line"><h2>Core</h2><span class="phase-meta">2 tasks · 1 done</span></div><span class="phase-teaser">The trait seam.</span></div><span class="phase-marker" aria-hidden="true">›</span></summary><div class="phase-body"><div class="pv-deps"><div class="pv-rule"><span class="pv-label">Dependencies</span><span class="pv-rule-line"></span></div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 54" width="432" height="54" class="plan-graph"><path class="edge" d="M 200 27 H 232"/><path class="arrow-head" d="M 232 27 L 225 23 L 225 31 z"/><a href="#task-t-config-flag" class="node-group status-done"><title>Config flag</title><rect class="node" x="0" y="0" width="200" height="54" rx="4"/><rect class="node-stripe" x="0" y="0" width="3" height="54"/><text x="101" y="27">Config flag</text></a><a href="#task-t-session-store" class="node-group status-planned risk-medium"><title>Introduce SessionStore trait</title><rect class="node" x="232" y="0" width="200" height="54" rx="4"/><rect class="node-stripe" x="232" y="0" width="3" height="54"/><text x="333" y="27"><tspan x="333" dy="-7">Introduce SessionStore</tspan><tspan x="333" dy="15">trait</tspan></text></a></svg><div class="pv-legend"><span><span class="pv-dot pv-dot-done" aria-hidden="true"></span>done</span><span><span class="pv-dot pv-dot-in_progress" aria-hidden="true"></span>in progress</span><span><span class="pv-dot pv-dot-blocked" aria-hidden="true"></span>blocked</span><span><span class="pv-dot pv-dot-planned" aria-hidden="true"></span>planned</span></div></div><div class="task" id="task-t-config-flag" data-plan-ref="task:t-config-flag"><div class="task-body"><div class="task-head"><h3>Config flag</h3></div><div class="pv-rule"><span class="pv-label">Acceptance</span><span class="pv-rule-line"></span></div><ul class="acceptance"><li data-plan-ref="task:t-config-flag"><span>flag parses</span></li></ul><ul class="validation"><li><code>cargo test config::</code></li></ul></div><div class="task-rail"><span><span class="pv-dot pv-dot-done" aria-hidden="true"></span>done</span><span><span class="pv-dot pv-dot-planned" aria-hidden="true"></span>small effort</span><span class="task-id">t-config-flag</span></div></div><div class="task" id="task-t-session-store" data-plan-ref="task:t-session-store"><div class="task-body"><div class="task-head"><h3>Introduce SessionStore trait</h3></div><div class="pv-prose"><p>Extract persistence behind a trait so <code>t-redis</code> can slot in.</p>
 </div><ul class="files"><li><code>src/auth/session.rs</code><span class="pv-chip pv-chip-modify">modify</span><span class="file-note">extract trait</span></li><li><code>src/auth/store.rs</code><span class="pv-chip pv-chip-create">create</span></li><li><code>tests/auth.rs</code><span class="pv-chip pv-chip-test">test</span></li></ul><div class="pv-rule"><span class="pv-label">Acceptance</span><span class="pv-rule-line"></span></div><ul class="acceptance"><li data-plan-ref="task:t-session-store"><span>existing session tests pass unchanged</span></li><li data-plan-ref="task:t-session-store"><span>no direct sled calls outside the trait impl</span></li></ul><ul class="validation"><li><code>cargo test auth::</code></li></ul><p class="depends">depends on <a href="#task-t-config-flag">t-config-flag</a></p></div><div class="task-rail"><span><span class="pv-dot pv-dot-planned" aria-hidden="true"></span>planned</span><span><span class="pv-dot pv-dot-medium" aria-hidden="true"></span>medium risk</span><span><span class="pv-dot pv-dot-planned" aria-hidden="true"></span>medium effort</span><span class="task-id">t-session-store</span></div></div></div></details><details class="phase" id="phase-p-backend" data-plan-ref="phase:p-backend"><summary><span class="phase-numeral" aria-hidden="true">02</span><div class="phase-head"><div class="phase-head-line"><h2>Backend</h2><span class="phase-meta">3 tasks</span><span class="pv-chip pv-chip-high">1 high risk</span></div></div><span class="phase-marker" aria-hidden="true">›</span></summary><div class="phase-body"><div class="pv-deps"><div class="pv-rule"><span class="pv-label">Dependencies</span><span class="pv-rule-line"></span></div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 226" width="432" height="226" class="plan-graph"><path class="edge" d="M 200 199 H 216 V 27 H 232"/><path class="arrow-head" d="M 232 27 L 225 23 L 225 31 z"/><a href="#task-t-bench" class="node-group status-cut risk-low"><title>Benchmarks</title><rect class="node" x="0" y="0" width="200" height="54" rx="4"/><rect class="node-stripe" x="0" y="0" width="3" height="54"/><text x="101" y="27">Benchmarks</text></a><a href="#task-t-cleanup" class="node-group status-in_progress"><title>Remove dead code</title><rect class="node" x="0" y="86" width="200" height="54" rx="4"/><rect class="node-stripe" x="0" y="86" width="3" height="54"/><text x="101" y="113">Remove dead code</text></a><a href="#task-t-session-store" class="node-group stub status-planned risk-medium"><title>Introduce SessionStore trait</title><rect class="node" x="0" y="172" width="200" height="54" rx="4"/><rect class="node-stripe" x="0" y="172" width="3" height="54"/><text x="101" y="199"><tspan x="101" dy="-7">Introduce SessionStore</tspan><tspan x="101" dy="15">trait</tspan></text></a><a href="#task-t-redis" class="node-group status-blocked risk-high"><title>Redis backend</title><rect class="node" x="232" y="0" width="200" height="54" rx="4"/><rect class="node-stripe" x="232" y="0" width="3" height="54"/><text x="333" y="27">Redis backend</text></a></svg><div class="pv-legend"><span><span class="pv-dot pv-dot-done" aria-hidden="true"></span>done</span><span><span class="pv-dot pv-dot-in_progress" aria-hidden="true"></span>in progress</span><span><span class="pv-dot pv-dot-blocked" aria-hidden="true"></span>blocked</span><span><span class="pv-dot pv-dot-planned" aria-hidden="true"></span>planned</span></div></div><div class="task" id="task-t-redis" data-plan-ref="task:t-redis"><div class="task-body"><div class="task-head"><h3>Redis backend</h3></div><p class="depends">depends on <a href="#task-t-session-store">t-session-store</a></p></div><div class="task-rail"><span><span class="pv-dot pv-dot-blocked" aria-hidden="true"></span>blocked</span><span><span class="pv-dot pv-dot-high" aria-hidden="true"></span>high risk</span><span><span class="pv-dot pv-dot-planned" aria-hidden="true"></span>large effort</span><span class="task-id">t-redis</span></div></div><div class="task" id="task-t-cleanup" data-plan-ref="task:t-cleanup"><div class="task-body"><div class="task-head"><h3>Remove dead code</h3></div></div><div class="task-rail"><span><span class="pv-dot pv-dot-in_progress" aria-hidden="true"></span>in_progress</span><span class="task-id">t-cleanup</span></div></div><div class="task" id="task-t-bench" data-plan-ref="task:t-bench"><div class="task-body"><div class="task-head"><h3>Benchmarks</h3></div></div><div class="task-rail"><span><span class="pv-dot pv-dot-cut" aria-hidden="true"></span>cut</span><span><span class="pv-dot pv-dot-low" aria-hidden="true"></span>low risk</span><span class="task-id">t-bench</span></div></div></div></details></div><div class="pv-rule"><span class="pv-label">Phase dependencies</span><span class="pv-rule-line"></span></div><div class="pv-deps"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 56" width="512" height="56" class="plan-graph"><path class="edge" d="M 240 28 H 272"/><path class="arrow-head" d="M 272 28 L 265 24 L 265 32 z"/><a href="#phase-p-core" class="node-group phase-node status-in_progress"><title>Core</title><rect class="node" x="0" y="0" width="240" height="56" rx="4"/><rect class="node-stripe" x="0" y="0" width="3" height="56"/><text x="121" y="28">Core</text></a><a href="#phase-p-backend" class="node-group phase-node status-in_progress has-high"><title>Backend</title><rect class="node" x="272" y="0" width="240" height="56" rx="4"/><rect class="node-stripe" x="272" y="0" width="3" height="56"/><text x="393" y="28">Backend</text></a></svg><div class="pv-legend"><span><span class="pv-dot pv-dot-done" aria-hidden="true"></span>done</span><span><span class="pv-dot pv-dot-in_progress" aria-hidden="true"></span>in progress</span><span><span class="pv-dot pv-dot-blocked" aria-hidden="true"></span>blocked</span><span><span class="pv-dot pv-dot-planned" aria-hidden="true"></span>planned</span></div></div></main></div><script type="application/json" id="plan-data">{"format":"loadout.plan/1","meta":{"id":"auth-refactor","title":"Auth refactor","goal_md":"\u003cp\u003eExtract \u003cem\u003esession\u003c/em\u003e handling.\u003c/p\u003e\n","summary_md":"\u003cp\u003eThis refactor extracts \u003ccode\u003eSessionStore\u003c/code\u003e behind a trait so a Redis-backed implementation can slot in without touching call sites. It ships behind a config flag and closes the \u003cem\u003elock contention\u003c/em\u003e risk by sharding the store. The ask: review the trait boundary in \u003ccode\u003et-session-store\u003c/code\u003e before Redis work starts.\u003c/p\u003e\n","key_points":["\u003cp\u003e\u003cstrong\u003eTrait extraction\u003c/strong\u003e decouples session persistence from its backing store, gated behind a config flag.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eRedis backend\u003c/strong\u003e (\u003ccode\u003et-redis\u003c/code\u003e) is blocked on the trait boundary landing first.\u003c/p\u003e\n","\u003cp\u003e\u003cstrong\u003eLock contention\u003c/strong\u003e (\u003ccode\u003er-locking\u003c/code\u003e) is mitigated by sharding the store, not by removing the lock.\u003c/p\u003e\n"],"out_of_scope":["Migrating existing sessions between backends","Multi-region session replication"],"agent":"claude","created":"2026-07-07","revision":2},"phases":[{"id":"p-core","title":"Core","icon":"wrench","summary_md":"\u003cp\u003eThe trait seam.\u003c/p\u003e\n","tasks":[{"id":"t-config-flag","title":"Config flag","status":"done","acceptance":["flag parses"],"validation":["cargo test config::"],"estimate":"s"},{"id":"t-session-store","title":"Introduce SessionStore trait","icon":"shield","summary_md":"\u003cp\u003eExtract persistence behind a trait so \u003ccode\u003et-redis\u003c/code\u003e can slot in.\u003c/p\u003e\n","status":"planned","risk":"medium","depends_on":["t-config-flag"],"files":[{"path":"src/auth/session.rs","action":"modify","note":"extract trait"},{"path":"src/auth/store.rs","action":"create"},{"path":"tests/auth.rs","action":"test"}],"acceptance":["existing session tests pass unchanged","no direct sled calls outside the trait impl"],"validation":["cargo test auth::"],"estimate":"m"}]},{"id":"p-backend","title":"Backend","icon":"database","tasks":[{"id":"t-redis","title":"Redis backend","status":"blocked","risk":"high","depends_on":["t-session-store"],"estimate":"l"},{"id":"t-cleanup","title":"Remove dead code","status":"in_progress"},{"id":"t-bench","title":"Benchmarks","status":"cut","risk":"low"}]}],"risks":[{"id":"r-locking","title":"Lock contention","severity":"high","mitigation_md":"\u003cp\u003eShard the store.\u003c/p\u003e\n"}],"open_questions":[{"id":"q-ttl","question_md":"\u003cp\u003eSession TTL?\u003c/p\u003e\n","blocking":true},{"id":"q-name","question_md":"\u003cp\u003eTrait name?\u003c/p\u003e\n","blocking":false}]}</script><script>/* loadout plan viewer — progressive enhancement over server-rendered HTML.
    Pure core first (no DOM), DOM layer second, #selftest harness last. */
