@@ -75,13 +75,14 @@ defends on several layers:
   Guidance text can come from a cloned repo's fragments, so that was a
   latent XSS. It's closed now, in both surfaces.
 - **`icon` is a closed vocabulary, not free text.** A phase's or task's
-  `icon` field must name one of 16 vendored Lucide icons (`unknown_icon`
-  rejects anything else) — a lookup key into loadout's own vendored assets,
-  never `plan.json`-supplied SVG content. The renderer used to inline the
-  matching SVG, which was only safe *because* of that closed vocabulary; the
-  redesigned viewer draws no icons at all, so today the value reaches nothing
-  but the validator. The vocabulary check stays regardless: it is what keeps
-  the field from becoming an injection point if drawing ever returns.
+  `icon` field must be one of 16 fixed names (`unknown_icon` rejects anything
+  else), never `plan.json`-supplied SVG content. The renderer used to look
+  each name up in a vendored Lucide set and inline the matching SVG, which
+  was only safe *because* the vocabulary was closed. The redesigned viewer
+  draws no icons at all, so the vendored SVGs are gone and the value now
+  reaches nothing but the validator. The vocabulary check stays regardless:
+  it is what keeps the field from becoming an injection point if drawing
+  ever returns.
 - **The embedded JSON data island is escaped, not just serialized.** The
   rendered page includes a `<script type="application/json">` copy of the
   plan for the client-side comment tooling. Before embedding, `<`, `>`, `&`,

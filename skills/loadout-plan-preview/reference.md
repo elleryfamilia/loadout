@@ -84,7 +84,7 @@ Exact serde spellings — lowercase / snake_case, used verbatim in JSON:
 | file `action` | `create` \| `modify` \| `delete` \| `test` |
 | `icon` (phase/task field) | `book-open` \| `bug` \| `database` \| `file-text` \| `flask-conical` \| `git-branch` \| `globe` \| `layout-dashboard` \| `package` \| `paintbrush` \| `rocket` \| `search` \| `shield` \| `terminal` \| `wrench` \| `zap` |
 
-`icon` is a vendored Lucide icon name, not free text — a value outside this
+`icon` is one of these fixed names, not free text — a value outside this
 list is a hard error (`unknown_icon`) naming every valid icon.
 
 **The rendered page does not draw icons.** The viewer carries hierarchy with
