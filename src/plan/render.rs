@@ -996,8 +996,10 @@ mod tests {
         // all the same. `!html.to_lowercase().contains("@import")` below
         // still guards the actual external-fetch vector.
         assert!(!html.to_lowercase().contains("@import"));
-        // The embedded stylesheet's only url() references are the Inter
-        // font's data: URIs — a url(http…)/url(//…) would be a fetch, which
+        // The embedded stylesheet's only url() references are the embedded
+        // typefaces' data: URIs (Newsreader and JetBrains Mono — see the
+        // FONT_BEGIN block and tools/build-plan-fonts.py, which generates
+        // it) — a url(http…)/url(//…) would be a fetch, which
         // the self-containment contract (and the CSP) forbids. Checked over
         // the stylesheet, not the whole document, because task summaries can
         // legitimately contain the literal text `url(` inside code spans.

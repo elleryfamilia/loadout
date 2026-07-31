@@ -106,9 +106,12 @@ defends on several layers:
   stylesheets, no fonts — which is also why the renderer never uses a CDN:
   the page is self-contained by construction, and the CSP would block a CDN
   reference even if one were added by mistake. `font-src data:` allows the
-  embedded Inter font — base64-encoded directly into `plan.css`'s
-  `@font-face` rules, not fetched — and nothing else; a `url(https://…)`
-  reference would still be blocked.
+  embedded typefaces — Newsreader and JetBrains Mono, base64-encoded
+  directly into `plan.css`'s `@font-face` rules by
+  `tools/build-plan-fonts.py`, not fetched — and nothing else; a
+  `url(https://…)` reference would still be blocked. A test asserts every
+  `url()` in the stylesheet is a `data:` URI, so the contract cannot lapse
+  quietly.
 - **Input limits bound the blast radius of a runaway or hostile plan.json**
   before any rendering happens: 2 MiB input size; 500 tasks; 50 phases; 100
   risks; 100 open questions; 2000 dependency edges; 10,000 characters per
