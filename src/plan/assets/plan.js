@@ -265,6 +265,51 @@
       if (phase.classList.contains("is-closing")) throw new Error("the instant path left is-closing set");
       if (body.style.overflow) throw new Error("the instant path left the body clipped");
     });
+    check("a link in a phase row still navigates", function () {
+      const phase = document.querySelector("details.phase");
+      const teaser = phase && phase.querySelector(".phase-teaser");
+      if (!teaser) throw new Error("no phase description to put a link in");
+      /* The phase description sits INSIDE the <summary>, and the renderer
+         keeps safe markdown links in it. Taking over the summary's click
+         cancelled those links: one cancelled flag covers every activation
+         behaviour on the event's path. Injected here rather than baked into
+         the fixture because what is under test is this file's click
+         handling, not the renderer. */
+      const link = document.createElement("a");
+      link.href = "#selftest-link-probe";
+      link.textContent = "link";
+      teaser.appendChild(link);
+      const wasOpen = phase.open;
+      /* Read the cancelled flag from the far end of the bubble path -- past
+         the summary's handler -- then cancel for real, so the probe does not
+         actually navigate the page it is testing. */
+      let cancelled = null;
+      function spy(e) { cancelled = e.defaultPrevented; e.preventDefault(); }
+      document.addEventListener("click", spy);
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      document.removeEventListener("click", spy);
+      link.remove();
+      if (cancelled === null) throw new Error("the probe click never reached the document");
+      if (cancelled) throw new Error("clicking a link in a phase row cancelled its navigation");
+      if (phase.open !== wasOpen) throw new Error("clicking a link in a phase row toggled the phase");
+    });
+    check("commenting on a shut phase reveals the editor", function () {
+      const phase = document.querySelector("details.phase");
+      const btn = phase && phase.querySelector("summary .comment-btn");
+      const box = phase && phase.querySelector(".phase-body > .comment-box");
+      if (!btn || !box) throw new Error("phase has no comment editor mounted");
+      /* Collapsing a phase leaves an open editor with `hidden === false`
+         while the <details> keeps it off screen, so the two disagree. A
+         plain toggle from that state hides something already invisible and
+         the click does nothing a reader can see. */
+      setPhaseOpen(phase, false, false);
+      box.hidden = false;
+      btn.click();
+      if (phaseIsShut(phase)) throw new Error("commenting on a shut phase left it shut");
+      if (box.hidden) throw new Error("commenting on a shut phase hid the editor");
+      setPhaseOpen(phase, false, false);
+      box.hidden = true;
+    });
     if (location.protocol !== "file:" || window.parent !== window) {
       /* Non-plain-file contexts only — a real http(s) serving, or the CI
          harness that frames this page in a sandboxed iframe to give it the
@@ -1003,18 +1048,23 @@
            its toggle. Commenting on an open phase used to shut it, hiding
            the very box the click had just opened. */
         e.stopPropagation();
-        box.hidden = !box.hidden;
-        if (box.hidden) return;
         if (el.tagName === "DETAILS" && phaseIsShut(el)) {
           /* The button is in the summary but the box is in the body, which
-             only exists while the phase is open -- so open it. Focus without
-             scrolling: the body is mid-animation and clipped, and scrolling
-             into it now would leave the clip box scrolled once it settles. */
+             is off screen while the phase is shut -- whatever `hidden` says.
+             It can be left un-hidden, too: collapsing a phase that had an
+             editor open does not touch the box. Toggling from there would
+             hide something the reader cannot see and the click would have no
+             visible effect at all, so a shut phase always REVEALS rather
+             than toggles. Focus without scrolling: the body is mid-animation
+             and clipped, and scrolling into it now would leave the clip box
+             scrolled once it settles. */
+          box.hidden = false;
           setPhaseOpen(el, true, true);
           textarea.focus({ preventScroll: true });
           return;
         }
-        textarea.focus();
+        box.hidden = !box.hidden;
+        if (!box.hidden) textarea.focus();
       });
 
       cancelBtn.addEventListener("click", function () {
@@ -1061,6 +1111,19 @@
         if (!summary) return;
         summary.addEventListener("click", function (e) {
           if (e.defaultPrevented) return;
+          /* A link or a control inside the row owns its own click, and the
+             browser already does the right thing with one: the innermost
+             element with an activation behaviour wins, so a click on an <a>
+             in the phase description follows the link and does NOT toggle
+             the phase. Stay out of the way entirely. Cancelling here would
+             take the navigation with it -- a click event carries a single
+             cancelled flag for every activation behaviour on its path, so
+             there is no way to suppress the toggle and keep the link.
+             (`phase_summary_parts` keeps safe links in the teaser, and the
+             teaser is inside the <summary>.) */
+          if (e.target.closest && e.target.closest("a[href], button, input, select, textarea, label")) {
+            return;
+          }
           e.preventDefault();
           setPhaseOpen(d, phaseIsShut(d), true);
         });
