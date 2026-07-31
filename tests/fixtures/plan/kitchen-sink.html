@@ -1106,7 +1106,14 @@ details.phase > summary {
   gap: var(--numeral-gap);
   align-items: center;
   padding: var(--gap-row) 0;
-  transition: background var(--t-fast) var(--ease);
+  /* The bottom padding differs between the shut and open rows (see the
+     [open] rule below), so it has to travel over the same window the body
+     does. Left untransitioned it changed on the frame of the click, which
+     shunted everything below the phase 14px in the OPPOSITE direction to
+     the one the body was about to move it -- a jump introduced by the
+     animation, in the middle of the animation. */
+  transition: background var(--t-fast) var(--ease),
+              padding-bottom var(--t-disclose) var(--ease);
 }
 
 /* Wherever a task row HAS a rail (the same breakpoint, from the other side),
@@ -2086,7 +2093,23 @@ pre code { font-size: 1em; }
 
       setPhaseOpen(phase, false, false);
 
+      /* Nothing below the phase may move on the FRAME of the click: the whole
+         change has to be inside the animation. The summary's bottom padding
+         differs between the shut and open rows and was not transitioned, so
+         it shunted the rest of the page 14px the instant a phase was clicked
+         -- in the opposite direction to the one the body was about to move
+         it. A delta, never a position, so the frame's size cannot matter. */
+      const below = phase.nextElementSibling;
+      const beforeTop = below ? below.getBoundingClientRect().top : 0;
+
       setPhaseOpen(phase, true, true);
+      if (below) {
+        const shift = Math.abs(below.getBoundingClientRect().top - beforeTop);
+        if (shift > 1) {
+          throw new Error("clicking a phase shifted the page " + Math.round(shift)
+            + "px before anything had animated");
+        }
+      }
       if (!phase.open) throw new Error("opening did not open the phase");
       if (phase.classList.contains("is-closing")) throw new Error("opening left is-closing set");
       const opening = heightAnimations(body);
@@ -2120,6 +2143,23 @@ pre code { font-size: 1em; }
         throw new Error("closing ends at height=" + last.height
           + " paddingTop=" + last.paddingTop + " paddingBottom=" + last.paddingBottom
           + ", not at nothing");
+      }
+
+      /* Reversing that close has to resume from the frame ON SCREEN, opacity
+         included. The body is fully visible at this point, so an open that
+         assumed a start of 0 would blink it out and fade it back in. */
+      setPhaseOpen(phase, true, true);
+      const resumed = heightAnimations(body)[0].effect.getKeyframes()[0];
+      if (parseFloat(resumed.opacity) < 0.5) {
+        throw new Error("reversing a close restarts the fade at opacity " + resumed.opacity);
+      }
+      heightAnimations(body).forEach(function (a) { a.finish(); });
+
+      /* And a phase already sitting where it is asked to go is left alone --
+         "expand all" reaches every phase, including ones already open. */
+      setPhaseOpen(phase, true, true);
+      if (heightAnimations(body).length) {
+        throw new Error("re-opening an already-open phase animated it again");
       }
 
       /* And the instant path settles everything the animated one leaves in
@@ -2426,16 +2466,32 @@ pre code { font-size: 1em; }
     return !details.open || details.classList.contains("is-closing");
   }
 
-  /* The body's vertical padding, which has to travel with its height: with
+  /* Everything the disclosure animates, as it is RIGHT NOW -- read together
+     so a reversal mid-flight resumes from one consistent frame rather than
+     from three properties sampled at different times.
+
+     The padding is in here because it has to travel with the height: with
      `box-sizing: border-box` a height of 0 still leaves the padding on
      screen, so a phase would collapse to a bar of blank space and then drop
-     it -- precisely the jump this is all here to remove. */
-  function verticalPadding(el) {
-    const cs = window.getComputedStyle(el);
-    return { top: cs.paddingTop || "0px", bottom: cs.paddingBottom || "0px" };
+     it -- precisely the jump this is all here to remove.
+
+     The opacity is in here because it must NOT be assumed. Hard-coding a
+     start of 0 for every open blinked out any body that was already
+     visible: "expand all" over a phase a reader had opened by hand faded it
+     from nothing, and reversing a close snapped the content dimmer before
+     bringing it back. */
+  function bodyState(body) {
+    const cs = window.getComputedStyle(body);
+    return {
+      height: body.getBoundingClientRect().height + "px",
+      paddingTop: cs.paddingTop || "0px",
+      paddingBottom: cs.paddingBottom || "0px",
+      opacity: cs.opacity || "1",
+    };
   }
 
-  const NO_PADDING = { top: "0px", bottom: "0px" };
+  /* What a shut phase's body looks like: nothing at all, on every axis. */
+  const COLLAPSED = { height: "0px", paddingTop: "0px", paddingBottom: "0px", opacity: "0" };
 
   /* The disclosure animations on an element, and only those. `getAnimations`
      also returns anything CSS has left lying around with a fill, so a bare
@@ -2473,20 +2529,31 @@ pre code { font-size: 1em; }
       return;
     }
 
+    /* Already where it is being asked to go, and nothing in flight: leave it
+       alone. "Expand all" reaches every phase including the ones a reader
+       opened by hand, and animating one of those from its own current state
+       to its own current state is a no-op for the height but a full pass for
+       everything else.
+
+       An animation that has FINISHED but whose `onfinish` has not run yet
+       (that fires on a later task) is not in flight -- it still holds this
+       phase's slot in `disclosing`, and its own cleanup is still correct
+       when it arrives. */
+    const inFlight = !!running && running.playState !== "finished";
+    if (!inFlight && details.open === want && !details.classList.contains("is-closing")) return;
+
     /* Clip first, measure second. `overflow: hidden` makes the body a block
        formatting context, so its children's margins stop collapsing through
        it -- measuring before setting it would return a height the box never
        actually has while animating, and the phase would jump at the end by
        the difference. */
     body.style.overflow = "hidden";
-    /* Where the box is NOW. Mid-animation these read the animated values, so
-       a click part-way through a close carries on from where it got to
+    /* Where the box is NOW. Mid-animation this reads the animated values, so
+       a click part-way through a close carries on from the frame on screen
        instead of restarting. Note the state is taken from `open`, never from
        the measurement: a shut <details> keeps reporting the size its body
        had when it was last open. */
-    const from = details.open
-      ? { h: body.getBoundingClientRect().height, pad: verticalPadding(body) }
-      : { h: 0, pad: NO_PADDING };
+    const from = details.open ? bodyState(body) : COLLAPSED;
     if (running) { disclosing.delete(details); running.cancel(); }
 
     if (want) {
@@ -2495,31 +2562,13 @@ pre code { font-size: 1em; }
     } else {
       details.classList.add("is-closing");
     }
-    /* And where it is going. Measured after the cancel above, so these are
-       the element's own resting values, not another animation's. */
-    const to = want
-      ? { h: body.getBoundingClientRect().height, pad: verticalPadding(body) }
-      : { h: 0, pad: NO_PADDING };
+    /* And where it is going. Read after the cancel above, so these are the
+       element's own resting values, not another animation's. */
+    const to = want ? bodyState(body) : COLLAPSED;
 
     const timing = discloseTiming();
     const anim = body.animate(
-      /* Both paddings travel with the height (see verticalPadding), and
-         opacity travels with them so the content fades rather than being
-         sliced off by the clip edge. */
-      [
-        {
-          height: from.h + "px",
-          paddingTop: from.pad.top,
-          paddingBottom: from.pad.bottom,
-          opacity: want ? 0 : 1,
-        },
-        {
-          height: to.h + "px",
-          paddingTop: to.pad.top,
-          paddingBottom: to.pad.bottom,
-          opacity: want ? 1 : 0,
-        },
-      ],
+      [from, to],
       {
         duration: timing.duration,
         easing: timing.easing,

@@ -1105,7 +1105,14 @@ details.phase > summary {
   gap: var(--numeral-gap);
   align-items: center;
   padding: var(--gap-row) 0;
-  transition: background var(--t-fast) var(--ease);
+  /* The bottom padding differs between the shut and open rows (see the
+     [open] rule below), so it has to travel over the same window the body
+     does. Left untransitioned it changed on the frame of the click, which
+     shunted everything below the phase 14px in the OPPOSITE direction to
+     the one the body was about to move it -- a jump introduced by the
+     animation, in the middle of the animation. */
+  transition: background var(--t-fast) var(--ease),
+              padding-bottom var(--t-disclose) var(--ease);
 }
 
 /* Wherever a task row HAS a rail (the same breakpoint, from the other side),
