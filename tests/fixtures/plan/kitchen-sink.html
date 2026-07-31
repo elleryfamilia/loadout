@@ -1145,7 +1145,11 @@ details.phase > summary:hover { background: var(--accent-wash); }
    rules are not, since the body is what's animating. */
 details.phase[open]:not(.is-closing) > summary {
   align-items: start;
-  padding-bottom: 1.5rem;
+  /* Tighter than the shut row's, and deliberately: the summary's padding is
+     what the hover and :target bands are drawn to, so it should wrap the
+     summary's own content rather than stand in for the gap under it. The
+     body below owns that gap -- see its padding-top. */
+  padding-bottom: 0.75rem;
 }
 
 .phase-numeral {
@@ -1223,6 +1227,15 @@ details.phase > summary:hover .phase-marker { color: var(--accent); }
    rings and anything else that legitimately paints past the edge. */
 details.phase > .phase-body {
   margin-left: calc(var(--numeral-col) + var(--numeral-gap));
+  /* The body opens with a section rule (Dependencies, or the first task's
+     heading), and every other rule on the page carries more space above its
+     label than below it -- that ratio is what makes a label read as heading
+     the thing under it rather than trailing the thing over it. Without this
+     the phase body started flush against the summary, so its first label was
+     the one exception: equidistant from the phase description above and the
+     graph below. A phase is one level down from a top-level section, so the
+     gap is a block's worth rather than a section's. */
+  padding-top: var(--gap-block);
   padding-bottom: 2.25rem;
 }
 
@@ -2081,9 +2094,12 @@ pre code { font-size: 1em; }
       /* It must start from collapsed, or the box would appear at full size
          and merely fade -- which is the jump, with a fade over it. */
       const first = opening[0].effect.getKeyframes()[0];
-      if (parseFloat(first.height) !== 0 || parseFloat(first.paddingBottom) !== 0) {
+      if (parseFloat(first.height) !== 0
+        || parseFloat(first.paddingTop) !== 0
+        || parseFloat(first.paddingBottom) !== 0) {
         throw new Error("opening starts at height=" + first.height
-          + " paddingBottom=" + first.paddingBottom + ", not from nothing");
+          + " paddingTop=" + first.paddingTop + " paddingBottom=" + first.paddingBottom
+          + ", not from nothing");
       }
       opening.forEach(function (a) { a.finish(); });
 
@@ -2098,9 +2114,12 @@ pre code { font-size: 1em; }
       const closing = heightAnimations(body);
       if (!closing.length) throw new Error("closing was not animated");
       const last = closing[0].effect.getKeyframes().slice(-1)[0];
-      if (parseFloat(last.height) !== 0 || parseFloat(last.paddingBottom) !== 0) {
+      if (parseFloat(last.height) !== 0
+        || parseFloat(last.paddingTop) !== 0
+        || parseFloat(last.paddingBottom) !== 0) {
         throw new Error("closing ends at height=" + last.height
-          + " paddingBottom=" + last.paddingBottom + ", not at nothing");
+          + " paddingTop=" + last.paddingTop + " paddingBottom=" + last.paddingBottom
+          + ", not at nothing");
       }
 
       /* And the instant path settles everything the animated one leaves in
@@ -2407,9 +2426,16 @@ pre code { font-size: 1em; }
     return !details.open || details.classList.contains("is-closing");
   }
 
-  function bottomPadding(el) {
-    return window.getComputedStyle(el).paddingBottom || "0px";
+  /* The body's vertical padding, which has to travel with its height: with
+     `box-sizing: border-box` a height of 0 still leaves the padding on
+     screen, so a phase would collapse to a bar of blank space and then drop
+     it -- precisely the jump this is all here to remove. */
+  function verticalPadding(el) {
+    const cs = window.getComputedStyle(el);
+    return { top: cs.paddingTop || "0px", bottom: cs.paddingBottom || "0px" };
   }
+
+  const NO_PADDING = { top: "0px", bottom: "0px" };
 
   /* The disclosure animations on an element, and only those. `getAnimations`
      also returns anything CSS has left lying around with a fill, so a bare
@@ -2459,8 +2485,8 @@ pre code { font-size: 1em; }
        the measurement: a shut <details> keeps reporting the size its body
        had when it was last open. */
     const from = details.open
-      ? { h: body.getBoundingClientRect().height, pad: bottomPadding(body) }
-      : { h: 0, pad: "0px" };
+      ? { h: body.getBoundingClientRect().height, pad: verticalPadding(body) }
+      : { h: 0, pad: NO_PADDING };
     if (running) { disclosing.delete(details); running.cancel(); }
 
     if (want) {
@@ -2472,20 +2498,27 @@ pre code { font-size: 1em; }
     /* And where it is going. Measured after the cancel above, so these are
        the element's own resting values, not another animation's. */
     const to = want
-      ? { h: body.getBoundingClientRect().height, pad: bottomPadding(body) }
-      : { h: 0, pad: "0px" };
+      ? { h: body.getBoundingClientRect().height, pad: verticalPadding(body) }
+      : { h: 0, pad: NO_PADDING };
 
     const timing = discloseTiming();
     const anim = body.animate(
-      /* Padding travels with the height. The body carries 2.25rem of bottom
-         padding and `box-sizing: border-box`, so a height of 0 alone still
-         leaves a 36px stub on screen -- the last thing a close did was drop
-         it, which is precisely the jump this is here to remove. Opacity
-         travels with them so the content fades rather than being sliced off
-         by the clip edge. */
+      /* Both paddings travel with the height (see verticalPadding), and
+         opacity travels with them so the content fades rather than being
+         sliced off by the clip edge. */
       [
-        { height: from.h + "px", paddingBottom: from.pad, opacity: want ? 0 : 1 },
-        { height: to.h + "px", paddingBottom: to.pad, opacity: want ? 1 : 0 },
+        {
+          height: from.h + "px",
+          paddingTop: from.pad.top,
+          paddingBottom: from.pad.bottom,
+          opacity: want ? 0 : 1,
+        },
+        {
+          height: to.h + "px",
+          paddingTop: to.pad.top,
+          paddingBottom: to.pad.bottom,
+          opacity: want ? 1 : 0,
+        },
       ],
       {
         duration: timing.duration,

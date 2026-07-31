@@ -1144,7 +1144,11 @@ details.phase > summary:hover { background: var(--accent-wash); }
    rules are not, since the body is what's animating. */
 details.phase[open]:not(.is-closing) > summary {
   align-items: start;
-  padding-bottom: 1.5rem;
+  /* Tighter than the shut row's, and deliberately: the summary's padding is
+     what the hover and :target bands are drawn to, so it should wrap the
+     summary's own content rather than stand in for the gap under it. The
+     body below owns that gap -- see its padding-top. */
+  padding-bottom: 0.75rem;
 }
 
 .phase-numeral {
@@ -1222,6 +1226,15 @@ details.phase > summary:hover .phase-marker { color: var(--accent); }
    rings and anything else that legitimately paints past the edge. */
 details.phase > .phase-body {
   margin-left: calc(var(--numeral-col) + var(--numeral-gap));
+  /* The body opens with a section rule (Dependencies, or the first task's
+     heading), and every other rule on the page carries more space above its
+     label than below it -- that ratio is what makes a label read as heading
+     the thing under it rather than trailing the thing over it. Without this
+     the phase body started flush against the summary, so its first label was
+     the one exception: equidistant from the phase description above and the
+     graph below. A phase is one level down from a top-level section, so the
+     gap is a block's worth rather than a section's. */
+  padding-top: var(--gap-block);
   padding-bottom: 2.25rem;
 }
 

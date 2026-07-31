@@ -196,9 +196,12 @@
       /* It must start from collapsed, or the box would appear at full size
          and merely fade -- which is the jump, with a fade over it. */
       const first = opening[0].effect.getKeyframes()[0];
-      if (parseFloat(first.height) !== 0 || parseFloat(first.paddingBottom) !== 0) {
+      if (parseFloat(first.height) !== 0
+        || parseFloat(first.paddingTop) !== 0
+        || parseFloat(first.paddingBottom) !== 0) {
         throw new Error("opening starts at height=" + first.height
-          + " paddingBottom=" + first.paddingBottom + ", not from nothing");
+          + " paddingTop=" + first.paddingTop + " paddingBottom=" + first.paddingBottom
+          + ", not from nothing");
       }
       opening.forEach(function (a) { a.finish(); });
 
@@ -213,9 +216,12 @@
       const closing = heightAnimations(body);
       if (!closing.length) throw new Error("closing was not animated");
       const last = closing[0].effect.getKeyframes().slice(-1)[0];
-      if (parseFloat(last.height) !== 0 || parseFloat(last.paddingBottom) !== 0) {
+      if (parseFloat(last.height) !== 0
+        || parseFloat(last.paddingTop) !== 0
+        || parseFloat(last.paddingBottom) !== 0) {
         throw new Error("closing ends at height=" + last.height
-          + " paddingBottom=" + last.paddingBottom + ", not at nothing");
+          + " paddingTop=" + last.paddingTop + " paddingBottom=" + last.paddingBottom
+          + ", not at nothing");
       }
 
       /* And the instant path settles everything the animated one leaves in
@@ -522,9 +528,16 @@
     return !details.open || details.classList.contains("is-closing");
   }
 
-  function bottomPadding(el) {
-    return window.getComputedStyle(el).paddingBottom || "0px";
+  /* The body's vertical padding, which has to travel with its height: with
+     `box-sizing: border-box` a height of 0 still leaves the padding on
+     screen, so a phase would collapse to a bar of blank space and then drop
+     it -- precisely the jump this is all here to remove. */
+  function verticalPadding(el) {
+    const cs = window.getComputedStyle(el);
+    return { top: cs.paddingTop || "0px", bottom: cs.paddingBottom || "0px" };
   }
+
+  const NO_PADDING = { top: "0px", bottom: "0px" };
 
   /* The disclosure animations on an element, and only those. `getAnimations`
      also returns anything CSS has left lying around with a fill, so a bare
@@ -574,8 +587,8 @@
        the measurement: a shut <details> keeps reporting the size its body
        had when it was last open. */
     const from = details.open
-      ? { h: body.getBoundingClientRect().height, pad: bottomPadding(body) }
-      : { h: 0, pad: "0px" };
+      ? { h: body.getBoundingClientRect().height, pad: verticalPadding(body) }
+      : { h: 0, pad: NO_PADDING };
     if (running) { disclosing.delete(details); running.cancel(); }
 
     if (want) {
@@ -587,20 +600,27 @@
     /* And where it is going. Measured after the cancel above, so these are
        the element's own resting values, not another animation's. */
     const to = want
-      ? { h: body.getBoundingClientRect().height, pad: bottomPadding(body) }
-      : { h: 0, pad: "0px" };
+      ? { h: body.getBoundingClientRect().height, pad: verticalPadding(body) }
+      : { h: 0, pad: NO_PADDING };
 
     const timing = discloseTiming();
     const anim = body.animate(
-      /* Padding travels with the height. The body carries 2.25rem of bottom
-         padding and `box-sizing: border-box`, so a height of 0 alone still
-         leaves a 36px stub on screen -- the last thing a close did was drop
-         it, which is precisely the jump this is here to remove. Opacity
-         travels with them so the content fades rather than being sliced off
-         by the clip edge. */
+      /* Both paddings travel with the height (see verticalPadding), and
+         opacity travels with them so the content fades rather than being
+         sliced off by the clip edge. */
       [
-        { height: from.h + "px", paddingBottom: from.pad, opacity: want ? 0 : 1 },
-        { height: to.h + "px", paddingBottom: to.pad, opacity: want ? 1 : 0 },
+        {
+          height: from.h + "px",
+          paddingTop: from.pad.top,
+          paddingBottom: from.pad.bottom,
+          opacity: want ? 0 : 1,
+        },
+        {
+          height: to.h + "px",
+          paddingTop: to.pad.top,
+          paddingBottom: to.pad.bottom,
+          opacity: want ? 1 : 0,
+        },
       ],
       {
         duration: timing.duration,
