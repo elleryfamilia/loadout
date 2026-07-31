@@ -2564,32 +2564,6 @@ fn hook_remove_strips_only_loadout_entries() {
 
 // --- ambient-learning session-end serve (T18) --------------------------------
 
-/// `load hook claude --event session-end` marks the just-ended session eligible
-/// (a hint file under the per-machine state dir), prints NOTHING on stdout, and
-/// exits 0. Claude registers a SessionEnd learn hook but has no *freshness*
-/// `hook_registry`, so this path must NOT be rejected the way the freshness
-/// serve path rejects a registry-less agent.
-#[test]
-fn hook_session_end_marks_claude_session_eligible_silently() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    // No cwd in the payload → the write-time scope skip can't judge, so the hint
-    // is kept regardless of the default `Adopted` scope (the worker's own scope
-    // filter is the authority; this hint only wakes it and bypasses quiescence).
-    let payload = r#"{"hook_event_name":"SessionEnd","session_id":"abc-123-def","transcript_path":"/t","reason":"other"}"#;
-    fx.cmd()
-        .args(["hook", "claude", "--event", "session-end"])
-        .write_stdin(payload)
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
-    // Recorded as state_dir/learn/eligible/<agent>-<session_id>.
-    assert!(
-        fx.state_exists("learn/eligible/claude-abc-123-def"),
-        "the claude session hint must be written"
-    );
-}
-
 /// A malformed or empty session-end payload still exits 0, stays silent, and
 /// writes no hint (lenient parse — a session-end serve never errors outward).
 #[test]
@@ -2607,129 +2581,6 @@ fn hook_session_end_tolerates_malformed_and_empty_payload() {
     assert!(
         !fx.state_exists("learn/eligible"),
         "no hint dir is created for an unparseable payload"
-    );
-}
-
-/// The session-end serve path does NO refresh/adopt work — that stays exclusive
-/// to the freshness path (no `--event`). Proven as a pair: a bare `load hook
-/// cursor` re-renders on a config change (freshness, unchanged), but the same
-/// payload via `--event session-end` does not (it only records eligibility).
-#[test]
-fn hook_session_end_does_no_freshness_refresh() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author(
-        "[[fragments]]\nid = \"rc\"\ndescription = \"v1\"\nguidance = \"MARKER-ONE\"\n\
-         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
-    );
-    fx.cmd()
-        .args(["refresh", "--agent", "cursor"])
-        .assert()
-        .success();
-    assert!(fx.read(".cursor/rules/loadout.mdc").contains("MARKER-ONE"));
-
-    let payload = format!(
-        r#"{{ "hook_event_name": "stop", "conversation_id": "conv-1", "workspace_roots": ["{}"] }}"#,
-        fx.repo_path().display()
-    );
-
-    // Freshness path (no --event) DOES pick up a config change.
-    fx.author(
-        "[[fragments]]\nid = \"rc\"\ndescription = \"v2\"\nguidance = \"MARKER-TWO\"\n\
-         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
-    );
-    fx.cmd()
-        .args(["hook", "cursor"])
-        .write_stdin(payload.clone())
-        .assert()
-        .success();
-    assert!(
-        fx.read(".cursor/rules/loadout.mdc").contains("MARKER-TWO"),
-        "freshness path re-rendered"
-    );
-
-    // A further config change, then the SAME payload via --event session-end:
-    // it must NOT re-render (the overlay stays at v2), and it records the cursor
-    // conversation as eligible.
-    fx.author(
-        "[[fragments]]\nid = \"rc\"\ndescription = \"v3\"\nguidance = \"MARKER-THREE\"\n\
-         \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\n",
-    );
-    fx.cmd()
-        .args(["hook", "cursor", "--event", "session-end"])
-        .write_stdin(payload)
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
-    assert!(
-        fx.read(".cursor/rules/loadout.mdc").contains("MARKER-TWO"),
-        "session-end must not re-render (still v2, not v3)"
-    );
-    assert!(
-        fx.state_exists("learn/eligible/cursor-conv-1"),
-        "the cursor conversation must be recorded eligible"
-    );
-}
-
-/// C13 (write-time scope skip): under the default `Adopted` scope, a claude
-/// session whose payload cwd names a repo loadout has NOT adopted gets NO hint
-/// (the worker's scope filter would drop it anyway — the hint would only wake
-/// the worker for nothing). Once the repo is adopted, the hint IS written.
-#[test]
-fn hook_session_end_skips_unadopted_repo_hint_under_adopted_scope() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.rust_profile();
-    fx.git_init();
-    let cwd = fx.repo_path().display().to_string();
-
-    // Not adopted yet (no .loadout/generated, no binding) → skipped.
-    fx.cmd()
-        .args(["hook", "claude", "--event", "session-end"])
-        .write_stdin(format!(r#"{{"session_id":"sess-skip","cwd":{cwd:?}}}"#))
-        .assert()
-        .success();
-    assert!(
-        !fx.state_exists("learn/eligible/claude-sess-skip"),
-        "an unadopted-repo session must not be hinted under Adopted scope"
-    );
-
-    // Adopt the repo (render an overlay) → repo_is_adopted becomes true.
-    fx.cmd()
-        .args(["refresh", "--agent", "claude"])
-        .assert()
-        .success();
-    fx.cmd()
-        .args(["hook", "claude", "--event", "session-end"])
-        .write_stdin(format!(r#"{{"session_id":"sess-keep","cwd":{cwd:?}}}"#))
-        .assert()
-        .success();
-    assert!(
-        fx.state_exists("learn/eligible/claude-sess-keep"),
-        "an adopted-repo session IS hinted"
-    );
-}
-
-/// A cursor stop payload with no `conversation_id` still wakes the worker via a
-/// generic `cursor-tick-<n>` hint (the worker treats any hint as "a session
-/// ended somewhere"; we ship no cursor transcript reader in this release).
-#[test]
-fn hook_session_end_cursor_without_conversation_id_writes_generic_hint() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.cmd()
-        .args(["hook", "cursor", "--event", "session-end"])
-        .write_stdin(r#"{"hook_event_name":"stop","status":"completed"}"#)
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
-    let dir = fx.global.path().join("state/learn/eligible");
-    let entries: Vec<_> = fs::read_dir(&dir).unwrap().flatten().collect();
-    assert_eq!(entries.len(), 1, "exactly one generic hint");
-    let name = entries[0].file_name().into_string().unwrap();
-    assert!(
-        name.starts_with("cursor-tick-"),
-        "generic wake hint name: got {name}"
     );
 }
 
@@ -3772,19 +3623,6 @@ fn seed_pending_candidate(fx: &Fixture, claim: &str) {
     .unwrap();
 }
 
-/// Extract the `context=sha256:…` value from a generated overlay's first
-/// (marker) line.
-fn header_context_hash(content: &str) -> &str {
-    content
-        .lines()
-        .next()
-        .expect("generated overlay must have a header line")
-        .split("context=")
-        .nth(1)
-        .expect("marker line must carry context=")
-        .trim_end_matches(" -->")
-}
-
 #[test]
 fn run_dry_run_shows_learn_discovery_line_when_pending_candidates_exist() {
     let fx = Fixture::new();
@@ -3831,120 +3669,6 @@ fn run_dry_run_omits_learn_discovery_line_when_learn_disabled() {
 }
 
 #[test]
-fn refresh_header_shows_pending_learn_line_without_changing_context_sha() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.git_init();
-    fx.author(
-        "[learn]\nenabled = true\n\
-         \n\
-         [[fragments]]\n\
-         id = \"rust-conventions\"\n\
-         description = \"Rust conventions\"\n\
-         guidance = \"Rust project. Build with cargo, lint with clippy.\"\n\
-         \n\
-         [[loadouts]]\n\
-         name = \"rust\"\n\
-         targets = [\"rust\"]\n\
-         fragments = [\"rust-conventions\"]\n",
-    );
-
-    fx.cmd()
-        .args(["refresh", "--agent", "claude"])
-        .assert()
-        .success();
-    let before = fx.read(".loadout/generated/claude.md");
-    assert!(
-        !before.contains("staged suggestions"),
-        "no pending candidates yet"
-    );
-    let sha_before = header_context_hash(&before).to_string();
-
-    seed_pending_candidate(&fx, "Always use pnpm, never npm.");
-
-    // `--force`: context/composition/workflow are unchanged, so without it
-    // the write would hash-skip and the on-disk file would stay exactly as
-    // it was — this forces a real rewrite so the new header can be inspected.
-    fx.cmd()
-        .args(["refresh", "--agent", "claude", "--force"])
-        .assert()
-        .success();
-    let after = fx.read(".loadout/generated/claude.md");
-    assert!(after.contains("loadout: 1 staged suggestions await review — load studio"));
-    let sha_after = header_context_hash(&after).to_string();
-
-    assert_eq!(
-        sha_before, sha_after,
-        "the context sha must be identical — the pending count alone must never move it"
-    );
-}
-
-#[test]
-fn refresh_prints_ambient_harvest_summary_exactly_once() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\n");
-
-    // Seed a run-log entry for a completed AMBIENT extraction.
-    let learn_dir = fx.global.path().join("state").join("learn");
-    fs::create_dir_all(&learn_dir).unwrap();
-    let entry = r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","model":"haiku","sessions":3,"dropped_over_cap":0,"candidates":2,"quarantined":0,"duration_ms":100,"outcome":"extracted","usage":null,"skipped":[]}"#;
-    fs::write(learn_dir.join("log.jsonl"), format!("{entry}\n")).unwrap();
-
-    fx.cmd()
-        .arg("refresh")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "learning: harvested 3 sessions via claude (haiku) — 2 new candidates",
-        ));
-
-    // A second refresh must NOT reprint the same ambient run.
-    fx.cmd()
-        .arg("refresh")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("learning: harvested").not());
-}
-
-#[test]
-fn refresh_dry_run_neither_prints_nor_consumes_the_ambient_summary() {
-    // The summary bumps the `last-notified` stamp when it prints, so a dry
-    // run reaching it would both leave a state file behind and steal the real
-    // refresh's one-time notification. Dry-run must do neither: no summary
-    // line, no stamp file — and the following REAL refresh still prints the
-    // summary exactly once.
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\n");
-
-    let learn_dir = fx.global.path().join("state").join("learn");
-    fs::create_dir_all(&learn_dir).unwrap();
-    let entry = r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","model":"haiku","sessions":3,"dropped_over_cap":0,"candidates":2,"quarantined":0,"duration_ms":100,"outcome":"extracted","usage":null,"skipped":[]}"#;
-    fs::write(learn_dir.join("log.jsonl"), format!("{entry}\n")).unwrap();
-
-    fx.cmd()
-        .args(["--dry-run", "refresh"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("learning: harvested").not());
-    assert!(
-        !learn_dir.join("last-notified").exists(),
-        "a dry run must not write the last-notified stamp"
-    );
-
-    // The real refresh still gets its one-time summary.
-    fx.cmd()
-        .arg("refresh")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "learning: harvested 3 sessions via claude (haiku) — 2 new candidates",
-        ));
-    assert!(learn_dir.join("last-notified").exists());
-}
-
-#[test]
 fn refresh_omits_ambient_summary_for_manual_runs_and_non_extracted_outcomes() {
     let fx = Fixture::new();
     fx.rust_project();
@@ -3985,45 +3709,6 @@ fn run_dry_run_is_side_effect_free_and_never_blocks() {
         .success();
 }
 
-#[cfg(unix)]
-#[test]
-fn run_real_exec_fires_the_learn_trigger_check_before_launch() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\n");
-    let bin = fx.global.path().join("stub-bin");
-    fs::create_dir_all(&bin).unwrap();
-    let stub = bin.join("codex");
-    fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-
-    fx.cmd()
-        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-        .args(["--verbose", "run", "codex"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains(
-            "trigger (Run) skipped: NoActivation",
-        ));
-}
-
-#[test]
-fn refresh_fires_the_learn_trigger_check() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\n");
-
-    fx.cmd()
-        .args(["--verbose", "refresh"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains(
-            "trigger (Refresh) skipped: NoActivation",
-        ));
-}
-
 #[test]
 fn hook_serve_fires_the_learn_trigger_check_and_stays_stdout_silent() {
     let fx = Fixture::new();
@@ -4042,30 +3727,6 @@ fn hook_serve_fires_the_learn_trigger_check_and_stays_stdout_silent() {
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains(
             "trigger (HookServe) skipped: NoActivation",
-        ));
-}
-
-#[test]
-fn studio_serve_fires_the_learn_trigger_check_then_idles_out() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\n");
-
-    fx.cmd()
-        .args([
-            "--verbose",
-            "studio",
-            "--port",
-            "0",
-            "--no-open",
-            "--idle-timeout",
-            "1s",
-        ])
-        .timeout(std::time::Duration::from_secs(20))
-        .assert()
-        .success()
-        .stderr(predicate::str::contains(
-            "trigger (Studio) skipped: NoActivation",
         ));
 }
 
@@ -4446,26 +4107,6 @@ impl Fixture {
     }
 }
 
-/// `load refresh` prints the exact verbatim pause line to stderr when learning
-/// is both enabled (synced) and activated on this machine, and two seeded
-/// consecutive failures have paused ambient triggering.
-#[test]
-fn refresh_warns_on_stderr_when_learning_is_paused() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\n");
-    fx.activate_learning();
-    fx.write_state("learn/failures.json", "{\"consecutive\":2}\n");
-
-    fx.cmd()
-        .arg("refresh")
-        .assert()
-        .success()
-        .stderr(predicate::str::contains(
-            "learning paused after repeated failures — see load learn status",
-        ));
-}
-
 /// No seeded failures → the pause warning must be absent (a healthy, active
 /// machine stays quiet on this specific line).
 #[test]
@@ -4517,36 +4158,6 @@ fn doctor_prints_a_learning_section() {
         .stdout(predicate::str::contains("load learn on"));
 }
 
-#[test]
-fn doctor_warns_with_safe_unresolved_failure_while_learning_is_active() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\n");
-    fx.activate_learning();
-    fx.write_state("learn/failures.json", "{\"consecutive\":1}\n");
-    fx.write_state(
-        "learn/log.jsonl",
-        concat!(
-            r#"{"ts":"2026-07-10T10:00:00Z","trigger":"ambient","cli":"claude","sessions":1,"candidates":0,"outcome":"failed","error_stage":"validate_output","error_code":"output_schema_mismatch","error":"The extraction CLI returned JSON that does not match the required schema."}"#,
-            "\n",
-            r#"{"ts":"2026-07-10T10:05:00Z","trigger":"manual","sessions":0,"candidates":0,"outcome":"empty"}"#,
-            "\n"
-        ),
-    );
-
-    fx.cmd()
-        .arg("doctor")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("unresolved harvest failure"))
-        .stdout(predicate::str::contains(
-            "validate_output/output_schema_mismatch",
-        ))
-        .stdout(predicate::str::contains(
-            "does not match the required schema",
-        ));
-}
-
 /// Breaker history is not an active health problem when learning is disabled.
 #[test]
 fn doctor_treats_old_failure_and_pause_as_historical_when_disabled() {
@@ -4571,56 +4182,6 @@ fn doctor_treats_old_failure_and_pause_as_historical_when_disabled() {
         .stdout(predicate::str::contains("output_json_invalid").not());
 }
 
-/// Unsupported selection is a current health warning even before a worker has
-/// found an eligible session or written a log entry.
-#[cfg(unix)]
-#[test]
-fn doctor_warns_for_current_unsupported_pinned_claude_while_active() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\ncli = \"claude\"\n");
-    fx.activate_learning();
-    let bin = claude_stub(&fx, "#!/bin/sh\necho 'claude 2.1.210'\n");
-
-    fx.cmd()
-        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
-        .arg("doctor")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "preflight/claude_structured_output_unsupported",
-        ))
-        .stdout(predicate::str::contains("Upgrade to 2.1.211 or newer"));
-}
-
-/// `load doctor` flags a learning hook left registered after learning went
-/// inactive on this machine (Decision #4's orphan case), across BOTH hook-file
-/// dialects, and names the clearing action.
-#[test]
-fn doctor_flags_orphaned_learn_hooks_both_dialects() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    // Cursor: flat `hooks.json` dialect.
-    fx.mkdir_home(".cursor");
-    fs::write(
-        fx.home().join(".cursor/hooks.json"),
-        r#"{"version":1,"hooks":{"stop":[{"command":"\"/usr/local/bin/load\" hook cursor --event session-end"}]}}"#,
-    )
-    .unwrap();
-    // Claude: nested `.claude/settings.json` matcher schema.
-    fx.mkdir_home(".claude");
-    fs::write(
-        fx.home().join(".claude/settings.json"),
-        r#"{"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"\"/usr/local/bin/load\" hook claude --event session-end","timeout":10}]}]}}"#,
-    )
-    .unwrap();
-
-    fx.cmd().arg("doctor").assert().success().stdout(
-        predicate::str::contains("still registered")
-            .and(predicate::str::contains("load learn off")),
-    );
-}
-
 /// `load doctor` never spawns the harvest worker: even with learning enabled
 /// and due, the state dir gains no eligible-hint/log/stamp files from a
 /// `load doctor` run.
@@ -4640,4 +4201,282 @@ fn doctor_never_spawns_the_harvest_worker() {
     assert!(!fx.state_exists("learn/scan-stamp"));
     assert!(!fx.state_exists("learn/spend-stamp"));
     assert!(!fx.state_exists("learn/eligible"));
+}
+
+// --- retiring ambient learning (removed in 0.19.0) ---------------------------
+//
+// The feature is gone, but it left control state behind on every machine that
+// ran it: a synced `[learn] enabled` flag, a per-machine activation ack, and
+// session-end hook entries in two agents' user-owned hooks files. These cover
+// the one-time cleanup that clears all three — see `src/legacy.rs`.
+
+impl Fixture {
+    /// Write a file into the isolated `$HOME` (e.g. `.cursor/hooks.json`).
+    fn write_home(&self, rel: &str, content: &str) {
+        let p = self.home().join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, content).unwrap();
+    }
+
+    /// A machine mid-upgrade from 0.18: learning enabled and synced, this
+    /// machine activated, both agents' session-end hooks registered, and
+    /// harvested data on disk. Cursor also carries its *freshness* hook, which
+    /// must survive, and a foreign hook whose command deliberately ends in the
+    /// same words as ours.
+    fn learning_was_on(&self) {
+        self.author("[learn]\nenabled = true\n");
+        self.write_state(
+            "learn/activation.json",
+            r#"{"machine_id":"abc","hostname":"h"}"#,
+        );
+        self.write_inbox("journal-abc.jsonl", "{}\n");
+        self.write_home(
+            ".cursor/hooks.json",
+            r#"{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [ { "command": "/usr/local/bin/load hook cursor" } ],
+    "stop": [
+      { "command": "/usr/local/bin/load hook cursor --event session-end" },
+      { "command": "/opt/other/tool run" }
+    ],
+    "afterEdit": [ { "command": "/opt/vendor/wrap hook cursor --event session-end" } ]
+  }
+}"#,
+        );
+        self.write_home(
+            ".claude/settings.json",
+            r#"{
+  "model": "opus",
+  "hooks": {
+    "SessionEnd": [ { "hooks": [
+      { "type": "command", "command": "/usr/local/bin/load hook claude --event session-end" }
+    ] } ]
+  }
+}"#,
+        );
+    }
+}
+
+#[test]
+fn retiring_learning_clears_both_control_gates_and_the_hooks() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.learning_was_on();
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "ambient learning was removed in 0.19.0",
+        ));
+
+    // Gate 1: the synced intent flag. This is what stops a second machine still
+    // running 0.18 from carrying on harvesting.
+    let cfg = fx.read_global("config.toml");
+    assert!(
+        cfg.contains("enabled = false"),
+        "[learn] enabled must be flipped off in the synced config: {cfg}"
+    );
+
+    // Gate 2: this machine's activation ack. Without this, downgrading to 0.18
+    // would switch learning straight back on.
+    assert!(
+        !fx.state_exists("learn/activation.json"),
+        "the activation ack must be gone"
+    );
+
+    // The hooks that would otherwise fire a retired command every session.
+    let cursor: serde_json::Value =
+        serde_json::from_str(&fx.read_home(".cursor/hooks.json")).unwrap();
+    let stop = cursor["hooks"]["stop"].as_array().unwrap();
+    assert_eq!(stop.len(), 1, "our stop entry should be gone: {cursor}");
+    assert_eq!(stop[0]["command"], "/opt/other/tool run");
+
+    let claude: serde_json::Value =
+        serde_json::from_str(&fx.read_home(".claude/settings.json")).unwrap();
+    assert!(
+        claude["hooks"].get("SessionEnd").is_none(),
+        "the container our removal emptied should go: {claude}"
+    );
+    assert_eq!(claude["model"], "opus", "foreign keys must survive");
+}
+
+#[test]
+fn retiring_learning_leaves_the_freshness_hook_and_foreign_entries_alone() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.learning_was_on();
+
+    fx.cmd().arg("refresh").assert().success();
+
+    let cursor: serde_json::Value =
+        serde_json::from_str(&fx.read_home(".cursor/hooks.json")).unwrap();
+    // Still registered. The exact path is whatever this binary is — the same
+    // `refresh` that ran the cleanup also repoints the freshness hook at the
+    // running binary, which is its normal job. What matters is that the entry
+    // survived and still carries the freshness suffix, not the learning one.
+    let freshness = cursor["hooks"]["sessionStart"][0]["command"]
+        .as_str()
+        .expect("Cursor's freshness hook shares this file and must survive");
+    assert!(
+        freshness.ends_with(" hook cursor"),
+        "the freshness entry must keep its own suffix, not the retired one: {freshness}"
+    );
+    assert_eq!(
+        cursor["hooks"]["afterEdit"][0]["command"],
+        "/opt/vendor/wrap hook cursor --event session-end",
+        "a foreign entry with the same command suffix on a different event must survive"
+    );
+}
+
+#[test]
+fn retiring_learning_never_deletes_harvested_data() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.learning_was_on();
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("safe to delete"));
+
+    // The inbox lives inside the user's synced config git repo. Pointing at it
+    // is our job; deleting it is not.
+    assert!(
+        fx.global
+            .path()
+            .join("empty")
+            .join("inbox")
+            .join("journal-abc.jsonl")
+            .exists(),
+        "harvested candidates must be left in place"
+    );
+}
+
+#[test]
+fn retiring_learning_happens_once_and_then_stays_quiet() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.learning_was_on();
+
+    fx.cmd().arg("refresh").assert().success();
+    assert!(
+        fx.state_exists("learning-retired"),
+        "a marker must record the pass"
+    );
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ambient learning was removed").not());
+}
+
+#[test]
+fn retiring_learning_says_nothing_on_a_machine_that_never_ran_it() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ambient learning").not());
+    assert!(
+        !fx.state_exists("learning-retired"),
+        "no marker on a machine with nothing to clean — it never had the feature"
+    );
+}
+
+#[test]
+fn retiring_learning_under_dry_run_changes_nothing_and_leaves_no_marker() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.learning_was_on();
+
+    fx.cmd()
+        .args(["--dry-run", "refresh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dry run: would turn off"));
+
+    assert!(
+        fx.read_global("config.toml").contains("enabled = true"),
+        "--dry-run must not write the config"
+    );
+    assert!(
+        fx.state_exists("learn/activation.json"),
+        "--dry-run must not delete the ack"
+    );
+    assert!(
+        !fx.state_exists("learning-retired"),
+        "no marker under --dry-run: the real cleanup still has to happen"
+    );
+}
+
+#[test]
+fn a_stale_learn_config_table_loads_without_an_unrecognized_key_warning() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    // A config synced from a machine that still writes the full table.
+    fx.author("[learn]\nenabled = false\ninterval = \"6h\"\nscope = \"adopted\"\n");
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("unrecognized config key").not());
+}
+
+// --- the retired session-end hook endpoint -----------------------------------
+
+#[test]
+fn session_end_hook_exits_zero_and_does_nothing() {
+    let fx = Fixture::new();
+    fx.rust_project();
+
+    fx.cmd()
+        .args(["hook", "claude", "--event", "session-end"])
+        .write_stdin(r#"{"session_id":"abc-123","cwd":"/tmp"}"#)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    assert!(
+        !fx.state_exists("learn"),
+        "the retired path must not create learning state"
+    );
+}
+
+#[test]
+fn session_end_hook_survives_a_config_it_cannot_parse() {
+    // The whole reason the shim sits above config loading: a stale hook entry
+    // on a machine whose config is broken must still not fail the session.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("this is not valid toml {{{");
+
+    fx.cmd()
+        .args(["hook", "claude", "--event", "session-end"])
+        .write_stdin("{}")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn session_end_hook_survives_an_agent_this_binary_does_not_know() {
+    let fx = Fixture::new();
+    fx.rust_project();
+
+    fx.cmd()
+        .args(["hook", "some-retired-agent", "--event", "session-end"])
+        .write_stdin("{}")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
 }

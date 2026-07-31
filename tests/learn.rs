@@ -791,41 +791,6 @@ fn scenario5_recursion_guard_no_second_worker() {
     );
 }
 
-/// The deferred hint-skip assertion, isolated: `load hook claude --event
-/// session-end` writes NO `eligible/` hint when `LOADOUT_LEARN_WORKER` is set,
-/// but DOES write one when it is unset — proving the skip is the env guard.
-#[test]
-fn session_end_hook_skips_hint_write_under_worker_env() {
-    let e = Env::new();
-    // Learning disabled here: `maybe_spawn` denies (Disabled) so neither run
-    // spawns a worker — the hint write is the only observable side effect, which
-    // makes both directions deterministic.
-    e.write_config("[learn]\n");
-
-    // With the worker env set: NO hint written.
-    e.cmd()
-        .args(["hook", "claude", "--event", "session-end"])
-        .env("LOADOUT_LEARN_WORKER", "1")
-        .write_stdin(r#"{"session_id":"skip-me"}"#)
-        .assert()
-        .success();
-    assert!(
-        !e.eligible_dir().join("claude-skip-me").exists(),
-        "no hint may be written while inside a worker (LOADOUT_LEARN_WORKER set)"
-    );
-
-    // Without it: the hint IS written (the control).
-    e.cmd()
-        .args(["hook", "claude", "--event", "session-end"])
-        .write_stdin(r#"{"session_id":"keep-me"}"#)
-        .assert()
-        .success();
-    assert!(
-        e.eligible_dir().join("claude-keep-me").exists(),
-        "a normal session-end hook records the just-ended session as eligible"
-    );
-}
-
 // --- Scenario 6: stale-lock reclaim -----------------------------------------
 
 /// A pre-seeded stale lock is reclaimed (not treated as Busy): the run proceeds

@@ -38,7 +38,7 @@ use crate::workflow::Workflow;
 use crate::writer::{self, WriteAction, Writer, WrittenFile};
 
 pub mod commands;
-mod hooks_claude;
+pub(crate) mod hooks_claude;
 
 // The one sentence both surfaces (hook registration notes and doctor's
 // Learning section) print for Claude's `disableAllHooks: true` state — a
@@ -1303,10 +1303,13 @@ fn remove_learn_hooks_at(config: &Config, home: &Path, dry_run: bool) -> Vec<Str
                 continue; // absent/unreadable → nothing to remove (never clobber)
             };
             // Route on dialect: Cursor's flat array vs Claude Code's nested schema.
+            // Scoped to the descriptor's own event (Cursor `stop`, Claude
+            // `SessionEnd`) so a foreign entry on another event can't match on
+            // the command suffix alone.
             let removed = match hr.format {
-                HookFormat::Flat => remove_hook_command(&existing, &hr.subcommand),
+                HookFormat::Flat => remove_hook_command(&existing, &hr.subcommand, Some(&hr.event)),
                 HookFormat::ClaudeNested => {
-                    hooks_claude::remove_claude_hook(&existing, &hr.subcommand)
+                    hooks_claude::remove_claude_hook(&existing, &hr.subcommand, Some(&hr.event))
                 }
             };
             match removed {
@@ -1513,18 +1516,35 @@ fn upsert_hook_command(
     Ok(Some(format!("{}\n", serde_json::to_string_pretty(&root)?)))
 }
 
-/// Strip loadout's entries (matched by the ` <subcommand>` suffix) from every
-/// event array in the hooks file, leaving everything else untouched. Returns
+/// Strip loadout's entries (matched by the ` <subcommand>` suffix) from the
+/// hooks file, leaving everything else untouched. `only_event` restricts the
+/// scan to one lifecycle event (`Some("stop")`); `None` scans every event
+/// array. Pass `Some` whenever the caller knows which event it registered
+/// under, so ownership never rests on the command suffix alone. Returns
 /// the new JSON, or `None` when no loadout entry was present.
-pub fn remove_hook_command(existing: &str, subcommand: &str) -> crate::Result<Option<String>> {
+pub fn remove_hook_command(
+    existing: &str,
+    subcommand: &str,
+    only_event: Option<&str>,
+) -> crate::Result<Option<String>> {
     use anyhow::Context as _;
     use serde_json::Value;
 
     let mut root: Value = serde_json::from_str(existing).context("parsing existing hooks JSON")?;
     let suffix = format!(" {subcommand}");
     let mut removed = false;
+    // Event arrays OUR removal emptied. Same rule as `remove_claude_hook`: a
+    // container we emptied is ours to clean up, but one that was already empty
+    // is the user's and stays.
+    let mut emptied: Vec<String> = Vec::new();
     if let Some(hooks) = root.get_mut("hooks").and_then(|h| h.as_object_mut()) {
-        for (_event, arr) in hooks.iter_mut() {
+        for (event, arr) in hooks.iter_mut() {
+            // See `remove_claude_hook`: `only_event` narrows removal to the one
+            // lifecycle event the entry was registered under, so ownership does
+            // not rest on the command suffix alone.
+            if only_event.is_some_and(|want| want != event) {
+                continue;
+            }
             if let Value::Array(entries) = arr {
                 let before = entries.len();
                 entries.retain(|v| {
@@ -1533,12 +1553,22 @@ pub fn remove_hook_command(existing: &str, subcommand: &str) -> crate::Result<Op
                         .map(|c| c.ends_with(&suffix))
                         .unwrap_or(false)
                 });
-                removed |= entries.len() != before;
+                if entries.len() != before {
+                    removed = true;
+                    if entries.is_empty() {
+                        emptied.push(event.clone());
+                    }
+                }
             }
         }
     }
     if !removed {
         return Ok(None);
+    }
+    if let Some(hooks) = root.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+        for event in &emptied {
+            hooks.remove(event);
+        }
     }
     Ok(Some(format!("{}\n", serde_json::to_string_pretty(&root)?)))
 }
@@ -1719,7 +1749,7 @@ mod hook_registry_tests {
         let mut with_ours: serde_json::Value = serde_json::from_str(&third_party()).unwrap();
         with_ours["hooks"]["sessionStart"] =
             serde_json::json!([{ "command": CMD }, { "command": "\"/opt/other\" thing" }]);
-        let out = remove_hook_command(&with_ours.to_string(), "hook cursor")
+        let out = remove_hook_command(&with_ours.to_string(), "hook cursor", None)
             .unwrap()
             .expect("should change");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -1733,13 +1763,15 @@ mod hook_registry_tests {
             1
         );
         // Removing again: nothing left to do.
-        assert!(remove_hook_command(&out, "hook cursor").unwrap().is_none());
+        assert!(remove_hook_command(&out, "hook cursor", None)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn garbage_json_errors_rather_than_clobbering() {
         assert!(upsert_hook_command(Some("not json"), "sessionStart", "hook cursor", CMD).is_err());
-        assert!(remove_hook_command("not json", "hook cursor").is_err());
+        assert!(remove_hook_command("not json", "hook cursor", None).is_err());
     }
 
     // --- purpose ids: freshness vs learn suffixes never cross-match ---------
@@ -1790,7 +1822,7 @@ mod hook_registry_tests {
             ] }
         })
         .to_string();
-        let out = remove_hook_command(&existing, "hook cursor --event session-end")
+        let out = remove_hook_command(&existing, "hook cursor --event session-end", None)
             .unwrap()
             .expect("the learn entry is present → a change");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -1806,9 +1838,11 @@ mod hook_registry_tests {
         );
         // Reverse: with the learn entry gone, removing it again is a no-op — the
         // freshness `hook cursor` suffix is NOT mistaken for the learn suffix.
-        assert!(remove_hook_command(&out, "hook cursor --event session-end")
-            .unwrap()
-            .is_none());
+        assert!(
+            remove_hook_command(&out, "hook cursor --event session-end", None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     // --- bootstrap gating: learn hooks register only while active -----------

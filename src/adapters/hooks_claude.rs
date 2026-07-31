@@ -141,7 +141,15 @@ pub fn upsert_claude_hook(
 /// no entry of ours was present. Deliberately ignores `disableAllHooks`:
 /// deregistration always cleans up our entry, even while hooks are globally
 /// disabled — leaving a dead entry behind would be worse.
-pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Option<String>> {
+///
+/// `only_event` restricts the scan to a single lifecycle event (`Some("SessionEnd")`);
+/// `None` scans them all. Pass `Some` whenever the caller knows which event it
+/// registered under, so ownership never rests on the command suffix alone.
+pub fn remove_claude_hook(
+    existing: &str,
+    subcommand: &str,
+    only_event: Option<&str>,
+) -> anyhow::Result<Option<String>> {
     let mut root: Value =
         serde_json::from_str(existing).context("parsing existing .claude/settings.json")?;
     let suffix = format!(" {subcommand}");
@@ -156,6 +164,13 @@ pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Op
     let mut removed = false;
     let mut empty_events: Vec<String> = Vec::new();
     for (event, groups_val) in hooks.iter_mut() {
+        // `only_event` narrows removal to the one lifecycle event the entry was
+        // registered under (e.g. `SessionEnd`). Without it, ownership rests on
+        // the command suffix alone, so a foreign hook on an unrelated event
+        // whose command happens to end in the same words would be removed.
+        if only_event.is_some_and(|want| want != event) {
+            continue;
+        }
         let Some(groups) = groups_val.as_array_mut() else {
             continue;
         };
@@ -345,7 +360,7 @@ mod tests {
             }
         })
         .to_string();
-        let out = remove_claude_hook(&existing, SUB)
+        let out = remove_claude_hook(&existing, SUB, None)
             .unwrap()
             .expect("ours present → a change");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -359,7 +374,7 @@ mod tests {
         );
         assert_eq!(v["model"], "keep-me", "foreign key preserved");
         // Idempotent: nothing of ours left.
-        assert!(remove_claude_hook(&out, SUB).unwrap().is_none());
+        assert!(remove_claude_hook(&out, SUB, None).unwrap().is_none());
     }
 
     // (5b) When ours is the only content, removal cascades group → event → the
@@ -375,7 +390,7 @@ mod tests {
             }
         })
         .to_string();
-        let out = remove_claude_hook(&existing, SUB)
+        let out = remove_claude_hook(&existing, SUB, None)
             .unwrap()
             .expect("ours present → a change");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -409,7 +424,7 @@ mod tests {
     #[test]
     fn garbage_json_errors_rather_than_clobbering() {
         assert!(upsert_claude_hook("not json", "SessionEnd", SUB, CMD).is_err());
-        assert!(remove_claude_hook("not json", SUB).is_err());
+        assert!(remove_claude_hook("not json", SUB, None).is_err());
     }
 
     // (fix 1a) Reviewer's reproduction: a FOREIGN pre-existing empty event array
@@ -426,7 +441,7 @@ mod tests {
             }
         })
         .to_string();
-        let out = remove_claude_hook(&existing, SUB)
+        let out = remove_claude_hook(&existing, SUB, None)
             .unwrap()
             .expect("ours present → a change");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -456,7 +471,7 @@ mod tests {
             }
         })
         .to_string();
-        let out = remove_claude_hook(&existing, SUB)
+        let out = remove_claude_hook(&existing, SUB, None)
             .unwrap()
             .expect("ours present → a change");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -464,7 +479,7 @@ mod tests {
         assert_eq!(v["hooks"]["PostToolUse"], json!([]), "foreign kept: {v}");
         assert_eq!(v["model"], "keep-me");
         // Idempotent: nothing of ours left, foreign shape untouched.
-        assert!(remove_claude_hook(&out, SUB).unwrap().is_none());
+        assert!(remove_claude_hook(&out, SUB, None).unwrap().is_none());
     }
 
     // (fix 2) Structural type confusion: never destroy what we don't understand.
@@ -497,12 +512,12 @@ mod tests {
         assert_eq!(se.len(), 2);
         assert_eq!(se[0]["hooks"][0], weird, "weird entry preserved untouched");
         // Remove from the ORIGINAL (ours not present): nothing of ours → None.
-        assert!(remove_claude_hook(&existing, SUB).unwrap().is_none());
+        assert!(remove_claude_hook(&existing, SUB, None).unwrap().is_none());
     }
 
     #[test]
     fn non_object_root_errors_on_upsert_and_noops_on_remove() {
         assert!(upsert_claude_hook("[1, 2]", "SessionEnd", SUB, CMD).is_err());
-        assert!(remove_claude_hook("[1, 2]", SUB).unwrap().is_none());
+        assert!(remove_claude_hook("[1, 2]", SUB, None).unwrap().is_none());
     }
 }

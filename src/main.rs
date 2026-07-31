@@ -22,6 +22,17 @@ fn main() -> ExitCode {
     };
     let rt = Runtime::new(cwd, cli.global.dry_run);
 
+    // One-time cleanup after ambient learning, removed in 0.19.0. Sits here
+    // rather than in `run`/`refresh` so it reaches people who mostly use
+    // `studio` or `sync` too — it is a cheap `stat` of a marker file on every
+    // later invocation. Never for `hook`: that is machine-invoked, and the
+    // agent parses its stdout as the hook response.
+    if !matches!(cli.command, Command::Hook(_)) {
+        for line in loadout::legacy::retire_learning(rt.dry_run) {
+            println!("{line}");
+        }
+    }
+
     let result = match &cli.command {
         Command::Detect(args) => commands::detect::run(&rt, args),
         Command::Run(args) => commands::run::run(&rt, args),
