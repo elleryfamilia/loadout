@@ -75,11 +75,14 @@ defends on several layers:
   Guidance text can come from a cloned repo's fragments, so that was a
   latent XSS. It's closed now, in both surfaces.
 - **`icon` is a closed vocabulary, not free text.** A phase's or task's
-  `icon` field must name one of 16 vendored Lucide icons (`unknown_icon`
-  rejects anything else); the renderer inlines the matching SVG directly,
-  which is only safe *because* the value can never be attacker-controlled
-  markup — it's a lookup key into loadout's own vendored assets, not
-  `plan.json`-supplied SVG content.
+  `icon` field must be one of 16 fixed names (`unknown_icon` rejects anything
+  else), never `plan.json`-supplied SVG content. The renderer used to look
+  each name up in a vendored Lucide set and inline the matching SVG, which
+  was only safe *because* the vocabulary was closed. The redesigned viewer
+  draws no icons at all, so the vendored SVGs are gone and the value now
+  reaches nothing but the validator. The vocabulary check stays regardless:
+  it is what keeps the field from becoming an injection point if drawing
+  ever returns.
 - **The embedded JSON data island is escaped, not just serialized.** The
   rendered page includes a `<script type="application/json">` copy of the
   plan for the client-side comment tooling. Before embedding, `<`, `>`, `&`,
@@ -104,9 +107,12 @@ defends on several layers:
   stylesheets, no fonts — which is also why the renderer never uses a CDN:
   the page is self-contained by construction, and the CSP would block a CDN
   reference even if one were added by mistake. `font-src data:` allows the
-  embedded Inter font — base64-encoded directly into `plan.css`'s
-  `@font-face` rules, not fetched — and nothing else; a `url(https://…)`
-  reference would still be blocked.
+  embedded typefaces — Newsreader and JetBrains Mono, base64-encoded
+  directly into `plan.css`'s `@font-face` rules by
+  `tools/build-plan-fonts.py`, not fetched — and nothing else; a
+  `url(https://…)` reference would still be blocked. A test asserts every
+  `url()` in the stylesheet is a `data:` URI, so the contract cannot lapse
+  quietly.
 - **Input limits bound the blast radius of a runaway or hostile plan.json**
   before any rendering happens: 2 MiB input size; 500 tasks; 50 phases; 100
   risks; 100 open questions; 2000 dependency edges; 10,000 characters per

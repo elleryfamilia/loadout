@@ -8,7 +8,6 @@
 
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
-use crate::plan::icons;
 use crate::plan::model::{
     plan_hash, Estimate, FileAction, OpenQuestion, Phase, Plan, PlanTask, RiskLevel, Status,
 };
@@ -18,13 +17,6 @@ const CSS: &str = include_str!("assets/plan.css");
 const JS: &str = include_str!("assets/plan.js");
 const CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; \
                     img-src data:; font-src data:";
-
-/// The loadout brand mark for the viewer's brand strip — the same glyph as
-/// studio's topbar `brand_mark` (src/studio/views.rs), duplicated because this
-/// page must stay fully self-contained. Inline SVG: nothing fetched,
-/// `currentColor` follows the theme. Static compile-time markup — the page's
-/// never-PreEscape-dynamic-values rule is not in play.
-const VIEWER_MARK: &str = r##"<svg class="viewer-brand-mark" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.04 7.43a4 4 0 0 1 7.92 0 .5.5 0 1 1-.99.14 3 3 0 0 0-5.94 0 .5.5 0 1 1-.99-.14"/><path fill-rule="evenodd" d="M4 9.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5zm1 .5v3h6v-3h-1v.5a.5.5 0 0 1-1 0V10z"/><path d="M6 2.341V2a2 2 0 1 1 4 0v.341c2.33.824 4 3.047 4 5.659v1.191l1.17.585a1.5 1.5 0 0 1 .83 1.342V13.5a1.5 1.5 0 0 1-1.5 1.5h-1c-.456.607-1.182 1-2 1h-7a2.5 2.5 0 0 1-2-1h-1A1.5 1.5 0 0 1 0 13.5v-2.382a1.5 1.5 0 0 1 .83-1.342L2 9.191V8a6 6 0 0 1 4-5.659M7 2v.083a6 6 0 0 1 2 0V2a1 1 0 0 0-2 0M3 13.5A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5V8A5 5 0 0 0 3 8zm-1-3.19-.724.362a.5.5 0 0 0-.276.447V13.5a.5.5 0 0 0 .5.5H2zm12 0V14h.5a.5.5 0 0 0 .5-.5v-2.382a.5.5 0 0 0-.276-.447L14 10.309Z"/></svg>"##;
 
 /// Escape the canonical JSON for a `<script type="application/json">` island:
 /// `<`, `>`, `&`, U+2028, U+2029 become JSON unicode escapes, so the island
@@ -175,20 +167,10 @@ fn risk_str(risk: &RiskLevel) -> &'static str {
     }
 }
 
-fn estimate_str(estimate: &Estimate) -> &'static str {
-    match estimate {
-        Estimate::S => "s",
-        Estimate::M => "m",
-        Estimate::L => "l",
-    }
-}
-
 /// Plain-language label for an estimate, e.g. `small` for `Estimate::S`.
-/// Everywhere the page shows an estimate to a human — badges, distributions
-/// — uses this, not the terse wire-format letter. `estimate_str`'s
-/// abbreviation still names the CSS class (`estimate-s`) so existing
-/// stylesheets/selectors keep working; only the visible text spells the word
-/// out.
+/// Everywhere the page shows an estimate to a human uses this, not the terse
+/// wire-format letter — the letter only survives in the phase ledger's
+/// `2s · 1m` distribution, where the column is too narrow for words.
 fn estimate_label(estimate: &Estimate) -> &'static str {
     match estimate {
         Estimate::S => "small",
@@ -206,68 +188,140 @@ fn file_action_str(action: &FileAction) -> &'static str {
     }
 }
 
-/// One vendored icon (see `plan::icons`), inlined as `<svg class="pv-icon">`.
-/// The vendored file's own 24x24 `width`/`height` attributes are dropped —
-/// `plan.css`'s `.pv-icon` rule sizes it instead — everything else (viewBox,
-/// stroke, line caps/joins) is copied through unchanged so the glyph reads
-/// exactly like upstream Lucide. `aria-hidden` because these sit right next
-/// to the text that already says the same thing (a title, a section
-/// heading); they're decoration, not information a screen reader needs to
-/// announce separately.
-///
-/// `None` for a name outside the vocabulary. `validate()` (see `plan::model`)
-/// rejects that before `render()` ever runs on a real CLI path, so this is a
-/// quiet fallback for any other caller, not a panic.
-fn icon_markup(name: &str) -> Option<Markup> {
-    let inner = strip_svg_wrapper(icons::icon_svg(name)?)?;
-    Some(html! {
-        svg class="pv-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-            aria-hidden="true" focusable="false" {
-            (PreEscaped(inner))
-        }
-    })
+/// A category chip: a severity, a status, a file action. `variant` is the
+/// bare state name (`"high"`, `"done"`, `"create"`, …) and becomes the
+/// `pv-chip-{variant}` modifier `plan.css` colors — so a chip's appearance is
+/// always a direct function of the state it names, never a per-call choice.
+fn chip(variant: &str, label: &str) -> Markup {
+    html! { span class=(format!("pv-chip pv-chip-{variant}")) { (label) } }
 }
 
-/// `icon_markup(name)` followed by a space, or nothing for `None` — shared by
-/// phase/task headings (the author-chosen `icon` field) and the handful of
-/// section headings with a fixed icon (summary, risks, open questions,
-/// phases, phase dependencies).
-fn icon_prefix(name: Option<&str>) -> Markup {
-    match name.and_then(icon_markup) {
-        Some(svg) => html! { (svg) " " },
-        None => PreEscaped(String::new()),
+/// A 6px state marker with its label beside it, for the task metadata rails
+/// and the graph legends — the quietest way the page can state a status.
+/// `aria-hidden` on the square itself: the label right next to it already
+/// says the same thing in words.
+fn dot_line(variant: &str, label: &str) -> Markup {
+    html! {
+        span {
+            span class=(format!("pv-dot pv-dot-{variant}")) aria-hidden="true" {}
+            (label)
+        }
     }
 }
 
-/// The inner content of a vendored `<svg>…</svg>` document (everything
-/// between the opening tag's `>` and the closing tag) — shared by
-/// `icon_markup` and `chevron_markup`, both of which drop the vendored
-/// file's own wrapper attributes and re-wrap the inner paths in their own
-/// `<svg class="…">` with the sizing/styling this renderer wants.
-fn strip_svg_wrapper(raw: &str) -> Option<&str> {
-    let inner_start = raw.find('>')? + 1;
-    let inner_end = raw.rfind("</svg>")?;
-    Some(&raw[inner_start..inner_end])
+/// A section opener: a mono label, a hairline running to the right margin, and
+/// an optional slot for controls that belong to the section.
+///
+/// Every section on the page uses this and nothing else, which is most of what
+/// makes plans of very different shapes read as one document. `actions_id`
+/// gives `plan.js` a stable target to inject the expand/collapse controls into
+/// — the markup ships the empty container so scripting never has to build the
+/// surrounding structure (and `plan.css` hides it while it stays empty).
+fn section_rule(label: &str, actions_id: Option<&str>) -> Markup {
+    html! {
+        div.pv-rule {
+            span.pv-label { (label) }
+            span.pv-rule-line {}
+            @if let Some(id) = actions_id {
+                span.pv-rule-actions id=(id) {}
+            }
+        }
+    }
 }
 
-/// The disclosure chevron drawn at the start of every `<details>` summary
-/// line (phases + the phase-dependency graph) — UI chrome, not part of the
-/// author-facing icon vocabulary (see `icons::ui_chevron`'s doc comment).
-/// `class="pv-chevron"` is what `plan.css` sizes, colors, and rotates 90°
-/// via `details[open] > summary .pv-chevron` — CSS-only, no JS involved.
-/// `aria-hidden` for the same reason `icon_markup`'s icons are: native
-/// `<details>` already conveys expanded/collapsed state to assistive tech,
-/// so this is decoration layered on top, not a second source of truth.
-fn chevron_markup() -> Markup {
-    let inner =
-        strip_svg_wrapper(icons::ui_chevron()).expect("vendored chevron-right.svg is well-formed");
-    html! {
-        svg class="pv-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-            aria-hidden="true" focusable="false" {
-            (PreEscaped(inner))
-        }
+/// One cell of the stat strip: a figure and the caption under it. `hot` is the
+/// single license the strip has to use the accent — reserved for a count a
+/// reviewer must not scroll past (high-severity risks, blocking questions).
+struct Stat {
+    figure: String,
+    label: String,
+    hot: bool,
+}
+
+/// The stat strip's cells, in reading order.
+///
+/// Cells are emitted only when the plan HAS the thing they count, which is
+/// what keeps the strip honest across plan shapes: a plan with no risks shows
+/// no risk cell rather than a `0` that implies the author cleared them. Tasks
+/// and phases are unconditional — every plan has both, even at zero, and their
+/// absence is itself worth stating.
+fn stat_cells(plan: &Plan) -> Vec<Stat> {
+    let tasks: Vec<&PlanTask> = plan.phases.iter().flat_map(|p| p.tasks.iter()).collect();
+    let done = tasks
+        .iter()
+        .filter(|t| matches!(t.status, Status::Done))
+        .count();
+
+    let mut cells = vec![Stat {
+        figure: tasks.len().to_string(),
+        // A progress suffix only once something is actually finished — on a
+        // fresh plan "0 done" is noise, not information.
+        label: if done > 0 {
+            format!("Tasks · {done} done")
+        } else {
+            "Tasks".into()
+        },
+        hot: false,
+    }];
+
+    cells.push(Stat {
+        figure: plan.phases.len().to_string(),
+        label: "Phases".into(),
+        hot: false,
+    });
+
+    if !plan.risks.is_empty() {
+        let high = plan
+            .risks
+            .iter()
+            .filter(|r| matches!(r.severity, RiskLevel::High))
+            .count();
+        cells.push(Stat {
+            figure: plan.risks.len().to_string(),
+            label: if high > 0 {
+                format!("Risks · {high} high")
+            } else {
+                "Risks".into()
+            },
+            hot: high > 0,
+        });
+    }
+
+    if !plan.open_questions.is_empty() {
+        let blocking = plan.open_questions.iter().filter(|q| q.blocking).count();
+        cells.push(Stat {
+            figure: plan.open_questions.len().to_string(),
+            label: if blocking > 0 {
+                format!("Questions · {blocking} blocking")
+            } else {
+                "Questions".into()
+            },
+            hot: blocking > 0,
+        });
+    }
+
+    cells
+}
+
+/// The orientation banner's sentence — the one line on the page that explains
+/// the page itself.
+///
+/// The wording tracks real progress rather than asserting a fixed story: a
+/// plan whose tasks are all still planned genuinely hasn't been built, but
+/// saying "nothing is built yet" over a plan showing eight done tasks would be
+/// plainly false to the reader looking at it.
+fn banner_lead(plan: &Plan) -> (&'static str, &'static str) {
+    let tasks: Vec<&PlanTask> = plan.phases.iter().flat_map(|p| p.tasks.iter()).collect();
+    let started = tasks
+        .iter()
+        .any(|t| matches!(t.status, Status::Done | Status::InProgress));
+    if started {
+        (
+            "This plan is being worked through — ",
+            "the statuses below are the agent's own record.",
+        )
+    } else {
+        ("An agent drafted this plan — ", "nothing is built yet.")
     }
 }
 
@@ -294,59 +348,19 @@ fn truncate_chars(s: &str, max: usize) -> String {
     }
 }
 
-/// The summary strip's headline: task/phase counts, then an estimate
-/// distribution (small/medium/large, only sizes that occur) when any task
-/// carries an estimate, then a status distribution when more than one
-/// distinct status appears (a single-status plan doesn't need it spelled
-/// out).
-///
-/// The status order below is deliberately not the `Status` enum's
-/// declaration order — it reads like a progress readout: what's finished
-/// first, then what's active, then what's stuck, what's left, and finally
-/// what was abandoned.
-fn summary_counts_line(plan: &Plan) -> String {
-    let tasks: Vec<&PlanTask> = plan.phases.iter().flat_map(|p| p.tasks.iter()).collect();
-    let mut parts = vec![
-        count_label(tasks.len(), "task"),
-        count_label(plan.phases.len(), "phase"),
-    ];
-
-    let mut sizes = [0usize; 3]; // s, m, l
-    for t in &tasks {
-        match t.estimate {
-            Some(Estimate::S) => sizes[0] += 1,
-            Some(Estimate::M) => sizes[1] += 1,
-            Some(Estimate::L) => sizes[2] += 1,
-            None => {}
+/// Whether the plan's risks span more than one severity. The stat strip
+/// already reports the total and the high count, so the ledger's per-severity
+/// breakdown only earns its line when there is a mix to break down.
+fn risk_severity_spread(plan: &Plan) -> bool {
+    let mut seen = [false; 3];
+    for r in &plan.risks {
+        match r.severity {
+            RiskLevel::High => seen[0] = true,
+            RiskLevel::Medium => seen[1] = true,
+            RiskLevel::Low => seen[2] = true,
         }
     }
-    for (n, label) in sizes.iter().zip(["small", "medium", "large"]) {
-        if *n > 0 {
-            parts.push(format!("{n} {label}"));
-        }
-    }
-
-    let mut statuses = [0usize; 5]; // done, in_progress, blocked, planned, cut
-    for t in &tasks {
-        let i = match t.status {
-            Status::Done => 0,
-            Status::InProgress => 1,
-            Status::Blocked => 2,
-            Status::Planned => 3,
-            Status::Cut => 4,
-        };
-        statuses[i] += 1;
-    }
-    if statuses.iter().filter(|&&n| n > 0).count() > 1 {
-        let labels = ["done", "in_progress", "blocked", "planned", "cut"];
-        for (n, label) in statuses.iter().zip(labels) {
-            if *n > 0 {
-                parts.push(format!("{n} {label}"));
-            }
-        }
-    }
-
-    parts.join(" · ")
+    seen.iter().filter(|s| **s).count() > 1
 }
 
 /// The risk line's text plus whether any risk is high severity (the caller
@@ -378,22 +392,6 @@ fn summary_risk_line(plan: &Plan) -> Option<(String, bool)> {
     Some((line, severities[0] > 0))
 }
 
-/// A collapsed phase's `summary` still needs to convey its size and heat:
-/// "(N tasks)", or "(N tasks · high risk)" when any task in it carries a
-/// high risk rating.
-fn phase_meta_text(phase: &Phase) -> String {
-    let n = phase.tasks.len();
-    let has_high = phase
-        .tasks
-        .iter()
-        .any(|t| matches!(t.risk, Some(RiskLevel::High)));
-    format!(
-        "({}{})",
-        count_label(n, "task"),
-        if has_high { " · high risk" } else { "" }
-    )
-}
-
 /// A phase's estimate distribution for the executive-summary rollup table,
 /// e.g. `"2 small, 1 medium"` — only sizes that occur, empty when no task in
 /// the phase carries an estimate.
@@ -414,6 +412,18 @@ fn phase_estimate_dist(phase: &Phase) -> String {
         .map(|(n, label)| format!("{n}{label}"))
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// Whether the summary ledger's right-hand column would carry anything at
+/// all: true as soon as one phase has an estimate distribution or a risk
+/// heat. A plan whose tasks are all unestimated and unrated fills that column
+/// with nothing in every row, and an `EST · RISK` header over a stack of empty
+/// cells reads as a rendering failure rather than as "not stated" — so the
+/// column is dropped instead (see the ledger markup).
+fn ledger_has_figures(plan: &Plan) -> bool {
+    plan.phases
+        .iter()
+        .any(|p| !phase_estimate_dist(p).is_empty() || !phase_risk_heat(p).is_empty())
 }
 
 /// The rail's phase cell: the head of a `title — subtitle` name, capped for
@@ -448,75 +458,114 @@ fn phase_risk_heat(phase: &Phase) -> String {
         .unwrap_or_default()
 }
 
-/// One task card: heading with status/risk/estimate badges, the markdown
-/// summary, a file touch list, an acceptance checklist, validation commands,
-/// and a "depends on" line linking to the other cards' anchors.
+/// One task: a body column (heading, markdown summary, files, acceptance
+/// criteria, validation commands, dependencies) and a fixed metadata rail on
+/// the right carrying status, risk, estimate, and the task id.
+///
+/// The rail is why the split exists. A task's body can be one sentence or two
+/// screens of markdown, but its state always appears in the same place at the
+/// same size — so a reader scanning a forty-task plan reads state by position
+/// instead of hunting for badges inside prose.
 ///
 /// `id="task-{id}"` is what the SVG's `#task-{id}` links jump to.
 /// `data-plan-ref="task:{id}"` is what the comment tooling anchors a comment
-/// to; acceptance sub-items carry the *same* parent ref (the design has no
-/// per-criterion anchor, so a comment on a criterion attaches to its task).
-fn task_card(task: &PlanTask) -> Markup {
+/// to; acceptance rows carry the *same* parent ref (a comment on a criterion
+/// attaches to its task, and quotes the criterion's line).
+fn task_row(task: &PlanTask) -> Markup {
     let task_ref = format!("task:{}", task.id);
     html! {
         div.task id=(format!("task-{}", task.id)) data-plan-ref=(task_ref) {
-            h3 {
-                (icon_prefix(task.icon.as_deref()))
-                (task.title)
-                " "
-                span class=(format!("badge status-{}", status_str(&task.status))) {
-                    (status_str(&task.status))
+            div.task-body {
+                div.task-head { h3 { (task.title) } }
+                @if task.summary_md.is_some() {
+                    div.pv-prose { (md(&task.summary_md)) }
                 }
-                @if let Some(risk) = &task.risk {
-                    " "
-                    span class=(format!("badge risk-{}", risk_str(risk))) { (risk_str(risk)) }
-                }
-                @if let Some(estimate) = &task.estimate {
-                    " "
-                    span class=(format!("badge estimate-{}", estimate_str(estimate))) {
-                        (estimate_label(estimate))
+                @if !task.files.is_empty() {
+                    ul.files {
+                        @for f in &task.files {
+                            li {
+                                code { (f.path) }
+                                (chip(file_action_str(&f.action), file_action_str(&f.action)))
+                                @if let Some(note) = &f.note {
+                                    span.file-note { (note) }
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            (md(&task.summary_md))
-            @if !task.files.is_empty() {
-                ul.files {
-                    @for f in &task.files {
-                        li {
-                            code { (f.path) }
-                            " "
-                            span class=(format!("badge action-{}", file_action_str(&f.action))) {
-                                (file_action_str(&f.action))
-                            }
-                            @if let Some(note) = &f.note { " — " (note) }
+                @if !task.acceptance.is_empty() {
+                    div.pv-rule {
+                        span.pv-label { "Acceptance" }
+                        span.pv-rule-line {}
+                    }
+                    ul.acceptance {
+                        @for item in &task.acceptance {
+                            li data-plan-ref=(format!("task:{}", task.id)) { span { (item) } }
+                        }
+                    }
+                }
+                @if !task.validation.is_empty() {
+                    ul.validation {
+                        @for cmd in &task.validation {
+                            li { code { (cmd) } }
+                        }
+                    }
+                }
+                @if !task.depends_on.is_empty() {
+                    p.depends {
+                        "depends on "
+                        @for (i, dep) in task.depends_on.iter().enumerate() {
+                            @if i > 0 { ", " }
+                            a href=(format!("#task-{dep}")) { (dep) }
                         }
                     }
                 }
             }
-            @if !task.acceptance.is_empty() {
-                ul.acceptance {
-                    @for item in &task.acceptance {
-                        li data-plan-ref=(format!("task:{}", task.id)) { (item) }
-                    }
+            div.task-rail {
+                (dot_line(status_str(&task.status), status_str(&task.status)))
+                @if let Some(risk) = &task.risk {
+                    (dot_line(risk_str(risk), &format!("{} risk", risk_str(risk))))
                 }
-            }
-            @if !task.validation.is_empty() {
-                ul.validation {
-                    @for cmd in &task.validation {
-                        li { code { (cmd) } }
-                    }
+                @if let Some(estimate) = &task.estimate {
+                    (dot_line("planned", &format!("{} effort", estimate_label(estimate))))
                 }
-            }
-            @if !task.depends_on.is_empty() {
-                p.depends {
-                    "depends on "
-                    @for (i, dep) in task.depends_on.iter().enumerate() {
-                        @if i > 0 { ", " }
-                        a href=(format!("#task-{dep}")) { (dep) }
-                    }
-                }
+                span.task-id { (task.id) }
             }
         }
+    }
+}
+
+/// The key under a dependency graph. Fixed, not derived from the graph's
+/// contents: a legend that changes shape per phase would make two graphs on
+/// the same page disagree about what a colour means.
+fn graph_legend() -> Markup {
+    html! {
+        div.pv-legend {
+            (dot_line("done", "done"))
+            (dot_line("in_progress", "in progress"))
+            (dot_line("blocked", "blocked"))
+            (dot_line("planned", "planned"))
+        }
+    }
+}
+
+/// A phase's task rollup for its heading line: how many, and how far along.
+/// `"3 tasks · all done"` when every task is finished, `"3 tasks · 1 done"`
+/// part-way, and just the count when nothing has started.
+fn phase_progress(phase: &Phase) -> String {
+    let n = phase.tasks.len();
+    let done = phase
+        .tasks
+        .iter()
+        .filter(|t| matches!(t.status, Status::Done))
+        .count();
+    let count = count_label(n, "task");
+    if n > 0 && done == n {
+        format!("{count} · all done")
+    } else if done > 0 {
+        format!("{count} · {done} done")
+    } else {
+        count
     }
 }
 
@@ -542,211 +591,334 @@ pub fn render(plan: &Plan) -> String {
                 style { (PreEscaped(CSS)) }
             }
             body data-plan-fingerprint=(hash) {
-                // Brand strip: names the surface in every serving context —
-                // file:// auto-open and studio's sandboxed /artifacts route
-                // alike. Static, non-interactive markup only (no links: the
-                // sandbox blocks top-level navigation, and there's nothing to
-                // link to in the file:// context anyway).
-                // Brand first, surface second (same hierarchy as studio's
-                // topbar): "Loadout" is the product, "Viewer" is a room in
-                // it — never "X by Loadout", which reads as a separate
-                // product with a vendor.
-                div.viewer-brand {
-                    (PreEscaped(VIEWER_MARK))
-                    span.viewer-brand-name { "Loadout" }
-                    span.viewer-brand-surface { "Viewer" }
-                }
-                header {
-                    // Eyebrow above the title: the metadata a reader wants
-                    // placed before the name, not after it.
-                    p.meta {
-                        "plan " code { (plan.meta.id) }
-                        @if let Some(rev) = plan.meta.revision { " · revision " (rev) }
-                        @if let Some(agent) = &plan.meta.agent { " · by " (agent) }
-                        @if let Some(created) = &plan.meta.created { " · " (created) }
+                // The whole document lives inside one sheet: the plan reads as
+                // a page on a desk rather than a full-bleed app. Everything
+                // below pads to --gutter, so the topbar, the banner, and the
+                // body column share one left edge.
+                div.pv-sheet {
+                    // Topbar: names the surface in every serving context —
+                    // file:// auto-open and studio's sandboxed /artifacts
+                    // route alike — and carries the plan's identity so it
+                    // stays on screen through a long scroll. Brand first,
+                    // surface second (same hierarchy as studio's topbar):
+                    // "Loadout" is the product, "Plan viewer" is a room in it.
+                    // Static markup only; the theme toggle is injected by
+                    // plan.js, since a control that does nothing without
+                    // scripting has no business in the served HTML.
+                    header.pv-topbar {
+                        div.pv-brand {
+                            span.pv-brand-mark aria-hidden="true" {}
+                            span.pv-brand-name { "Loadout" }
+                            span.pv-brand-surface { "Plan viewer" }
+                        }
+                        div.pv-topbar-right {
+                            span.pv-topbar-id {
+                                (plan.meta.id)
+                                @if let Some(rev) = plan.meta.revision { " · rev " (rev) }
+                            }
+                        }
                     }
-                    h1 { (plan.meta.title) }
-                    (md(&plan.meta.goal_md))
-                }
-                // A labeled section heading, same convention as Open
-                // questions/Risks below: an h2 with a fixed icon, sitting
-                // OUTSIDE the card it introduces (those sections' h2s sit
-                // outside each individual question/risk card; this one sits
-                // outside the single .plan-summary card).
-                h2 { (icon_prefix(Some("file-text"))) "Summary" }
-                // The `meta:` comment anchor lives on the summary card itself
-                // (not the tiny byline above): "comment on the plan as a
-                // whole" reads as commenting on the executive summary, and
-                // the byline gave the button no visible target worth quoting.
-                section.plan-summary data-plan-ref=(format!("meta:{}", plan.meta.id)) {
-                    // Two zones side by side on wide viewports (first-dogfood
-                    // feedback: the exec prose alone left half the card
-                    // empty): the prose on the left, an "at a glance" rail —
-                    // counts, per-phase rollup, risk register, the ask — on
-                    // the right, where a scanner looks first.
-                    div.summary-grid {
-                        // (a) The executive summary itself — the top of the
-                        // page, so a reader who stops here still gets a
-                        // correct high-level picture. Never fabricated:
-                        // absent summary_md gets a plain note, not invented
-                        // content.
-                        div.summary-exec {
-                            @if let Some(summary) = &plan.meta.summary_md {
-                                (PreEscaped(crate::markdown::render_markdown(summary)))
-                            } @else {
-                                p.summary-missing {
-                                    "No executive summary — the plan author can set meta.summary_md."
+                    // Orientation banner: what this page is and what to do
+                    // with it. A reviewer opening a rendered plan cold has no
+                    // other way to know the page collects comments.
+                    div.pv-banner {
+                        span.pv-chip.pv-chip-solid { "For review" }
+                        p.pv-banner-text {
+                            (banner_lead(plan).0)
+                            strong { (banner_lead(plan).1) }
+                            " Comment on anything, then copy your feedback back into the conversation."
+                        }
+                        span.pv-banner-steps {
+                            b { "01" } " skim  " b { "02" } " comment  " b { "03" } " copy feedback"
+                        }
+                    }
+                    main.pv-main {
+                        div.pv-head {
+                            // Eyebrow: the metadata a reader wants placed
+                            // before the name, not after it.
+                            p.pv-eyebrow {
+                                @if let Some(agent) = &plan.meta.agent { "by " (agent) }
+                                @if plan.meta.agent.is_some() && plan.meta.created.is_some() { " · " }
+                                @if let Some(created) = &plan.meta.created { (created) }
+                                @if plan.meta.agent.is_none() && plan.meta.created.is_none() {
+                                    "plan " code { (plan.meta.id) }
+                                }
+                            }
+                            h1 { (plan.meta.title) }
+                            @if plan.meta.goal_md.is_some() {
+                                div.pv-lede { (md(&plan.meta.goal_md)) }
+                            }
+                        }
+                        // Stat strip: the plan's shape in four figures or
+                        // fewer. Cells with nothing to count are not emitted
+                        // (see `stat_cells`), so the strip never shows a
+                        // hollow zero.
+                        div.pv-stats {
+                            @for cell in stat_cells(plan) {
+                                div class=(if cell.hot { "pv-stat is-hot" } else { "pv-stat" }) {
+                                    span.pv-stat-n { (cell.figure) }
+                                    span.pv-stat-l { (cell.label) }
                                 }
                             }
                         }
-                        aside.summary-glance {
-                            p.glance-title { "At a glance" }
-                            // (e) Whole-plan counts, the per-phase rollup,
-                            // the risk register counts (distinct from the
-                            // per-task risk heat shown per phase below).
-                            p.summary-counts { (summary_counts_line(plan)) }
-                            @if !plan.phases.is_empty() {
-                                table.summary-phases {
-                                    thead {
-                                        tr { th { "Phase" } th { "Tasks" } th { "Est." } th { "Risk" } }
+                        (section_rule("Summary", None))
+                        // The `meta:` comment anchor lives on the summary
+                        // itself (not the tiny byline above): "comment on the
+                        // plan as a whole" reads as commenting on the
+                        // executive summary, and the byline gave the button no
+                        // visible target worth quoting.
+                        section.plan-summary data-plan-ref=(format!("meta:{}", plan.meta.id)) {
+                            // Two zones on a wide viewport: the prose on the
+                            // left at its reading measure, the phase ledger on
+                            // the right where a scanner looks first.
+                            div.summary-grid {
+                                // (a) The executive summary — the top of the
+                                // page, so a reader who stops here still gets
+                                // a correct high-level picture. Never
+                                // fabricated: absent summary_md gets a plain
+                                // note, not invented content.
+                                div.summary-exec {
+                                    @if let Some(summary) = &plan.meta.summary_md {
+                                        (PreEscaped(crate::markdown::render_markdown(summary)))
+                                    } @else {
+                                        p.summary-missing {
+                                            "No executive summary — the plan author can set meta.summary_md."
+                                        }
                                     }
-                                    tbody {
-                                        @for phase in &plan.phases {
-                                            tr {
-                                                td { a href=(format!("#phase-{}", phase.id)) { (short_phase_title(&phase.title)) } }
-                                                td { (phase.tasks.len().to_string()) }
-                                                td { (phase_estimate_dist(phase)) }
-                                                td { (phase_risk_heat(phase)) }
+                                }
+                                // (b) The ledger: per-phase rollup, then the
+                                // ask. Suppressed wholesale on a plan with no
+                                // phases — an empty table with a header row
+                                // reads as a rendering failure.
+                                aside.summary-glance {
+                                    @if !plan.phases.is_empty() {
+                                        @let figures = ledger_has_figures(plan);
+                                        table.pv-ledger {
+                                            thead {
+                                                tr {
+                                                    th { "Phase" }
+                                                    @if figures { th { "Est · risk" } }
+                                                }
+                                            }
+                                            tbody {
+                                                @for phase in &plan.phases {
+                                                    tr data-phase-row=(phase.id) {
+                                                        td {
+                                                            a href=(format!("#phase-{}", phase.id)) {
+                                                                (short_phase_title(&phase.title))
+                                                            }
+                                                        }
+                                                        @if figures {
+                                                            @let heat = phase_risk_heat(phase);
+                                                            td class=(
+                                                                if heat.contains("high") {
+                                                                    "pv-ledger-fig is-hot"
+                                                                } else {
+                                                                    "pv-ledger-fig"
+                                                                }
+                                                            ) {
+                                                                (phase_estimate_dist(phase))
+                                                                @if !heat.is_empty() { " · " (heat) }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // (c) The ask: whether this plan can move
+                                    // forward as it stands — computed, not
+                                    // authored.
+                                    p class=(if !blocking.is_empty() { "summary-ask has-blocking" } else { "summary-ask" }) {
+                                        span class=(
+                                            if blocking.is_empty() { "pv-dot pv-dot-done" } else { "pv-dot pv-dot-high" }
+                                        ) aria-hidden="true" {}
+                                        span {
+                                            @if !blocking.is_empty() {
+                                                (format!(
+                                                    "{} blocking question(s) must be resolved before implementation: ",
+                                                    blocking.len()
+                                                ))
+                                                @for (i, q) in blocking.iter().enumerate() {
+                                                    @if i > 0 { ", " }
+                                                    a href=(format!("#question-{}", q.id)) {
+                                                        (truncate_chars(&q.question_md, 100))
+                                                    }
+                                                }
+                                            } @else {
+                                                "No blocking questions"
+                                            }
+                                        }
+                                    }
+                                    // The risk register's own breakdown, but
+                                    // only the part the stat strip above does
+                                    // NOT already state. A plan whose risks are
+                                    // all one severity is fully described by
+                                    // "6 risks · 2 high" up there; spelling it
+                                    // out again here is the same sentence
+                                    // twice.
+                                    @if let Some((line, has_high)) = &risk_line {
+                                        @if risk_severity_spread(plan) {
+                                            p class=(if *has_high { "summary-ask has-blocking" } else { "summary-ask" }) {
+                                                span class=(
+                                                    if *has_high { "pv-dot pv-dot-high" } else { "pv-dot pv-dot-medium" }
+                                                ) aria-hidden="true" {}
+                                                span { (line) }
                                             }
                                         }
                                     }
                                 }
                             }
-                            @if let Some((line, has_high)) = &risk_line {
-                                p class=(if *has_high { "summary-risks has-high" } else { "summary-risks" }) {
-                                    (line)
+                            // (d) Supporting bullets, one per major workstream
+                            // or decision, spanning the full width below both
+                            // zones.
+                            @if !plan.meta.key_points.is_empty() {
+                                ul.summary-keypoints {
+                                    @for kp in &plan.meta.key_points {
+                                        li { (PreEscaped(crate::markdown::render_markdown(kp))) }
+                                    }
                                 }
                             }
-                            // (d) The ask: whether this plan can move
-                            // forward as-is — the rail's bottom line.
-                            p class=(if !blocking.is_empty() { "summary-ask has-blocking" } else { "summary-ask" }) {
-                                @if !blocking.is_empty() {
-                                    (format!(
-                                        "⚠ {} blocking question(s) must be resolved before implementation: ",
-                                        blocking.len()
-                                    ))
-                                    @for (i, q) in blocking.iter().enumerate() {
+                            // (e) Explicit non-goals, plain text (no markdown).
+                            @if !plan.meta.out_of_scope.is_empty() {
+                                p.summary-outofscope {
+                                    strong { "Out of scope: " }
+                                    @for (i, item) in plan.meta.out_of_scope.iter().enumerate() {
                                         @if i > 0 { ", " }
-                                        a href=(format!("#question-{}", q.id)) {
-                                            (truncate_chars(&q.question_md, 100))
+                                        (item)
+                                    }
+                                }
+                            }
+                        }
+                        // Open questions and risks share one row shape — a
+                        // severity chip, then a claim about it — because both
+                        // are the same kind of statement and a reader should
+                        // not have to learn two layouts for them.
+                        @if !plan.open_questions.is_empty() {
+                            (section_rule("Open questions", None))
+                            section.pv-rows.questions {
+                                @for q in &plan.open_questions {
+                                    div.pv-row id=(format!("question-{}", q.id))
+                                        data-plan-ref=(format!("question:{}", q.id)) {
+                                        (chip(
+                                            if q.blocking { "high" } else { "planned" },
+                                            if q.blocking { "Blocking" } else { "Open" },
+                                        ))
+                                        div.pv-row-body {
+                                            // The question is this row's
+                                            // heading line, even though it is
+                                            // prose rather than an <h3>. It
+                                            // gets the heading wrapper so the
+                                            // Answer button plan.js injects
+                                            // lands beside it at the right
+                                            // margin, the way a risk's Comment
+                                            // button does — without it the
+                                            // button drops onto a line of its
+                                            // own under a one-line question.
+                                            div.pv-row-head {
+                                                div.pv-prose {
+                                                    (PreEscaped(crate::markdown::render_markdown(&q.question_md)))
+                                                }
+                                            }
                                         }
                                     }
-                                } @else {
-                                    "No blocking questions — plan is ready to review and approve."
                                 }
                             }
                         }
-                    }
-                    // (b) Supporting bullets, one per major workstream or
-                    // decision, spanning the card's full width below both
-                    // zones.
-                    @if !plan.meta.key_points.is_empty() {
-                        ul.summary-keypoints {
-                            @for kp in &plan.meta.key_points {
-                                li { (PreEscaped(crate::markdown::render_markdown(kp))) }
-                            }
-                        }
-                    }
-                    // (c) Explicit non-goals, plain text (no markdown).
-                    @if !plan.meta.out_of_scope.is_empty() {
-                        p.summary-outofscope {
-                            strong { "Out of scope: " }
-                            @for (i, item) in plan.meta.out_of_scope.iter().enumerate() {
-                                @if i > 0 { ", " }
-                                (item)
-                            }
-                        }
-                    }
-                }
-                @if !plan.open_questions.is_empty() {
-                    section.questions {
-                        h2 { (icon_prefix(Some("search"))) "Open questions" }
-                        @for q in &plan.open_questions {
-                            div.task id=(format!("question-{}", q.id)) data-plan-ref=(format!("question:{}", q.id)) {
-                                @if q.blocking { span.badge.blocking { "blocking" } }
-                                (PreEscaped(crate::markdown::render_markdown(&q.question_md)))
-                            }
-                        }
-                    }
-                }
-                @if !plan.risks.is_empty() {
-                    section.risks {
-                        h2 { (icon_prefix(Some("shield"))) "Risks" }
-                        @for r in &plan.risks {
-                            div.task data-plan-ref=(format!("risk:{}", r.id)) {
-                                h3 id=(format!("risk-{}", r.id)) {
-                                    (r.title)
-                                    " "
-                                    span class=(format!("badge risk-{}", risk_str(&r.severity))) {
-                                        (risk_str(&r.severity))
+                        @if !plan.risks.is_empty() {
+                            (section_rule("Risks", None))
+                            section.pv-rows.risks {
+                                @for r in &plan.risks {
+                                    div.pv-row data-plan-ref=(format!("risk:{}", r.id)) {
+                                        (chip(risk_str(&r.severity), risk_str(&r.severity)))
+                                        div.pv-row-body {
+                                            div.pv-row-head {
+                                                h3 id=(format!("risk-{}", r.id)) { (r.title) }
+                                            }
+                                            @if r.mitigation_md.is_some() {
+                                                div.pv-prose { (md(&r.mitigation_md)) }
+                                            }
+                                        }
                                     }
                                 }
-                                (md(&r.mitigation_md))
                             }
                         }
-                    }
-                }
-                // A "Phases" section heading, same convention as Open
-                // questions/Risks above (icon + h2, outside the phase list
-                // it introduces). `layout-dashboard` over `git-branch` here:
-                // `git-branch` already means something specific on this page
-                // (the phase-DEPENDENCY graph below) — reusing it on a plain
-                // "here's the list" heading would suggest a relationship
-                // that isn't there; `layout-dashboard` reads as a neutral
-                // "a list of sections" glyph instead. The expand/collapse
-                // control (JS-injected right before the first `details.phase`
-                // — see plan.js) lands between this heading and the phase
-                // list, not before it.
-                @if !plan.phases.is_empty() {
-                    h2 { (icon_prefix(Some("layout-dashboard"))) "Phases" }
-                }
-                @for (i, phase) in plan.phases.iter().enumerate() {
-                    details.phase id=(format!("phase-{}", phase.id)) data-plan-ref=(format!("phase:{}", phase.id)) {
-                        @let (teaser, summary_rest) = phase_summary_parts(&phase.summary_md);
-                        summary {
-                            (chevron_markup())
-                            h2 {
-                                (icon_prefix(phase.icon.as_deref()))
-                                (format!("Phase {} · ", i + 1))
-                                (phase.title)
-                                " "
-                                span.phase-meta { (phase_meta_text(phase)) }
-                                // The phase's plain-english description is
-                                // part of the collapsed row — a reader
-                                // scanning closed phases still learns what
-                                // each one is. First paragraph only: it sits
-                                // inside <summary>, which is phrasing
-                                // content (see phase_summary_parts).
-                                @if let Some(teaser) = teaser {
-                                    span.phase-teaser { (teaser) }
+                        // The expand/collapse controls land in this rule's
+                        // actions slot (plan.js fills `#phases-actions`), so
+                        // they sit on the section divider rather than floating
+                        // above the list as a stray toolbar.
+                        @if !plan.phases.is_empty() {
+                            (section_rule("Phases", Some("phases-actions")))
+                        }
+                        div.pv-phases {
+                            @for (i, phase) in plan.phases.iter().enumerate() {
+                                details.phase id=(format!("phase-{}", phase.id))
+                                    data-plan-ref=(format!("phase:{}", phase.id)) {
+                                    @let (teaser, summary_rest) = phase_summary_parts(&phase.summary_md);
+                                    summary {
+                                        // Numeral, content, marker. The numeral
+                                        // is the phase's position in the plan,
+                                        // not its id — a reader counts phases,
+                                        // they don't parse slugs.
+                                        span.phase-numeral aria-hidden="true" {
+                                            (format!("{:02}", i + 1))
+                                        }
+                                        div.phase-head {
+                                            div.phase-head-line {
+                                                h2 { (phase.title) }
+                                                span.phase-meta { (phase_progress(phase)) }
+                                                @let high = phase
+                                                    .tasks
+                                                    .iter()
+                                                    .filter(|t| matches!(t.risk, Some(RiskLevel::High)))
+                                                    .count();
+                                                @if high > 0 {
+                                                    (chip("high", &format!("{high} high risk")))
+                                                }
+                                            }
+                                            // The phase's plain-English
+                                            // description is part of the
+                                            // COLLAPSED row — a reader scanning
+                                            // shut phases still learns what each
+                                            // one is. First paragraph only: it
+                                            // sits inside <summary>, which is
+                                            // phrasing content (see
+                                            // phase_summary_parts).
+                                            @if let Some(teaser) = teaser {
+                                                span.phase-teaser { (teaser) }
+                                            }
+                                        }
+                                        span.phase-marker aria-hidden="true" { "›" }
+                                    }
+                                    div.phase-body {
+                                        // Block content the teaser couldn't
+                                        // carry (lists, tables, paragraphs past
+                                        // the first) shows once expanded.
+                                        @if let Some(rest) = summary_rest {
+                                            div.phase-summary-rest.pv-prose { (rest) }
+                                        }
+                                        @if let Some(g) = svg::phase_svg(plan, &phase.id) {
+                                            div.pv-deps {
+                                                div.pv-rule {
+                                                    span.pv-label { "Dependencies" }
+                                                    span.pv-rule-line {}
+                                                }
+                                                (PreEscaped(g))
+                                                (graph_legend())
+                                            }
+                                        }
+                                        @for task in &phase.tasks { (task_row(task)) }
+                                    }
                                 }
                             }
                         }
-                        // Block content the teaser couldn't carry (lists,
-                        // tables, paragraphs past the first) shows once the
-                        // phase is expanded.
-                        @if let Some(rest) = summary_rest { div.phase-summary-rest { (rest) } }
-                        @if let Some(g) = svg::phase_svg(plan, &phase.id) { (PreEscaped(g)) }
-                        @for task in &phase.tasks { (task_card(task)) }
-                    }
-                }
-                @if let Some(g) = &phase_graph {
-                    details.graph {
-                        summary {
-                            (chevron_markup())
-                            (icon_prefix(Some("git-branch"))) "Phase dependencies"
+                        @if let Some(g) = &phase_graph {
+                            (section_rule("Phase dependencies", None))
+                            div.pv-deps {
+                                (PreEscaped(g.as_str()))
+                                (graph_legend())
+                            }
                         }
-                        (PreEscaped(g.as_str()))
                     }
                 }
                 script type="application/json" id="plan-data" { (PreEscaped(island)) }
@@ -824,8 +996,10 @@ mod tests {
         // all the same. `!html.to_lowercase().contains("@import")` below
         // still guards the actual external-fetch vector.
         assert!(!html.to_lowercase().contains("@import"));
-        // The embedded stylesheet's only url() references are the Inter
-        // font's data: URIs — a url(http…)/url(//…) would be a fetch, which
+        // The embedded stylesheet's only url() references are the embedded
+        // typefaces' data: URIs (Newsreader and JetBrains Mono — see the
+        // FONT_BEGIN block and tools/build-plan-fonts.py, which generates
+        // it) — a url(http…)/url(//…) would be a fetch, which
         // the self-containment contract (and the CSP) forbids. Checked over
         // the stylesheet, not the whole document, because task summaries can
         // legitimately contain the literal text `url(` inside code spans.
@@ -839,29 +1013,42 @@ mod tests {
             );
         }
         assert!(!CSS.contains("url(http"), "no external url() in plan.css");
-        // And the font did actually land: two @font-face blocks (400 + 600).
-        assert_eq!(CSS.matches("@font-face").count(), 2);
-        assert_eq!(CSS.matches("url(\"data:font/woff2;base64,").count(), 2);
+        // And the fonts did actually land: three faces across two families
+        // (Newsreader upright + italic, JetBrains Mono upright). Regenerate
+        // them with tools/build-plan-fonts.py, never by hand.
+        assert_eq!(CSS.matches("@font-face").count(), 3);
+        assert_eq!(CSS.matches("url(\"data:font/woff2;base64,").count(), 3);
+        assert!(CSS.contains("font-family: \"Newsreader\""));
+        assert!(CSS.contains("font-family: \"JetBrains Mono\""));
     }
 
     #[test]
     fn top_of_page_structure() {
         let html = render(&plan_from("kitchen-sink.json"));
-        // The brand strip ("Viewer" by Loadout) is the first thing on the
-        // page, above the eyebrow — it names the surface in both serving
-        // contexts and is static markup only (no links, nothing fetched).
-        let brand_pos = html
-            .find("<div class=\"viewer-brand\">")
-            .expect("brand strip");
-        assert!(html.contains("viewer-brand-mark"), "brand mark svg");
+        // The topbar is the first thing on the page, above the eyebrow — it
+        // names the surface in both serving contexts and is static markup
+        // only (no links, nothing fetched; the theme toggle is injected by
+        // plan.js, so it is deliberately absent from the served HTML).
+        let brand_pos = html.find("<header class=\"pv-topbar\">").expect("topbar");
+        assert!(html.contains("pv-brand-mark"), "brand mark");
         assert!(html.contains(">Loadout</span>"), "brand name");
-        assert!(html.contains(">Viewer</span>"), "surface label");
+        assert!(html.contains(">Plan viewer</span>"), "surface label");
+        // Tag-anchored: the bare class name also appears in the embedded
+        // stylesheet's `.pv-theme { … }` rule whether or not it is used.
+        assert!(
+            !html.contains("<div class=\"pv-theme\""),
+            "the theme toggle is script-injected, not served"
+        );
+        // The topbar carries the plan's identity through a long scroll.
+        assert!(html.contains("auth-refactor · rev 2"), "plan id in topbar");
         // Eyebrow (byline + created) renders above the h1.
-        let meta_pos = html.find("<p class=\"meta\">").expect("byline eyebrow");
+        let meta_pos = html
+            .find("<p class=\"pv-eyebrow\">")
+            .expect("byline eyebrow");
         let h1_pos = html.find("<h1>").expect("title");
         assert!(brand_pos < meta_pos, "brand strip above the eyebrow");
         assert!(meta_pos < h1_pos, "eyebrow above the title");
-        assert!(html.contains(" · 2026-07-07"), "created date in eyebrow");
+        assert!(html.contains("2026-07-07"), "created date in eyebrow");
         // Exec prose and the at-a-glance rail share the summary grid; the
         // ask lives at the rail's bottom; key points span below the grid.
         // (Tag-anchored substrings — bare class names also appear in the
@@ -870,6 +1057,14 @@ mod tests {
         let glance_pos = html
             .find("<aside class=\"summary-glance\">")
             .expect("glance rail");
+        // The stat strip sits between the masthead and the summary, and only
+        // emits cells the plan can actually fill (see `stat_cells`).
+        let stats_pos = html.find("<div class=\"pv-stats\">").expect("stat strip");
+        assert!(
+            h1_pos < stats_pos && stats_pos < grid_pos,
+            "strip under the title"
+        );
+        assert_eq!(html.matches("class=\"pv-stat-n\"").count(), 4, "{html}");
         let ask_pos = html.find("<p class=\"summary-ask").expect("ask");
         let keypoints_pos = html
             .find("<ul class=\"summary-keypoints\">")
@@ -877,7 +1072,6 @@ mod tests {
         assert!(grid_pos < glance_pos, "rail inside the grid");
         assert!(glance_pos < ask_pos, "ask inside the rail");
         assert!(ask_pos < keypoints_pos, "key points after the grid");
-        assert!(html.contains("At a glance"));
     }
 
     #[test]
@@ -989,8 +1183,16 @@ mod tests {
         let summary_pos = html
             .find("<section class=\"plan-summary\"")
             .expect("plan-summary present");
-        assert!(html.contains("5 tasks"), "{html}");
-        assert!(html.contains("2 phases"), "{html}");
+        // Counts now live in the stat strip's cells rather than one prose
+        // line, so assert on the figure/caption pair.
+        assert!(
+            html.contains("<span class=\"pv-stat-l\">Tasks · 1 done</span>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<span class=\"pv-stat-l\">Phases</span>"),
+            "{html}"
+        );
 
         // (b) executive summary block: present, with a distinctive
         // substring from the fixture's summary_md (through the sanitizer,
@@ -1033,39 +1235,73 @@ mod tests {
             "{html}"
         );
 
-        // (e) ask banner: has-blocking, with the q-ttl link.
+        // (e) the ask: has-blocking, with the q-ttl link. The severity is
+        // carried by a CSS-drawn dot rather than a dingbat character — no
+        // glyph for one survives in both the serif and a fallback face.
         let ask_pos = html
             .find("<p class=\"summary-ask has-blocking\">")
             .expect("summary-ask has-blocking");
         assert!(
-            html.contains("⚠ 1 blocking question(s) must be resolved before implementation"),
+            html.contains("1 blocking question(s) must be resolved before implementation"),
             "{html}"
+        );
+        assert!(
+            !html.contains("⚠"),
+            "no dingbats in the rendered page: {html}"
         );
         assert!(html.contains("href=\"#question-q-ttl\""), "{html}");
 
         // (f) phase rollup table: link to #phase-p-core, matching anchor id
         // on the phase's own details element.
-        assert!(html.contains("<table class=\"summary-phases\">"), "{html}");
+        assert!(html.contains("<table class=\"pv-ledger\">"), "{html}");
         assert!(html.contains("href=\"#phase-p-core\""), "{html}");
         assert!(html.contains("id=\"phase-p-core\""), "{html}");
+        // This plan's tasks carry estimates and risk ratings, so the ledger's
+        // figure column is present. (`no_summary_shows_missing_note_and_ready_state`
+        // covers the plan that drops it.)
+        assert!(html.contains("<th>Est · risk</th>"), "{html}");
+
+        // (f2) an open question's text is wrapped as the row's heading line,
+        // so the Answer button plan.js injects lands beside it rather than
+        // dropping onto a line of its own. Same wrapper a risk row uses.
+        let q_pos = html
+            .find("id=\"question-q-ttl\"")
+            .expect("blocking question row");
+        assert!(
+            html[q_pos..].starts_with(
+                "id=\"question-q-ttl\" data-plan-ref=\"question:q-ttl\">\
+                 <span class=\"pv-chip pv-chip-high\">Blocking</span>\
+                 <div class=\"pv-row-body\"><div class=\"pv-row-head\"><div class=\"pv-prose\">"
+            ),
+            "question row: chip, then a heading line wrapping the prose: {}",
+            &html[q_pos..q_pos + 260]
+        );
 
         // (g) order by byte position: summary block pieces in document
         // order, "Summary" heading < summary card < open questions < risks <
         // "Phases" heading < first phase details < graph details.
         //
-        // Each section heading now carries a fixed icon before its text
-        // (see `icon_prefix`), so none of these are anchored on the `<h2>`
-        // opening tag directly abutting the word.
-        let summary_heading_pos = html.find("Summary</h2>").expect("summary heading");
-        let open_q_pos = html.find("Open questions").expect("open questions heading");
-        let risks_pos = html.find("Risks</h2>").expect("risks heading");
-        let phases_heading_pos = html.find("Phases</h2>").expect("phases heading");
+        // Every section now opens with the same label-and-hairline rule
+        // (see `section_rule`) instead of an icon-and-heading pair, so these
+        // are anchored on the rule's label span.
+        let summary_heading_pos = html
+            .find("<span class=\"pv-label\">Summary</span>")
+            .expect("summary rule");
+        let open_q_pos = html
+            .find("<span class=\"pv-label\">Open questions</span>")
+            .expect("open questions rule");
+        let risks_pos = html
+            .find("<span class=\"pv-label\">Risks</span>")
+            .expect("risks rule");
+        let phases_heading_pos = html
+            .find("<span class=\"pv-label\">Phases</span>")
+            .expect("phases rule");
         let phase_pos = html
             .find("<details class=\"phase\"")
             .expect("phase details");
         let graph_pos = html
-            .find("<details class=\"graph\"")
-            .expect("graph details");
+            .find("<span class=\"pv-label\">Phase dependencies</span>")
+            .expect("phase dependencies rule");
         assert!(
             summary_heading_pos < summary_pos,
             "\"Summary\" heading before the summary card"
@@ -1084,16 +1320,21 @@ mod tests {
         );
         assert!(phase_pos < graph_pos, "phases before the phase graph");
 
-        // (g2) each phase's `<details>` summary line carries a 1-based,
-        // document-order ordinal prefix ahead of its title — owner-requested
-        // affordance so a reader always knows which phase they're looking
-        // at, even scrolled deep into a long plan.
-        assert!(html.contains("Phase 1 · Core"), "{html}");
-        assert!(html.contains("Phase 2 · Backend"), "{html}");
+        // (g2) each phase's row carries a 1-based, document-order ordinal —
+        // now set as the big numeral in its own column, so a reader always
+        // knows which phase they're looking at, even scrolled deep into a
+        // long plan. Zero-padded so 01..09 and 10+ share a column width.
+        assert!(
+            html.contains("<span class=\"phase-numeral\" aria-hidden=\"true\">01</span>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<span class=\"phase-numeral\" aria-hidden=\"true\">02</span>"),
+            "{html}"
+        );
 
-        // (h) phases (and the graph) are collapsed by default.
+        // (h) phases are collapsed by default.
         assert!(!html.contains("<details class=\"phase\" open"), "{html}");
-        assert!(!html.contains("<details class=\"graph\" open"), "{html}");
 
         // (i) the blocking link's target anchor exists.
         assert!(html.contains("id=\"question-q-ttl\""), "{html}");
@@ -1102,7 +1343,10 @@ mod tests {
         // task graph: a "Phase dependencies" heading, phase nodes linking to
         // both phases' anchors.
         assert!(html.contains("Phase dependencies"), "{html}");
-        assert!(html.contains("class=\"node phase-node\""), "{html}");
+        assert!(
+            html.contains("class=\"node-group phase-node status-"),
+            "{html}"
+        );
         assert!(html.contains("href=\"#phase-p-core\""), "{html}");
         assert!(html.contains("href=\"#phase-p-backend\""), "{html}");
 
@@ -1131,12 +1375,21 @@ mod tests {
         // embedded <style> block's rules regardless of whether they're used).
         assert!(!html.contains("<ul class=\"summary-keypoints\">"), "{html}");
         assert!(!html.contains("<p class=\"summary-outofscope\">"), "{html}");
-        assert!(
-            html.contains(
-                "<p class=\"summary-ask\">No blocking questions — plan is ready to review and approve.</p>"
-            ),
-            "{html}"
-        );
+        assert!(html.contains("No blocking questions</span>"), "{html}");
+        // A plan with no risks and no questions emits neither of those stat
+        // cells — a hollow "0" would imply the author cleared them.
+        assert!(!html.contains("Risks</span>"), "{html}");
+        assert!(!html.contains("Questions</span>"), "{html}");
+        assert_eq!(html.matches("class=\"pv-stat-n\"").count(), 2, "{html}");
+        // Nothing has started, so the banner says so rather than narrating
+        // progress that does not exist.
+        assert!(html.contains("nothing is built yet."), "{html}");
+        // No task here carries an estimate or a risk rating, so the ledger is
+        // one column: an `Est · risk` header over a stack of empty cells reads
+        // as a rendering failure, not as "not stated".
+        assert!(html.contains("<table class=\"pv-ledger\">"), "{html}");
+        assert!(!html.contains("Est · risk"), "{html}");
+        assert!(!html.contains("pv-ledger-fig\">"), "{html}");
     }
 
     #[test]

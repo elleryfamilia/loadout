@@ -154,13 +154,13 @@ fn plan_preview_reference_json_examples_are_valid() {
     assert!(checked >= 1, "expected at least one loadout.plan/1 example");
 }
 
-/// The reference doc's `icon` vocabulary row must list every name the
-/// renderer actually knows, and nothing it doesn't — otherwise an agent
-/// reading the doc gets a menu that's out of sync with `unknown_icon`'s real
-/// hint. This is the doc-honesty guard task 18c's icon vocabulary work asked
-/// for: every name in the doc's row resolves via `icon_svg`.
+/// The reference doc's `icon` vocabulary row must list every name `validate`
+/// actually accepts, and nothing it doesn't — otherwise an agent reading the
+/// doc gets a menu that's out of sync with `unknown_icon`'s real hint. The
+/// page draws no glyphs any more, so this checks the doc against the NAME
+/// vocabulary rather than against files on disk.
 #[test]
-fn plan_preview_reference_icon_vocabulary_matches_the_vendored_set() {
+fn plan_preview_reference_icon_vocabulary_matches_the_accepted_set() {
     let path = format!(
         "{}/skills/loadout-plan-preview/reference.md",
         env!("CARGO_MANIFEST_DIR")
@@ -196,12 +196,12 @@ fn plan_preview_reference_icon_vocabulary_matches_the_vendored_set() {
     );
     for name in &names {
         assert!(
-            loadout::plan::icons::icon_svg(name).is_some(),
-            "reference.md lists icon `{name}` but icon_svg has no matching vendored file"
+            loadout::plan::icons::is_icon_name(name),
+            "reference.md lists icon `{name}`, which `validate` would reject"
         );
     }
-    // And the reverse: every real vendored icon is documented, so the doc
-    // never falls behind the vocabulary the renderer actually accepts.
+    // And the reverse: every accepted name is documented, so the doc never
+    // falls behind the vocabulary `validate` really takes.
     for name in loadout::plan::icons::icon_names() {
         assert!(
             names.contains(name),

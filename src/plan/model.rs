@@ -74,10 +74,10 @@ pub struct Meta {
 pub struct Phase {
     pub id: String,
     pub title: String,
-    /// A name from `plan::icons::icon_names()`, shown before the title in
-    /// the phase's summary line. Optional — omit rather than force one on
-    /// every phase; `validate()` rejects a name outside the vocabulary
-    /// (`unknown_icon`).
+    /// A name from `plan::icons::icon_names()`. Validated, then ignored: the
+    /// redesigned viewer draws no glyphs (see `plan::icons`), and this is
+    /// kept so an existing `plan.json` that sets it still parses. Optional —
+    /// `validate()` rejects a name outside the vocabulary (`unknown_icon`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -702,12 +702,14 @@ pub fn validate(plan: &Plan) -> Vec<Issue> {
         }
     };
 
-    // Icons are validated against the closed vendored vocabulary (see
-    // `plan::icons`), not the id-syntax/uniqueness rules `check_id` covers —
-    // a separate closure so the hint (naming every valid icon) doesn't leak
-    // into `check_id`'s.
+    // Icons are validated against the closed vocabulary (see `plan::icons`),
+    // not the id-syntax/uniqueness rules `check_id` covers — a separate
+    // closure so the hint (naming every valid icon) doesn't leak into
+    // `check_id`'s. The renderer draws nothing for these; the check stays so
+    // an existing plan.json keeps validating and the field can never become
+    // free text.
     let check_icon = |icon: &str, path: String, errs: &mut Vec<Issue>| {
-        if !crate::plan::icons::icon_names().contains(&icon) {
+        if !crate::plan::icons::is_icon_name(icon) {
             let mut e = Issue::new(path, "unknown_icon", format!("unknown icon `{icon}`"));
             e.hint = Some(format!(
                 "known icons: {}",

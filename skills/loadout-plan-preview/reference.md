@@ -84,9 +84,13 @@ Exact serde spellings — lowercase / snake_case, used verbatim in JSON:
 | file `action` | `create` \| `modify` \| `delete` \| `test` |
 | `icon` (phase/task field) | `book-open` \| `bug` \| `database` \| `file-text` \| `flask-conical` \| `git-branch` \| `globe` \| `layout-dashboard` \| `package` \| `paintbrush` \| `rocket` \| `search` \| `shield` \| `terminal` \| `wrench` \| `zap` |
 
-`icon` is a vendored Lucide icon name, not free text — a value outside this
-list is a hard error (`unknown_icon`) naming every valid icon. Set icons on
-phases and optionally on notable tasks; omit rather than repeat.
+`icon` is one of these fixed names, not free text — a value outside this
+list is a hard error (`unknown_icon`) naming every valid icon.
+
+**The rendered page does not draw icons.** The viewer carries hierarchy with
+type, rules, and colour instead of glyphs. The field is still accepted so
+existing plans keep validating, but setting it has no visible effect — there
+is no reason to spend a field on it in a new plan.
 
 ## Fields
 
@@ -148,7 +152,7 @@ their time. Write for both readers at once:
 |-------|------|----------|-------|
 | `id` | string | yes | id rule |
 | `title` | string | yes | |
-| `icon` | string | no | vendored Lucide icon name — see Enums; shown before the title in the phase's summary line |
+| `icon` | string | no | accepted but not rendered — see Enums |
 | `summary_md` | string | no | markdown |
 | `tasks` | array\<PlanTask\> | no (default `[]`) | |
 
@@ -158,7 +162,7 @@ their time. Write for both readers at once:
 |-------|------|----------|-------|
 | `id` | string | yes | id rule; referenced by other tasks' `depends_on` |
 | `title` | string | yes | |
-| `icon` | string | no | vendored Lucide icon name — see Enums; reserve for notable tasks |
+| `icon` | string | no | accepted but not rendered — see Enums |
 | `summary_md` | string | no | markdown |
 | `status` | enum | no (default `planned`) | see Enums |
 | `risk` | enum | no | see Enums |

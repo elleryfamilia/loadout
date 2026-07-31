@@ -8,6 +8,43 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Changed
+
+- **The plan viewer is redesigned as an editorial document.** `load plan
+  render` now sets the page in two embedded typefaces — Newsreader for
+  anything you read as prose, JetBrains Mono for anything the page says
+  *about* that prose (labels, counts, ids, statuses) — and carries hierarchy
+  with type, rules and colour instead of icons. Both typefaces are
+  base64-embedded, so the page stays self-contained and works offline
+  exactly as it does online. A theme control in the top bar offers
+  **System** (the default, and it follows an OS switch while the page is
+  open), Light, and Dark.
+- **Spacing runs on a named rhythm** rather than per-component values, so
+  plans of very different shapes read as the same document: sections, blocks
+  and rows each have one spacing token. Every Comment and Mark-reviewed
+  control on the page now lines up on a single vertical line, whether it
+  belongs to a phase or a task.
+- `Phase.icon` and `PlanTask.icon` are **still accepted and still validated**
+  against the same 16-name vocabulary, so existing `plan.json` files keep
+  working — the redesigned page just doesn't draw them.
+
+### Fixed
+
+- Comment editors were a fraction of their container: the textarea sat at
+  its intrinsic width (about 204px) regardless of the space available, and
+  an editor opened on an acceptance criterion was 28px wide. Editors now
+  fill their box at the page's reading measure.
+- Hovering a Comment or Answer button made its label vanish — a CSS
+  specificity collision painted accent-coloured text on the accent
+  background.
+- Dependency-graph arrowheads did not render in dark mode, and every graph
+  on a page emitted the same element id.
+- The summary's phase ledger dropped its `Est · risk` column when no task in
+  the plan carries an estimate or a risk rating, instead of showing that
+  header over a column of empty cells.
+
 ## 0.18.0 — 2026-07-16
 
 ### Added

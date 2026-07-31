@@ -25,19 +25,31 @@ struct GraphStyle {
 
 const TASK_STYLE: GraphStyle = GraphStyle {
     node_w: 200,
-    node_h: 48,
+    node_h: 54,
     gap: 32,
-    corner_radius: 6,
+    corner_radius: 4,
     line_max_chars: 26,
 };
 
 const PHASE_STYLE: GraphStyle = GraphStyle {
     node_w: 240,
-    node_h: 52,
+    node_h: 56,
     gap: 32,
-    corner_radius: 8,
+    corner_radius: 4,
     line_max_chars: 32,
 };
+
+/// Width of the status stripe down a node's left edge. Deliberately drawn as a
+/// square-cornered rect over the node's rounded one: at 3px the overhang into
+/// the corner radius is invisible, and a rounded stripe reads as a second
+/// shape rather than an edge of the first.
+const STRIPE_W: i64 = 3;
+
+/// Arrowhead geometry: length back from the tip, and half its width at the
+/// base. Sized to read at the graph's natural scale without crowding the
+/// 32px gap between columns.
+const ARROW_LEN: i64 = 7;
+const ARROW_HALF: i64 = 4;
 
 struct Node {
     id: String,
@@ -145,16 +157,34 @@ fn task_node(plan: &Plan, id: &str, stub: bool) -> Node {
     }
 }
 
-/// A phase's node for the phase-level graph: `has-high` marks a phase that
-/// contains at least one high-risk task, so the overview surfaces heat
-/// without drawing every task.
+/// A phase's node for the phase-level graph. Its stripe rolls its tasks up
+/// into one status — finished, under way, or not started — so the overview
+/// shows progress without drawing every task. `has-high` marks a phase
+/// containing at least one high-risk task and overrides that stripe (the
+/// stylesheet orders it last), because heat is what a reviewer must not miss.
 fn phase_node(phase: &Phase) -> Node {
-    let has_high = phase
+    let done = phase
         .tasks
         .iter()
-        .any(|t| matches!(t.risk, Some(RiskLevel::High)));
-    let mut class = String::from("phase-node");
-    if has_high {
+        .filter(|t| matches!(t.status, Status::Done))
+        .count();
+    let started = phase
+        .tasks
+        .iter()
+        .any(|t| matches!(t.status, Status::Done | Status::InProgress));
+    let rollup = if !phase.tasks.is_empty() && done == phase.tasks.len() {
+        "status-done"
+    } else if started {
+        "status-in_progress"
+    } else {
+        "status-planned"
+    };
+    let mut class = format!("phase-node {rollup}");
+    if phase
+        .tasks
+        .iter()
+        .any(|t| matches!(t.risk, Some(RiskLevel::High)))
+    {
         class.push_str(" has-high");
     }
     Node {
@@ -275,11 +305,6 @@ fn render_graph(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {svg_w} {svg_h}\" \
          width=\"{svg_w}\" height=\"{svg_h}\" class=\"plan-graph\">",
     ));
-    out.push_str(
-        "<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" \
-         markerWidth=\"6\" markerHeight=\"6\" orient=\"auto-start-reverse\">\
-         <path d=\"M 0 0 L 10 5 L 0 10 z\"/></marker></defs>",
-    );
 
     // Edges ordered by (column of source, id of source, id of target) so
     // that iterating `edges` directly (already insertion order from the
@@ -302,27 +327,35 @@ fn render_graph(
     for id in ordered_ids {
         let node = &nodes[id];
         let (x, y) = pos[id];
-        let mut class = String::from("node");
+        // State classes go on the <a>, not on the rect: the node is drawn as
+        // two shapes (the card and its status stripe) plus a label, and all
+        // three need to be selectable from one state. `plan.css` reads them as
+        // `.status-done .node-stripe`, `.stub .node`, and so on.
+        let mut group_class = String::from("node-group");
         if !node.class.is_empty() {
-            class.push(' ');
-            class.push_str(&node.class);
+            group_class.push(' ');
+            group_class.push_str(&node.class);
         }
         out.push_str(&format!(
-            "<a href=\"#{}-{}\">",
+            "<a href=\"#{}-{}\" class=\"{}\">",
             node.href_prefix,
-            esc(&node.id)
+            esc(&node.id),
+            esc(&group_class)
         ));
         // Full title as a native tooltip — hovering any part of the node
         // (rect or label) recovers whatever the two-line budget clipped.
         out.push_str(&format!("<title>{}</title>", esc(&node.title)));
         out.push_str(&format!(
-            "<rect class=\"{}\" x=\"{x}\" y=\"{y}\" width=\"{}\" height=\"{}\" rx=\"{}\"/>",
-            esc(&class),
-            style.node_w,
-            style.node_h,
-            style.corner_radius
+            "<rect class=\"node\" x=\"{x}\" y=\"{y}\" width=\"{}\" height=\"{}\" rx=\"{}\"/>",
+            style.node_w, style.node_h, style.corner_radius
         ));
-        let tx = x + style.node_w / 2;
+        out.push_str(&format!(
+            "<rect class=\"node-stripe\" x=\"{x}\" y=\"{y}\" width=\"{STRIPE_W}\" height=\"{}\"/>",
+            style.node_h
+        ));
+        // Labels sit right of the stripe rather than centred on the whole
+        // card, so a one-line and a two-line node start on the same x.
+        let tx = x + STRIPE_W + (style.node_w - STRIPE_W) / 2;
         let ty = y + style.node_h / 2;
         let lines = wrap_title(&node.title, style.line_max_chars);
         match lines.as_slice() {
@@ -330,7 +363,7 @@ fn render_graph(
             [first, second, ..] => out.push_str(&format!(
                 "<text x=\"{tx}\" y=\"{ty}\">\
                  <tspan x=\"{tx}\" dy=\"-7\">{}</tspan>\
-                 <tspan x=\"{tx}\" dy=\"14\">{}</tspan></text>",
+                 <tspan x=\"{tx}\" dy=\"15\">{}</tspan></text>",
                 esc(first),
                 esc(second)
             )),
@@ -347,6 +380,20 @@ fn render_graph(
 /// horizontal out of the source, vertical across, horizontal into the
 /// target. Replaces a straight diagonal `<line>` so edges never visually
 /// cross a node they don't touch as readily as a direct line would.
+///
+/// Two nodes on the same row get a plain horizontal run instead of the elbow,
+/// which keeps the path free of a zero-length vertical segment.
+///
+/// The arrowhead is a real `<path>` in the graph's own content rather than an
+/// SVG `<marker>`. Markers are referenced resources: Blink renders them
+/// through a cache that did not pick up the theme's `var(--muted)` under
+/// `prefers-color-scheme: dark`, so the heads painted in light mode and
+/// vanished in dark. Drawing the triangle directly also drops the `<defs>`
+/// block every graph on the page used to emit under the same `id="arrow"` —
+/// duplicate ids across several SVG roots in one document.
+///
+/// Every edge enters its target horizontally from the left, so the head is
+/// always the same right-pointing triangle; no rotation is involved.
 fn edge_path(from: (i64, i64), to: (i64, i64), style: &GraphStyle) -> String {
     let (x1, y1) = from;
     let (x2, y2) = to;
@@ -354,9 +401,19 @@ fn edge_path(from: (i64, i64), to: (i64, i64), style: &GraphStyle) -> String {
     let sy = y1 + style.node_h / 2;
     let tx = x2;
     let ty = y2 + style.node_h / 2;
-    let midx = (sx + tx) / 2;
+    let d = if sy == ty {
+        format!("M {sx} {sy} H {tx}")
+    } else {
+        let midx = (sx + tx) / 2;
+        format!("M {sx} {sy} H {midx} V {ty} H {tx}")
+    };
     format!(
-        "<path class=\"edge\" d=\"M {sx} {sy} H {midx} V {ty} H {tx}\" marker-end=\"url(#arrow)\"/>",
+        "<path class=\"edge\" d=\"{d}\"/>\
+         <path class=\"arrow-head\" d=\"M {tx} {ty} L {} {} L {} {} z\"/>",
+        tx - ARROW_LEN,
+        ty - ARROW_HALF,
+        tx - ARROW_LEN,
+        ty + ARROW_HALF,
     )
 }
 
@@ -446,8 +503,10 @@ mod tests {
     fn cross_phase_dependency_appears_as_stub() {
         let p = kitchen();
         let backend = phase_svg(&p, "p-backend").unwrap();
-        // t-redis depends on t-session-store, which lives in p-core.
-        assert!(backend.contains("class=\"node stub"), "{backend}");
+        // t-redis depends on t-session-store, which lives in p-core. State
+        // classes live on the <a> group, not the rect: a node is drawn as a
+        // card plus a status stripe plus a label, all styled from one state.
+        assert!(backend.contains("class=\"node-group stub"), "{backend}");
         assert!(backend.contains("t-session-store"));
     }
 
@@ -543,7 +602,12 @@ mod tests {
         // t-redis (p-backend) depends_on t-session-store (p-core): exactly
         // one collapsed cross-phase edge, so exactly one edge path.
         assert_eq!(svg.matches("<path class=\"edge\"").count(), 1);
-        assert!(svg.contains("class=\"node phase-node\""));
+        assert!(svg.contains("class=\"node-group phase-node status-"));
+        // Exactly one arrowhead per edge, drawn inline rather than via an
+        // SVG <marker> (see edge_path) -- so no graph emits a <defs> block,
+        // and several graphs on one page can no longer collide on one id.
+        assert_eq!(svg.matches("class=\"arrow-head\"").count(), 1);
+        assert!(!svg.contains("<defs"), "no marker defs: {svg}");
     }
 
     #[test]
