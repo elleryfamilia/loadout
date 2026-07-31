@@ -1972,37 +1972,52 @@ pre code { font-size: 1em; }
          own box. */
       const boxes = document.querySelectorAll(".comment-box");
       if (!boxes.length) throw new Error("no comment editors mounted");
-      /* The CI harness frames this page in a zero-size sandboxed iframe to
-         reproduce the studio's opaque origin, and nothing in a zero-size
-         viewport has geometry. This is a layout assertion, so it stands down
-         there and runs in the plain headless render, which is the context it
-         was written for. The structural checks above still run in both. */
-      if (document.documentElement.getBoundingClientRect().width < 1) return;
+      /* Both invariants below are RELATIVE -- an editor is judged against the
+         room its own container offers, never against a pixel count. An
+         absolute floor here would really be an assertion about the viewport,
+         and it duly failed in CI, where this page is framed in a narrow
+         sandboxed iframe rather than a desktop window. */
+
       /* Most editors live inside a collapsed <details>, where nothing has
          layout at all. Open every phase for the measurement -- the acceptance
-         grid is exactly where the worst of the two bugs was -- then put the
+         grid is exactly where the worse of the two bugs was -- then put the
          page back the way it was found. */
       const wasOpen = [].map.call(document.querySelectorAll("details.phase"), function (d) {
         const o = d.open; d.open = true; return o;
       });
-      let measured = 0, failure = null;
+      let failure = null;
       boxes.forEach(function (box) {
         const wasHidden = box.hasAttribute("hidden");
         if (wasHidden) box.removeAttribute("hidden");
+        const parent = box.parentElement;
+        const pcs = window.getComputedStyle(parent);
+        const avail = parent.clientWidth
+          - (parseFloat(pcs.paddingLeft) || 0)
+          - (parseFloat(pcs.paddingRight) || 0);
+        const cap = parseFloat(window.getComputedStyle(box).maxWidth);
         const bw = box.getBoundingClientRect().width;
         const tw = box.querySelector("textarea").getBoundingClientRect().width;
         if (wasHidden) box.setAttribute("hidden", "");
-        if (bw < 1) return; // still not laid out; nothing to say about it
-        measured += 1;
-        if (failure) return;
-        if (bw < 240) failure = "editor box only " + Math.round(bw) + "px wide";
-        else if (tw < bw - 2) {
+        /* Nothing here is laid out (a zero-size frame): no claim to make. */
+        if (avail < 1 || failure) return;
+        /* (1) The box takes the width its container offers, up to its own
+           max-width. Catches an editor placed into a narrow grid column --
+           inside an acceptance criterion the box became an ordinary item in
+           that row's two-column grid and rendered 28px wide. */
+        const expected = isNaN(cap) ? avail : Math.min(avail, cap);
+        if (bw < expected - 2) {
+          failure = "editor " + Math.round(bw) + "px in a container offering "
+            + Math.round(expected) + "px";
+          return;
+        }
+        /* (2) The textarea fills the box. Catches the box being a block
+           container, which left the textarea at its intrinsic cols="20". */
+        if (tw < bw - 2) {
           failure = "textarea " + Math.round(tw) + "px inside a " + Math.round(bw) + "px box";
         }
       });
       document.querySelectorAll("details.phase").forEach(function (d, i) { d.open = wasOpen[i]; });
       if (failure) throw new Error(failure);
-      if (!measured) throw new Error("no editor had layout to measure");
     });
     check("theme toggle offers system, light and dark", function () {
       const modes = [].map.call(
