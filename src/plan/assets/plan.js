@@ -67,6 +67,13 @@
         }
       ));
     }
+    /* Build the real page first. The harness used to run INSTEAD of init(),
+       which kept it honest about the pure core but blind to everything the
+       page actually mounts -- the theme toggle, the comment editors, the
+       reviewed toggles. Running init() here means a throw during mount is a
+       reported failure rather than a silent one, and lets the checks below
+       measure the live DOM. Everything after this point may assume it ran. */
+    check("page initialises", function () { init(); });
     check("island parses", function () {
       const plan = core.parseIsland(document.getElementById("plan-data").textContent);
       if (!plan.meta || !plan.meta.id) throw new Error("no meta.id");
@@ -92,6 +99,67 @@
          swallow that and hand back an empty array, not break the page. */
       const drafts = loadDrafts("selftest-plan", "selftest-fp");
       if (!Array.isArray(drafts)) throw new Error("loadDrafts must return an array");
+    });
+    check("comment editor fills its box", function () {
+      /* Regression: .comment-box was a block container, so the textarea sat
+         at its intrinsic cols="20" (~205px) however wide the box was; and
+         inside an acceptance <li> (a two-column grid) the box was placed in
+         the 1.75rem counter column, ~28px wide. Both looked like styling
+         nobody had finished. Assert every editor is at least most of its
+         own box. */
+      const boxes = document.querySelectorAll(".comment-box");
+      if (!boxes.length) throw new Error("no comment editors mounted");
+      /* The CI harness frames this page in a zero-size sandboxed iframe to
+         reproduce the studio's opaque origin, and nothing in a zero-size
+         viewport has geometry. This is a layout assertion, so it stands down
+         there and runs in the plain headless render, which is the context it
+         was written for. The structural checks above still run in both. */
+      if (document.documentElement.getBoundingClientRect().width < 1) return;
+      /* Most editors live inside a collapsed <details>, where nothing has
+         layout at all. Open every phase for the measurement -- the acceptance
+         grid is exactly where the worst of the two bugs was -- then put the
+         page back the way it was found. */
+      const wasOpen = [].map.call(document.querySelectorAll("details.phase"), function (d) {
+        const o = d.open; d.open = true; return o;
+      });
+      let measured = 0, failure = null;
+      boxes.forEach(function (box) {
+        const wasHidden = box.hasAttribute("hidden");
+        if (wasHidden) box.removeAttribute("hidden");
+        const bw = box.getBoundingClientRect().width;
+        const tw = box.querySelector("textarea").getBoundingClientRect().width;
+        if (wasHidden) box.setAttribute("hidden", "");
+        if (bw < 1) return; // still not laid out; nothing to say about it
+        measured += 1;
+        if (failure) return;
+        if (bw < 240) failure = "editor box only " + Math.round(bw) + "px wide";
+        else if (tw < bw - 2) {
+          failure = "textarea " + Math.round(tw) + "px inside a " + Math.round(bw) + "px box";
+        }
+      });
+      document.querySelectorAll("details.phase").forEach(function (d, i) { d.open = wasOpen[i]; });
+      if (failure) throw new Error(failure);
+      if (!measured) throw new Error("no editor had layout to measure");
+    });
+    check("theme toggle offers system, light and dark", function () {
+      const modes = [].map.call(
+        document.querySelectorAll("[data-theme-set]"),
+        function (b) { return b.getAttribute("data-theme-set"); }
+      );
+      if (modes.join("|") !== "|light|dark") throw new Error("modes were " + modes.join("|"));
+      /* System must be reachable AGAIN after an override, or "follow the OS"
+         is a state a reader can only ever leave. */
+      applyTheme("dark", false);
+      if (document.documentElement.getAttribute("data-theme") !== "dark") {
+        throw new Error("dark did not apply");
+      }
+      applyTheme("", false);
+      if (document.documentElement.getAttribute("data-theme")) {
+        throw new Error("system did not clear the override");
+      }
+      if (document.querySelector('[data-theme-set=""]').getAttribute("aria-pressed") !== "true") {
+        throw new Error("system not marked pressed");
+      }
     });
     if (location.protocol !== "file:" || window.parent !== window) {
       /* Non-plain-file contexts only — a real http(s) serving, or the CI
@@ -182,22 +250,39 @@
 
   /* ---- theme --------------------------------------------------------
 
-     The page follows the OS by default; the toggle records an explicit
-     override on <html data-theme>, which plan.css ranks above its
-     prefers-color-scheme block. The choice is per-plan-viewer, not
-     per-plan, so it lives under one fixed key and carries across every
-     rendered plan a reader opens.
+     Three states, and System is the default: with no explicit choice the
+     page carries no data-theme attribute at all, so plan.css's
+     prefers-color-scheme block decides and the page simply IS whatever the
+     OS is set to -- including when the OS flips while the page is open
+     (see the matchMedia listener below; the colours change on their own,
+     only the toggle's highlight needs telling).
+
+     Light and Dark record an override on <html data-theme>, which plan.css
+     ranks above its prefers-color-scheme block in both directions. System
+     is not the absence of a choice in the UI -- it is a choice a reader can
+     come BACK to, which is the whole reason it is a button rather than just
+     the initial state.
+
+     The choice is per-plan-viewer, not per-plan, so it lives under one
+     fixed key and carries across every rendered plan a reader opens.
 
      Storage is best-effort throughout: a file:// document in some browsers
      has an opaque origin where localStorage throws on access, and a theme
      toggle is not worth breaking the page over. */
   const THEME_KEY = "loadout-plan:theme";
 
+  /* The explicit override, or "" for System. Note the return is the stored
+     MODE, not the colour being shown -- with System selected those differ,
+     and it is the mode the toggle highlights. */
   function storedTheme() {
     try {
       const v = window.localStorage.getItem(THEME_KEY);
-      return v === "light" || v === "dark" ? v : null;
-    } catch (e) { return null; }
+      return v === "light" || v === "dark" ? v : "";
+    } catch (e) { return ""; }
+  }
+
+  function darkMedia() {
+    return window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
   }
 
   function applyTheme(mode, animate) {
@@ -216,20 +301,28 @@
       root.removeAttribute("data-theme");
       try { window.localStorage.removeItem(THEME_KEY); } catch (e) { /* see above */ }
     }
+    syncToggle();
+  }
+
+  /* Highlight the button for the selected MODE (System included), and tell
+     the System button which way it currently resolves -- that is the one
+     thing a reader cannot otherwise read off the control. */
+  function syncToggle() {
+    const mode = document.documentElement.getAttribute("data-theme") || "";
     document.querySelectorAll("[data-theme-set]").forEach(function (b) {
-      b.setAttribute("aria-pressed", String(b.getAttribute("data-theme-set") === current()));
+      b.setAttribute("aria-pressed", String(b.getAttribute("data-theme-set") === mode));
     });
+    const sys = document.querySelector('[data-theme-set=""]');
+    if (sys) sys.setAttribute("title", "Follow the system setting (currently " + current() + ")");
   }
 
   /* What the page is actually showing right now -- the explicit override if
-     there is one, else whatever the OS is asking for. The toggle needs this
-     to light the correct half of the control on load. */
+     there is one, else whatever the OS is asking for. */
   function current() {
     const explicit = document.documentElement.getAttribute("data-theme");
     if (explicit) return explicit;
-    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
+    const mq = darkMedia();
+    return mq && mq.matches ? "dark" : "light";
   }
 
   function mountThemeToggle() {
@@ -239,16 +332,31 @@
     group.className = "pv-theme";
     group.setAttribute("role", "group");
     group.setAttribute("aria-label", "Colour theme");
-    ["light", "dark"].forEach(function (mode) {
+    [["", "System"], ["light", "Light"], ["dark", "Dark"]].forEach(function (pair) {
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.setAttribute("data-theme-set", mode);
-      btn.textContent = mode === "light" ? "Light" : "Dark";
-      btn.addEventListener("click", function () { applyTheme(mode, true); });
+      btn.setAttribute("data-theme-set", pair[0]);
+      btn.textContent = pair[1];
+      btn.addEventListener("click", function () { applyTheme(pair[0], true); });
       group.appendChild(btn);
     });
     host.appendChild(group);
     applyTheme(storedTheme(), false);
+
+    /* Follow the OS live while System is selected. The CSS repaints itself
+       -- this listener exists only so the System button's tooltip and the
+       highlight stay truthful, and so the change reads as deliberate rather
+       than as the page flickering. */
+    const mq = darkMedia();
+    if (mq && mq.addEventListener) {
+      mq.addEventListener("change", function () {
+        if (document.documentElement.getAttribute("data-theme")) return;
+        const root = document.documentElement;
+        root.classList.add("theme-anim");
+        window.setTimeout(function () { root.classList.remove("theme-anim"); }, 260);
+        syncToggle();
+      });
+    }
   }
 
   /* ---- reading chrome -----------------------------------------------

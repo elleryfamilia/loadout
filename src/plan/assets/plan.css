@@ -829,10 +829,18 @@ code {
    would squeeze the prose under ~50ch, so the zones stack instead. */
 @media (min-width: 62rem) {
   .summary-grid {
-    grid-template-columns: minmax(0, 64ch) 19rem;
+    /* 20rem, not 19: the widest figure a phase can report is a full estimate
+       spread plus a risk count ("1s · 1m · 1 medium"), and at 19rem that ran
+       into the phase name beside it. */
+    grid-template-columns: minmax(0, 64ch) 20rem;
     justify-content: space-between;
     gap: 3.5rem;
   }
+
+  /* Line the ledger's header up with the first line of the prose beside it,
+     rather than with the top of the prose's line BOX -- the two columns then
+     start on the same optical line instead of a few pixels apart. */
+  .summary-glance { padding-top: 0.375rem; }
 }
 
 .summary-exec {
@@ -913,18 +921,28 @@ code {
 
 /* --- the phase ledger --------------------------------------------------- */
 
-/* A table set as a ledger: heavy rule above the header, hairlines between
+/* A table set as a ledger: a column header over a rule, hairlines between
    rows, nothing vertical. Reads as a financial statement, which is roughly
-   what it is. */
+   what it is.
+
+   It opens on its HEADER, not on a rule above it. A heavy top rule is the
+   ledger convention, but here it put a 2px band of full-strength ink a few
+   pixels below the Summary section's hairline -- two horizontal rules at
+   opposite weights, close together, neither aligned to the other, and in
+   dark mode the brightest thing on the page by a distance. Opening on the
+   header instead makes the ledger's first ink a mono label over a rule,
+   which is the same grammar every section on the page opens with. */
 .pv-ledger {
   width: 100%;
   border-collapse: collapse;
-  border-top: 2px solid var(--ink);
 }
 
+/* The header's rule is the ledger's one structural line, so it is a step
+   darker than the hairlines between rows -- same relationship the section
+   rules have to the rules inside a task. */
 .pv-ledger th {
-  padding: 0.625rem 0 0.625rem;
-  border-bottom: 1px solid var(--rule);
+  padding: 0 0 0.625rem;
+  border-bottom: 1px solid var(--ink-3);
   text-align: left;
   font-family: var(--font-mono);
   font-size: 0.656rem;
@@ -1524,14 +1542,23 @@ pre code { font-size: 1em; }
 .summary-exec > .comment-btn,
 .pv-row-body > .comment-btn { align-self: flex-start; margin-top: 0.25rem; }
 
-.task:hover .comment-btn,
-.pv-row:hover .comment-btn,
+/* Hovering the ROW reveals the button (accent text, transparent ground).
+   The ancestor selectors are wrapped in :where() so they contribute nothing
+   to specificity -- without that, `.pv-row:hover .comment-btn` (three
+   classes) outranks `.comment-btn:hover` (two) and wins the `color`
+   declaration, so hovering the button itself painted accent text on the
+   accent background the rule below sets: an orange button with its label
+   gone. Equal specificity now, and source order decides, which is what the
+   two rules were written to assume. */
+:where(.task:hover, .pv-row:hover) .comment-btn,
 .comment-btn:focus-visible,
-[data-plan-ref]:focus-within > .comment-btn {
+:where([data-plan-ref]:focus-within) > .comment-btn {
   color: var(--accent);
   border-color: var(--accent);
 }
 
+/* Hovering the BUTTON fills it: the label flips to the page colour so it
+   stays legible against the accent ground. */
 .comment-btn:hover {
   color: var(--accent-ink);
   background: var(--accent);
@@ -1560,25 +1587,57 @@ pre code { font-size: 1em; }
 /* The draft comment editor, and the saved drafts it produces, are both notes
    (see .pv-note) -- a reader's words sit in the page the same way an author's
    aside does. */
+/* A column, so the textarea, the blocking checkbox and the buttons stack
+   with real space between them -- and so the textarea STRETCHES. As a block
+   container this box left the textarea at its intrinsic cols="20" width,
+   about 205px inside a 530px box, which is what made the editors look
+   undersized however much room the box itself had.
+
+   Its measure is the page's reading measure, so a reply is exactly as wide
+   as the prose it replies to. */
 .comment-box {
-  margin: 0.5rem 0 0;
-  max-width: 34rem;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.625rem;
+  margin: 0.75rem 0 0;
+  width: 100%;
+  max-width: 70ch;
   animation: pv-rise var(--t-mid) var(--ease) both;
 }
 
+/* Beats the display:flex above on specificity, so the box still hides. */
 .comment-box[hidden] { display: none; }
 
 .comment-box textarea {
+  width: 100%;
   font-family: var(--font-serif);
   font-size: 1rem;
   line-height: 1.5;
   border: 1px solid var(--rule);
   border-radius: 3px;
-  padding: 0.5rem 0.625rem;
+  padding: 0.625rem 0.75rem;
   background: var(--page);
   color: var(--ink);
   resize: vertical;
-  min-height: 4.5rem;
+  /* Four lines rather than two: most feedback on a plan is a sentence or
+     three, and a box that has to be dragged before the second sentence is
+     visible discourages writing it. */
+  min-height: 7rem;
+}
+
+/* Neither of these should stretch to the textarea's width -- they are as
+   wide as their own content. */
+.comment-box > .comment-box-blocking,
+.comment-box > .comment-box-actions { align-self: flex-start; }
+
+/* An acceptance criterion is a two-column grid (counter, then text), and the
+   editor gets appended to the <li> itself -- so without this it is placed as
+   an ordinary grid item and lands in the 1.75rem counter column, 28px wide.
+   Span the row instead, under the criterion it belongs to. */
+.acceptance li > .comment-box {
+  grid-column: 1 / -1;
+  margin-bottom: 0.375rem;
 }
 
 .comment-box-blocking {
