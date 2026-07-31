@@ -201,15 +201,17 @@
   --t-fast: 110ms;
   --t-mid: 200ms;
   --t-slow: 380ms;
+  /* How long a phase takes to open or shut. A <details> element has no
+     motion of its own, so this one is driven from plan.js -- which reads
+     the value (and --ease) back off :root rather than carrying a number of
+     its own, so the page's motion budget stays declared here with the rest
+     of it. Short on purpose: long enough to show the page growing, short
+     enough that nobody waits for it. */
+  --t-disclose: 240ms;
 }
 
 @keyframes pv-rise {
   from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
-}
-
-@keyframes pv-reveal {
-  from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }
 }
 
@@ -1103,7 +1105,14 @@ details.phase > summary {
   gap: var(--numeral-gap);
   align-items: center;
   padding: var(--gap-row) 0;
-  transition: background var(--t-fast) var(--ease);
+  /* The bottom padding differs between the shut and open rows (see the
+     [open] rule below), so it has to travel over the same window the body
+     does. Left untransitioned it changed on the frame of the click, which
+     shunted everything below the phase 14px in the OPPOSITE direction to
+     the one the body was about to move it -- a jump introduced by the
+     animation, in the middle of the animation. */
+  transition: background var(--t-fast) var(--ease),
+              padding-bottom var(--t-disclose) var(--ease);
 }
 
 /* Wherever a task row HAS a rail (the same breakpoint, from the other side),
@@ -1130,10 +1139,23 @@ details.phase > summary {
 details.phase > summary:hover { background: var(--accent-wash); }
 
 /* Open phases give the numeral more room and top-align it with the title,
-   because the content below it is now several blocks tall. */
-details.phase[open] > summary {
+   because the content below it is now several blocks tall.
+
+   `.is-closing` is plan.js telling this stylesheet "the reader has clicked
+   this shut; it is only still `open` because its body is mid-animation".
+   The DOM has to keep the attribute for a few hundred milliseconds longer
+   (there would be nothing left on screen to shrink otherwise), but the row
+   itself must look shut from the click onwards, or the chevron and the
+   numeral would snap back after the movement instead of leading it. Every
+   [open] rule on the summary is excused for that window; the body's own
+   rules are not, since the body is what's animating. */
+details.phase[open]:not(.is-closing) > summary {
   align-items: start;
-  padding-bottom: 1.5rem;
+  /* Tighter than the shut row's, and deliberately: the summary's padding is
+     what the hover and :target bands are drawn to, so it should wrap the
+     summary's own content rather than stand in for the gap under it. The
+     body below owns that gap -- see its padding-top. */
+  padding-bottom: 0.75rem;
 }
 
 .phase-numeral {
@@ -1146,7 +1168,7 @@ details.phase[open] > summary {
   transition: font-size var(--t-mid) var(--ease), color var(--t-fast) var(--ease);
 }
 
-details.phase[open] > summary .phase-numeral { font-size: 3.5rem; }
+details.phase[open]:not(.is-closing) > summary .phase-numeral { font-size: 3.5rem; }
 details.phase > summary:hover .phase-numeral { color: var(--accent); }
 
 .phase-head {
@@ -1191,21 +1213,41 @@ details.phase > summary:hover .phase-numeral { color: var(--accent); }
   transition: transform var(--t-mid) var(--ease), color var(--t-fast) var(--ease);
 }
 
-details.phase[open] > summary .phase-marker { transform: rotate(90deg); }
+details.phase[open]:not(.is-closing) > summary .phase-marker { transform: rotate(90deg); }
 details.phase > summary:hover .phase-marker { color: var(--accent); }
 
-/* The expanded body, indented to sit under the phase's content column. Every
-   direct child rises in on open -- one short movement that shows where the new
-   content came from. */
+/* The expanded body, indented to sit under the phase's content column.
+
+   Its opening and closing movement is driven from plan.js, not from here --
+   a CSS animation cannot do the job. A shut <details> hides its body with
+   `content-visibility: hidden`, which skips the subtree's RENDERING but
+   leaves its animations on their original timeline, so a keyframe animation
+   declared here fires once when the page loads and never again when a phase
+   is actually opened. (This rule used to carry a `pv-reveal` fade for
+   exactly that reason and had quietly stopped running.) plan.js animates the
+   height, the bottom padding and the opacity together over --t-disclose.
+
+   It also sets `overflow: hidden` inline for the length of that animation
+   and clears it afterwards: the body is only ever a clipping box while it is
+   shorter than its own contents. Left on permanently it would crop focus
+   rings and anything else that legitimately paints past the edge. */
 details.phase > .phase-body {
   margin-left: calc(var(--numeral-col) + var(--numeral-gap));
+  /* The body opens with a section rule (Dependencies, or the first task's
+     heading), and every other rule on the page carries more space above its
+     label than below it -- that ratio is what makes a label read as heading
+     the thing under it rather than trailing the thing over it. Without this
+     the phase body started flush against the summary, so its first label was
+     the one exception: equidistant from the phase description above and the
+     graph below. A phase is one level down from a top-level section, so the
+     gap is a block's worth rather than a section's. */
+  padding-top: var(--gap-block);
   padding-bottom: 2.25rem;
-  animation: pv-reveal var(--t-slow) var(--ease) both;
 }
 
 @media (max-width: 46rem) {
   details.phase > summary { grid-template-columns: 3rem minmax(0, 1fr) auto; gap: 1rem; }
-  details.phase[open] > summary .phase-numeral { font-size: 2.25rem; }
+  details.phase[open]:not(.is-closing) > summary .phase-numeral { font-size: 2.25rem; }
   details.phase > .phase-body { margin-left: 0; }
 }
 
