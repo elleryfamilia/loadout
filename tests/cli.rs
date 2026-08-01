@@ -3693,27 +3693,6 @@ fn run_dry_run_is_side_effect_free_and_never_blocks() {
         .success();
 }
 
-#[test]
-fn hook_serve_fires_the_learn_trigger_check_and_stays_stdout_silent() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\n");
-    let payload = format!(
-        r#"{{ "workspace_roots": ["{}"] }}"#,
-        fx.repo_path().display()
-    );
-
-    fx.cmd()
-        .args(["--verbose", "hook", "cursor"])
-        .write_stdin(payload)
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty())
-        .stderr(predicate::str::contains(
-            "trigger (HookServe) skipped: NoActivation",
-        ));
-}
-
 // --- T19: `load learn on|off|status|reset` lifecycle ------------------------
 
 impl Fixture {

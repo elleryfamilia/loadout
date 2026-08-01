@@ -30,7 +30,6 @@ use crate::binding::SkillDecision;
 use crate::cli::{RunArgs, StudioArgs};
 use crate::context::Context;
 use crate::hash;
-use crate::learn::trigger::{maybe_spawn, Trigger};
 use crate::profile::LoadoutConfig;
 use crate::skills::{self, LinkState, SkillState};
 use crate::style::Painter;
@@ -302,14 +301,6 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         println!("{}", step(&p, p.cyan("↑"), "update", detail));
     }
     print_launch_step(&p, &program, &args.args);
-
-    // Fire the trigger fast path right before the launch `exec()`s away
-    // (unix) and replaces this process: `maybe_spawn` only ever waits on a
-    // millisecond-lived intermediate, and the double-spawn it performs
-    // reparents the real worker to init — so the worker survives the exec
-    // that's about to happen. Never blocks, never errors outward; a disabled/
-    // unactivated/off-interval machine pays only the cheap guard-chain checks.
-    maybe_spawn(&prep.config, Trigger::Run);
 
     launch(&program, &launch_args, &rendered_at, &rt.cwd, &extra_env)
 }

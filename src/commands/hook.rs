@@ -26,8 +26,7 @@ use super::apply::{self, sync_before_render};
 use super::{prepare_live, Runtime};
 use crate::adapters::{self, ApplyOptions, HookRegistry};
 use crate::cli::HookArgs;
-use crate::config::{self, Config};
-use crate::learn::trigger::{maybe_spawn, Trigger};
+use crate::config;
 
 /// Debounce window per repo. Cursor fires more than one session event on a
 /// single window open (verified live: two ~5s apart); only the first should
@@ -71,13 +70,13 @@ pub fn run(rt: &Runtime, args: &HookArgs) -> crate::Result<()> {
     if args.remove {
         return remove(&hr, rt.dry_run);
     }
-    serve(&id, hr.auto_adopt, rt.dry_run, &cfg);
+    serve(&id, hr.auto_adopt, rt.dry_run);
     Ok(())
 }
 
 /// Serve mode: refresh (and possibly adopt) the workspace roots from the
 /// stdin payload. Infallible by design — every failure is swallowed.
-fn serve(agent: &str, auto_adopt: bool, dry_run: bool, cfg: &Config) {
+fn serve(agent: &str, auto_adopt: bool, dry_run: bool) {
     // Nothing may reach stdout (the agent parses it as the hook response) and
     // warnings would only confuse a machine caller.
     crate::report::set_quiet_warnings(true);
@@ -87,12 +86,6 @@ fn serve(agent: &str, auto_adopt: bool, dry_run: bool, cfg: &Config) {
     for root in workspace_roots(&payload) {
         refresh_root(&root, agent, auto_adopt, dry_run);
     }
-    // Trigger fast path — still stdout-silent (never blocks, never errors
-    // outward, and prints nothing: the guard chain's diagnostics are `vlog!`
-    // only). `cfg` is the config loaded at this hook invocation's own cwd;
-    // `[learn]` is global-only (a repo layer can't override it), so it's the
-    // same value regardless of which workspace root(s) were just refreshed.
-    maybe_spawn(cfg, Trigger::HookServe);
 }
 
 /// The `workspace_roots` array of the hook payload; empty on any mismatch.

@@ -26,7 +26,6 @@ use crate::config::{self, Config};
 use crate::context;
 use crate::dynamic::DynamicMode;
 use crate::fragment::{palette, Layer};
-use crate::learn::trigger::{maybe_spawn, Trigger};
 use crate::pack::Pack;
 use crate::profile::LoadoutConfig;
 use crate::studio::assets;
@@ -2065,9 +2064,6 @@ pub fn serve(rt: &Runtime, args: &StudioArgs) -> crate::Result<()> {
     for note in crate::adapters::bootstrap_hook_registrations(&config, learn_active, rt.dry_run) {
         println!("load studio → {note}");
     }
-    // Trigger fast path: never blocks, never errors outward — a disabled/
-    // unactivated machine pays only the cheap guard-chain checks.
-    maybe_spawn(&config, Trigger::Studio);
     let base_context = context::detect_context(&rt.cwd, &config).context("detecting context")?;
     let global_dir = config::global_config_dir();
     let session = Session::open(&repo_base, global_dir.as_deref())?;
