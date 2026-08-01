@@ -44,10 +44,7 @@ pub fn run(rt: &super::Runtime, args: &SyncArgs) -> Result<()> {
     if result.is_ok() {
         let repo_base = crate::context::repo_base_for(&rt.cwd);
         if let Ok(config) = crate::config::Config::load(&repo_base) {
-            let learn_active = crate::learn::state::learn_active(&config);
-            for note in
-                crate::adapters::bootstrap_hook_registrations(&config, learn_active, rt.dry_run)
-            {
+            for note in crate::adapters::bootstrap_hook_registrations(&config, rt.dry_run) {
                 println!("{} {}", p.green("✓"), p.dim(&note));
             }
         }
