@@ -21,9 +21,7 @@ use std::process::Command;
 
 use anyhow::anyhow;
 
-use super::apply::{
-    apply_for_agents, learn_pending_count, print_sync_step, step, sync_before_render,
-};
+use super::apply::{apply_for_agents, print_sync_step, step, sync_before_render};
 use super::{
     now_rfc3339, prepare_with_live, Aborted, Choice, MissingPolicy, ProfileChooser, Runtime,
 };
@@ -241,11 +239,6 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         ));
     }
 
-    // Learn discovery count: folded ONCE for this whole invocation (zero cost
-    // when `[learn]` is disabled) and reused for both the header (via the
-    // render below) and the `learn` step line just after it.
-    let learn_pending = learn_pending_count(&prep.config);
-
     // Preflight render (quiet — `run` prints its own concise summary).
     let rendered = !args.skip_render;
     let result = if rendered {
@@ -255,7 +248,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
             force: false,
             workflow_override: args.workflow.clone(),
         };
-        apply_for_agents(rt, &prep, &[agent.to_string()], &opts, learn_pending)?
+        apply_for_agents(rt, &prep, &[agent.to_string()], &opts)?
             .into_iter()
             .next()
             .map(|(_, r)| r)
@@ -271,7 +264,6 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         .config
         .resolve_active_workflow(args.workflow.as_deref(), prep.composition.primary_profile());
     print_workflow_step(&p, workflow.as_ref());
-    print_learn_step(&p, learn_pending);
 
     let rendered_at = now_rfc3339();
     let launch_args = build_launch_args(
@@ -554,24 +546,6 @@ fn print_workflow_step(p: &Painter, workflow: Option<&crate::workflow::Workflow>
                 wf.title(),
                 p.dim(&format!("· {} stages · /loadout:<stage>", wf.stages.len()))
             ),
-        )
-    );
-}
-
-/// The learn discovery step line: at most one, present only when candidates
-/// are actually staged. `pending` is folded once (see `learn_pending_count`)
-/// and passed in — this function is display-only, no I/O of its own.
-fn print_learn_step(p: &Painter, pending: usize) {
-    if pending == 0 {
-        return;
-    }
-    println!(
-        "{}",
-        step(
-            p,
-            p.cyan("✦"),
-            "learn",
-            format!("{pending} staged suggestions await review — load studio"),
         )
     );
 }

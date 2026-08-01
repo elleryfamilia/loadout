@@ -500,12 +500,6 @@ pub struct AppContext<'a> {
     pub generated_at: String,
     /// The writer (apply or dry-run).
     pub writer: &'a dyn Writer,
-    /// Count of `Pending` learn candidates awaiting review — computed ONCE
-    /// per command invocation by the caller (see
-    /// `commands::apply::learn_pending_count`) and threaded through to the
-    /// rendered header's discovery line. `0` for callers outside the four
-    /// learn entry points (`explain`, `clean`) that don't need it.
-    pub learn_pending: usize,
 }
 
 impl AppContext<'_> {
@@ -982,7 +976,6 @@ fn render_overlay(
         config: app.config,
         generated_at: app.generated_at.clone(),
         dynamic,
-        learn_pending: app.learn_pending,
     })
 }
 

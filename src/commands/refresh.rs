@@ -64,10 +64,7 @@ pub fn run(rt: &Runtime, args: &RefreshArgs) -> crate::Result<()> {
     if rt.dry_run {
         println!("dry run — no files will be written\n");
     }
-    // Folded ONCE for this whole invocation (zero cost when `[learn]` is
-    // disabled) — every agent's header gets the same count.
-    let learn_pending = apply::learn_pending_count(&prep.config);
-    let results = apply::apply_for_agents(rt, &prep, &agents, &opts, learn_pending)?;
+    let results = apply::apply_for_agents(rt, &prep, &agents, &opts)?;
     for (agent, result) in &results {
         apply::print_result(agent, prep.profile_label(), result);
     }

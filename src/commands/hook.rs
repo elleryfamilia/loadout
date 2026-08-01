@@ -84,17 +84,8 @@ fn serve(agent: &str, auto_adopt: bool, dry_run: bool, cfg: &Config) {
     let mut payload = String::new();
     // Bound the read defensively; real payloads are a few hundred bytes.
     let _ = std::io::stdin().take(1 << 20).read_to_string(&mut payload);
-    // Folded ONCE for this whole invocation, however many roots the payload
-    // names (`[learn]` is global-only, so every root sees the same count
-    // anyway) — same "one fold call per command" rule as `run`/`refresh`. Uses
-    // `cfg` as loaded at hook-command startup, before any per-root sync pull
-    // (each `refresh_root` runs its own `sync_before_render`) — the same
-    // staleness the trigger check below already accepts (Decision #4:
-    // propagation is "the next launch there"); it self-heals on this hook's
-    // very next invocation, which reloads `cfg` fresh.
-    let learn_pending = apply::learn_pending_count(cfg);
     for root in workspace_roots(&payload) {
-        refresh_root(&root, agent, auto_adopt, dry_run, learn_pending);
+        refresh_root(&root, agent, auto_adopt, dry_run);
     }
     // Trigger fast path — still stdout-silent (never blocks, never errors
     // outward, and prints nothing: the guard chain's diagnostics are `vlog!`
@@ -123,8 +114,7 @@ fn workspace_roots(payload: &str) -> Vec<PathBuf> {
 /// (auto-pull sync, then every agent with an existing overlay) — and, with
 /// `auto_adopt`, wiring `agent` into a repo on its first open so no prior
 /// `load refresh` is ever needed. All guards fail closed; errors are swallowed.
-/// `learn_pending` is folded once by the caller ([`serve`]), not re-derived here.
-fn refresh_root(root: &Path, agent: &str, auto_adopt: bool, dry_run: bool, learn_pending: usize) {
+fn refresh_root(root: &Path, agent: &str, auto_adopt: bool, dry_run: bool) {
     let Ok(root) = root.canonicalize() else {
         return;
     };
@@ -159,7 +149,7 @@ fn refresh_root(root: &Path, agent: &str, auto_adopt: bool, dry_run: bool, learn
     if agents.is_empty() {
         return;
     }
-    let _ = apply::apply_for_agents(&rt, &prep, &agents, &ApplyOptions::default(), learn_pending);
+    let _ = apply::apply_for_agents(&rt, &prep, &agents, &ApplyOptions::default());
     if !dry_run {
         stamp(&root);
     }

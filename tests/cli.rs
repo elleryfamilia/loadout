@@ -3624,22 +3624,6 @@ fn seed_pending_candidate(fx: &Fixture, claim: &str) {
 }
 
 #[test]
-fn run_dry_run_shows_learn_discovery_line_when_pending_candidates_exist() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.author("[learn]\nenabled = true\n");
-    seed_pending_candidate(&fx, "Always use pnpm, never npm.");
-
-    fx.cmd()
-        .args(["--dry-run", "run", "claude"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "learn   1 staged suggestions await review — load studio",
-        ));
-}
-
-#[test]
 fn run_dry_run_omits_learn_discovery_line_when_nothing_pending() {
     let fx = Fixture::new();
     fx.rust_project();
