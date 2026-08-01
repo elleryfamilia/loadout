@@ -10,6 +10,36 @@ version and date (see [RELEASING.md](RELEASING.md)).
 
 ## Unreleased
 
+### Removed
+
+- **Ambient learning is gone.** It mined your own recent agent sessions for
+  durable preferences and staged them in a review inbox. `load learn`,
+  `load harvest`, the studio inbox drawer and its badge, the Settings
+  "Learning" section, doctor's Learning checks, and the "N staged suggestions
+  await review" line in generated overlays all go with it. The feature cost
+  more to carry than it returned. The complete implementation is preserved on
+  the `archive/ambient-learning` tag — see
+  [docs/shelved-ambient-learning.md](docs/shelved-ambient-learning.md) for what
+  it did and how to restore it.
+- **Upgrading turns it off for you, once.** The first command you run after
+  upgrading sets `[learn] enabled = false` in your global config (which syncs,
+  so a second machine still on 0.18 stops harvesting too), removes this
+  machine's activation record, and deregisters the session-end hooks from
+  `~/.claude/settings.json` and `~/.cursor/hooks.json`. Each edited file gets a
+  one-time `.loadout-bak` backup first, and Cursor's freshness hook — which
+  lives in the same file — is left alone. You'll see a short note the one time
+  this runs.
+- **Your harvested suggestions are not deleted.** `~/.local/state/loadout/learn/`
+  and the `inbox/` directory inside your synced config are left exactly as they
+  are; the cleanup tells you where they are and that they're safe to remove.
+  Deleting files inside your config git repo is your call, not ours.
+- A `[learn]` table left in a synced config is **ignored, not warned about** —
+  it parses to nothing. `load hook <agent> --event session-end` is still
+  accepted and now does nothing at all, so a stale hook entry on a machine that
+  upgrades straight past this release can never fail a session.
+- Overlays re-render once on the first refresh after upgrading, because the
+  generated header changed.
+
 ### Changed
 
 - **The plan viewer is redesigned as an editorial document.** `load plan
