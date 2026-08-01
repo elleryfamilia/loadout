@@ -87,11 +87,6 @@ pub enum StagedOp {
     DeleteWorkflow { layer: Layer, id: String },
     /// Set `[defaults] agent` — the default launch agent.
     SetDefaultAgent { layer: Layer, agent: String },
-    /// Set `[learn] enabled` — the synced ambient-learning intent flag. The
-    /// machine-local side effects (activation ack, hook registration) are NOT
-    /// part of the op: they belong to the settings handlers / post-apply hook
-    /// (see `handle_apply`), keeping the op a pure config mutation.
-    SetLearnEnabled { layer: Layer, enabled: bool },
 }
 
 impl StagedOp {
@@ -109,8 +104,7 @@ impl StagedOp {
             | StagedOp::CreateWorkflow { layer, .. }
             | StagedOp::EditWorkflow { layer, .. }
             | StagedOp::DeleteWorkflow { layer, .. }
-            | StagedOp::SetDefaultAgent { layer, .. }
-            | StagedOp::SetLearnEnabled { layer, .. } => *layer,
+            | StagedOp::SetDefaultAgent { layer, .. } => *layer,
             StagedOp::DuplicatePaletteItem { to_layer, .. } => *to_layer,
         }
     }
@@ -144,13 +138,6 @@ impl StagedOp {
             StagedOp::DeleteWorkflow { id, .. } => format!("delete workflow \u{201c}{id}\u{201d}"),
             StagedOp::SetDefaultAgent { agent, .. } => {
                 format!("set the default agent to \u{201c}{agent}\u{201d}")
-            }
-            StagedOp::SetLearnEnabled { enabled, .. } => {
-                if *enabled {
-                    "turn ambient learning on \u{2014} adds [learn] enabled = true".to_string()
-                } else {
-                    "turn ambient learning off \u{2014} sets [learn] enabled = false".to_string()
-                }
             }
         }
     }
@@ -605,9 +592,6 @@ fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
         }
         StagedOp::SetDefaultAgent { agent, .. } => {
             table_mut(doc, "defaults")["agent"] = toml_edit::value(agent.as_str());
-        }
-        StagedOp::SetLearnEnabled { enabled, .. } => {
-            table_mut(doc, "learn")["enabled"] = toml_edit::value(*enabled);
         }
     }
     Ok(())
@@ -1309,55 +1293,24 @@ mod tests {
     }
 
     #[test]
-    fn describe_set_learn_enabled_differs_on_and_off() {
-        let on = StagedOp::SetLearnEnabled {
-            layer: Layer::Global,
-            enabled: true,
-        };
-        assert_eq!(
-            on.describe(),
-            "turn ambient learning on \u{2014} adds [learn] enabled = true"
-        );
-        let off = StagedOp::SetLearnEnabled {
-            layer: Layer::Global,
-            enabled: false,
-        };
-        assert_eq!(
-            off.describe(),
-            "turn ambient learning off \u{2014} sets [learn] enabled = false"
-        );
-    }
-
-    #[test]
-    fn scalar_ops_write_defaults_and_learn_tables() {
+    fn scalar_ops_write_the_defaults_table() {
         let d = tempfile::tempdir().unwrap();
         let gdir = d.path().join("global");
         std::fs::create_dir_all(&gdir).unwrap();
-        std::fs::write(
-            gdir.join("config.toml"),
-            "# my config\n[learn]\nenabled = false\n",
-        )
-        .unwrap();
+        std::fs::write(gdir.join("config.toml"), "# my config\n").unwrap();
         let mut s = Session::open(d.path(), Some(&gdir)).unwrap();
         s.stage(StagedOp::SetDefaultAgent {
             layer: Layer::Global,
             agent: "codex".into(),
         })
         .unwrap();
-        s.stage(StagedOp::SetLearnEnabled {
-            layer: Layer::Global,
-            enabled: true,
-        })
-        .unwrap();
         s.apply().unwrap();
         let text = std::fs::read_to_string(gdir.join("config.toml")).unwrap();
         assert!(text.contains("# my config"), "comment preserved");
         assert!(text.contains("agent = \"codex\""));
-        assert!(text.contains("enabled = true"));
         // The written config must round-trip through the real loader.
         let cfg =
             crate::config::Config::load_from(Some(&gdir.join("config.toml")), d.path()).unwrap();
         assert_eq!(cfg.default_agent, "codex");
-        assert!(cfg.learn.enabled);
     }
 }

@@ -133,9 +133,6 @@ pub(crate) fn icon(name: &str) -> Markup {
             r#"<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>"#
         }
         "clock" => r#"<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>"#,
-        "inbox" => {
-            r#"<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>"#
-        }
         // Built-in target *brand* logos are filled silhouettes, not line art —
         // see `brand_logo` / `brand_svg`, which use a different SVG treatment.
         _ => "",
@@ -350,13 +347,10 @@ fn render_markdown(md: &str) -> Markup {
 // --- page shell --------------------------------------------------------------
 
 /// The full page: brand, the two-destination tab nav ([`tab_bar`]), a staged
-/// indicator, and three top-bar action icons — 🕒 (recents drawer), 📥 (inbox
-/// drawer), ⚙ (settings) — followed by the `#main` tab content and the empty
+/// indicator, and two top-bar action icons — 🕒 (recents drawer) and ⚙
+/// (settings) — followed by the `#main` tab content and the empty
 /// `#modal`/`#drawer` containers those icons and other actions render into.
-/// `inbox_pending` is the count of pending learned candidates awaiting review —
-/// shown as a badge on the Inbox icon (which opens the review drawer) when
-/// nonzero.
-pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize) -> String {
+pub fn shell(main: Markup, staged: usize, active_tab: &str) -> String {
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -379,11 +373,6 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
                         div id="staged" class="staged-wrap" { (staged_indicator(staged)) }
                         button type="button" class="icon-btn" title="Recent artifacts"
                             hx-get="/drawer/recents" hx-target="#drawer" { (icon("clock")) }
-                        button type="button" class="icon-btn" title="Review inbox"
-                            hx-get="/drawer/inbox" hx-target="#drawer" {
-                            (icon("inbox"))
-                            span id="inbox-badge" { (inbox_badge(inbox_pending)) }
-                        }
                         button type="button" id="settings-btn"
                             class=(if active_tab == "settings" { "icon-btn active" } else { "icon-btn" })
                             title="Settings" hx-get="/settings" hx-target="#main" { (icon("gear")) }
@@ -404,8 +393,8 @@ pub fn shell(main: Markup, staged: usize, active_tab: &str, inbox_pending: usize
 /// **Library** is the shared catalog of gear a loadout binds (fragments, targets,
 /// workflows). Anything reached *inside* the Library keeps `active_tab ==
 /// "library"`, so the Library button stays lit while you browse its categories.
-/// The other three top-bar icons — 🕒 recents, 📥 inbox, ⚙ settings — live to
-/// the right of this nav (see [`shell`]), not as tabs here.
+/// The other top-bar icons — 🕒 recents, ⚙ settings — live to the right of
+/// this nav (see [`shell`]), not as tabs here.
 fn tab_bar(active: &str) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
@@ -414,16 +403,6 @@ fn tab_bar(active: &str) -> Markup {
             button class=(cls("library")) data-tab="library" hx-get="/tab/library" hx-target="#main" { (icon("book")) "Library" }
         }
     }
-}
-
-/// The inbox icon's numeric badge (pending candidates). Empty markup at zero.
-pub fn inbox_badge(n: usize) -> Markup {
-    html! { @if n > 0 { span class="tab-badge" { (n) } } }
-}
-
-/// One-shot loader that re-pulls the badge after an inbox disposition.
-pub fn inbox_badge_loader() -> String {
-    html! { div hx-get="/inbox/badge" hx-trigger="load" hx-target="#inbox-badge" {} }.into_string()
 }
 
 /// The Library's category sub-nav (a pill row). Baked into the top of every
@@ -510,7 +489,7 @@ pub fn drawer(title: &str, body: Markup, foot: Option<Markup>) -> String {
 }
 
 /// A one-shot loader that closes the drawer (appended to a `#main` fragment
-/// that a drawer action navigated to, e.g. Settings opened from the inbox).
+/// that a drawer action navigated to).
 pub fn drawer_close_loader() -> String {
     html! { div hx-get="/drawer/close" hx-trigger="load" hx-target="#drawer" {} }.into_string()
 }
@@ -2982,7 +2961,7 @@ mod tests {
 
     #[test]
     fn shell_has_capitalized_brand_and_theme_toggle() {
-        let html = shell(maud::html! {}, 0, "fragments", 0);
+        let html = shell(maud::html! {}, 0, "fragments");
         // Wordmark + page title are capitalized; the lowercase command name is
         // not what the chrome shows.
         assert!(html.contains(r#"<span class="brand-name">Loadout</span>"#));
@@ -2998,7 +2977,7 @@ mod tests {
 
     #[test]
     fn shell_inlines_no_flash_theme_init() {
-        let html = shell(maud::html! {}, 0, "fragments", 0);
+        let html = shell(maud::html! {}, 0, "fragments");
         // The inline head script must set the resolved theme + preference before
         // the stylesheet link, so there's no dark→light flash on load. (The
         // attribute is set at runtime via `dataset.theme`; it isn't in the SSR
