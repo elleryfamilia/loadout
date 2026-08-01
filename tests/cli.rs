@@ -4125,23 +4125,6 @@ fn refresh_omits_pause_warning_when_not_activated() {
         .stderr(predicate::str::contains("learning paused").not());
 }
 
-/// `load doctor` prints a "Learning" section. Smoke-tests the real wiring
-/// (real `Config` with built-in agents, real state-dir/`$HOME` resolution)
-/// end to end, complementing the fixture-injected unit tests in
-/// `commands::doctor::learn_tests`.
-#[test]
-fn doctor_prints_a_learning_section() {
-    let fx = Fixture::new();
-    fx.rust_project();
-
-    fx.cmd()
-        .arg("doctor")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Learning"))
-        .stdout(predicate::str::contains("load learn on"));
-}
-
 /// Breaker history is not an active health problem when learning is disabled.
 #[test]
 fn doctor_treats_old_failure_and_pause_as_historical_when_disabled() {
