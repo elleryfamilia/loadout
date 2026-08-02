@@ -18,8 +18,8 @@
 //!
 //! [`retire_learning`] clears all three, once, and then never runs again. It
 //! does **not** touch your data — the harvested candidates in
-//! `<config>/inbox/` and the evidence in `<state>/learn/` are yours; it points
-//! at them once and says they are safe to delete.
+//! `<config>/inbox/` and the evidence in `<state>/learn/evidence/` are yours;
+//! it points at them once and says they are safe to delete.
 //!
 //! Self-contained on purpose. It duplicates a little knowledge that also lives
 //! in `adapters` (the two hook descriptors) rather than importing it, so that
@@ -35,6 +35,12 @@ use crate::style::Painter;
 /// Marker written in the state dir once the cleanup has run. Its presence is
 /// the whole idempotency mechanism: the cleanup is skipped when it exists.
 const MARKER: &str = "learning-retired";
+
+/// Ceiling on the git push that propagates the disable. Short on purpose: this
+/// runs inside whatever command the user actually asked for, so a slow or
+/// unreachable remote must not hold it up. Missing the push only delays
+/// propagation to the next `load sync`.
+const PUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The learning hook entries as they were registered, by agent. Frozen copies
 /// of the `learn_hooks` descriptors that used to live in `adapters` — kept here
@@ -84,11 +90,11 @@ pub fn retire_learning(dry_run: bool) -> Vec<String> {
     // must stay silent — no marker, no output, no config write.
     let had_flag = learn_flag_is_on();
     let had_ack = learn_dir.join("activation.json").exists();
-    // Real harvested output, not merely a directory. `learn/` also holds the
-    // activation ack and throttle stamps, which this cleanup deletes or
-    // abandons — pointing at a directory that only ever held those would be
-    // telling the user to go look at nothing.
-    let learn_data = has_data_beyond_control_state(&learn_dir);
+    // Real harvested output, not merely a directory that exists. Most of
+    // `learn/` is the feature's own bookkeeping; pointing the user at a
+    // directory that only ever held that is telling them to go look at
+    // nothing.
+    let learn_data = has_harvested_evidence(&learn_dir);
     let inbox_data = inbox_dir.as_deref().map(has_any_file).unwrap_or(false);
     let had_data = learn_data || inbox_data;
     let hook_files = registered_hook_files();
@@ -119,11 +125,40 @@ pub fn retire_learning(dry_run: bool) -> Vec<String> {
     //    absent table.
     if had_flag {
         match set_learn_enabled_false() {
-            Ok(path) => out.push(format!(
-                "  {} turned it off in {} — syncs to your other machines at their next launch.",
-                p.dim("·"),
-                path.display()
-            )),
+            Ok(path) => {
+                out.push(format!(
+                    "  {} turned it off in {}.",
+                    p.dim("·"),
+                    path.display()
+                ));
+                // Push it, so the flip actually reaches your other machines.
+                // Writing the flag locally is only half the job: a machine still
+                // on 0.18 reads this flag out of the synced repo and keeps
+                // harvesting until it changes there. Bounded and
+                // warn-don't-fail — never leave this machine half-retired
+                // because a remote was slow or had moved on.
+                if let Some(dir) = config::global_config_dir() {
+                    if crate::sync::is_synced(&dir) {
+                        match crate::sync::commit_push(
+                            &dir,
+                            "loadout: retire ambient learning",
+                            PUSH_TIMEOUT,
+                        ) {
+                            Ok(crate::sync::PushOutcome::Pushed) => out.push(format!(
+                                "  {} pushed the change — your other machines pick it up at their next launch.",
+                                p.dim("·")
+                            )),
+                            Ok(crate::sync::PushOutcome::NothingToPush) => {}
+                            Ok(crate::sync::PushOutcome::Diverged) | Err(_) => {
+                                crate::warn_user!(
+                                    "turned learning off here, but couldn't push it. Run `load sync` \
+                                     so your other machines stop harvesting too."
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             Err(e) => {
                 clean_pass = false;
                 crate::warn_user!("could not turn off [learn] in the global config: {e}");
@@ -158,7 +193,7 @@ pub fn retire_learning(dry_run: bool) -> Vec<String> {
             p.dim("·")
         ));
         if learn_data {
-            out.push(format!("      {}", learn_dir.display()));
+            out.push(format!("      {}", learn_dir.join("evidence").display()));
         }
         if inbox_data {
             if let Some(dir) = inbox_dir.as_deref() {
@@ -190,29 +225,16 @@ fn has_any_file(dir: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether the learning state dir holds harvested output rather than only the
-/// control state this cleanup already deals with (the activation ack) and the
-/// throttle bookkeeping, which is meaningless once the feature is gone.
-fn has_data_beyond_control_state(dir: &std::path::Path) -> bool {
-    const CONTROL: &[&str] = &[
-        "activation.json",
-        "machine.json",
-        "watermarks.json",
-        "scan-stamp",
-        "spend-stamp",
-        "last-notified",
-        "paused",
-        "eligible",
-        "worker.log",
-        "lock",
-    ];
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .any(|e| !CONTROL.contains(&e.file_name().to_string_lossy().as_ref()))
-        })
-        .unwrap_or(false)
+/// Whether the learning state dir holds anything the user would call *theirs*.
+///
+/// Only the extracted evidence counts. Everything else in `learn/` is
+/// bookkeeping the feature kept for itself — the activation ack, the machine
+/// id, throttle stamps, the run log, the failure counter, session-eligibility
+/// hints, a scratch dir — and none of it means anything once the feature is
+/// gone. An allowlist rather than a denylist of those names, so a file this
+/// release never knew about can't be mistaken for user data.
+fn has_harvested_evidence(dir: &std::path::Path) -> bool {
+    has_any_file(&dir.join("evidence"))
 }
 
 /// Whether the global config still carries `[learn] enabled = true`. Read

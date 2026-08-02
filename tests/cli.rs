@@ -3795,3 +3795,42 @@ fn session_end_hook_survives_an_agent_this_binary_does_not_know() {
         .success()
         .stdout(predicate::str::is_empty());
 }
+
+#[test]
+fn retiring_learning_stays_quiet_about_data_when_only_bookkeeping_is_left() {
+    // The case on Ellery's own machine: learning was enabled and activated, but
+    // it never produced anything — `learn/` holds only the feature's own
+    // bookkeeping (machine id, run log, throttle stamps, eligibility hints) and
+    // there is no inbox at all. Announcing "your harvested suggestions" here
+    // would point at a directory with nothing in it for the user.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.write_state("learn/activation.json", r#"{"machine_id":"m"}"#);
+    fx.write_state("learn/machine-id", "m\n");
+    fx.write_state("learn/log.jsonl", "{}\n");
+    fx.write_state("learn/scan-stamp", "1\n");
+    fx.write_state("learn/eligible/claude-abc", "");
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ambient learning was removed"))
+        .stdout(predicate::str::contains("harvested suggestions").not());
+}
+
+#[test]
+fn retiring_learning_points_at_evidence_when_it_actually_exists() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author("[learn]\nenabled = true\n");
+    fx.write_state("learn/evidence/cand-1.json", r#"{"quote":"use pnpm"}"#);
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("harvested suggestions"))
+        .stdout(predicate::str::contains("learn/evidence"));
+}
