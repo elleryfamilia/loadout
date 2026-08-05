@@ -3834,3 +3834,39 @@ fn retiring_learning_points_at_evidence_when_it_actually_exists() {
         .stdout(predicate::str::contains("harvested suggestions"))
         .stdout(predicate::str::contains("learn/evidence"));
 }
+
+#[test]
+fn retiring_learning_ignores_a_foreign_hook_that_merely_mentions_our_command() {
+    // A foreign entry whose command *contains* our subcommand text without
+    // ending in it, on a file that carries nothing of ours. Deciding "is there
+    // anything to clean up?" with a substring search would fire here and print
+    // the cleanup banner having removed nothing.
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.rust_profile();
+    fx.write_home(
+        ".cursor/hooks.json",
+        r#"{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      { "command": "/opt/vendor/wrap hook cursor --event session-end --then-something-else" }
+    ]
+  }
+}"#,
+    );
+
+    fx.cmd()
+        .arg("refresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ambient learning was removed").not());
+
+    // And the foreign entry is still there, untouched.
+    let cursor: serde_json::Value =
+        serde_json::from_str(&fx.read_home(".cursor/hooks.json")).unwrap();
+    assert_eq!(
+        cursor["hooks"]["stop"][0]["command"],
+        "/opt/vendor/wrap hook cursor --event session-end --then-something-else"
+    );
+}

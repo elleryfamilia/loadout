@@ -40,11 +40,6 @@ use crate::writer::{self, WriteAction, Writer, WrittenFile};
 pub mod commands;
 pub(crate) mod hooks_claude;
 
-// The one sentence both surfaces (hook registration notes and doctor's
-// Learning section) print for Claude's `disableAllHooks: true` state — a
-// single constant so the wording can never drift between them.
-pub use hooks_claude::DISABLE_ALL_HOOKS_NOTE;
-
 /// A declarative description of how to deliver the overlay to one agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,23 +161,6 @@ pub struct ImporterRegistry {
     pub value: Option<String>,
 }
 
-/// The on-disk shape of an agent's hooks file, so registration writes the right
-/// dialect. `Flat` is the single-array-of-`{command}` layout Cursor uses;
-/// `ClaudeNested` is Claude Code's nested matcher schema in `.claude/settings.json`,
-/// written by [`hooks_claude`]. [`apply_hook_registry_at`] and the retired-hook
-/// cleanup in [`crate::legacy`] route on this so a flat `{command}` line is
-/// never written into the nested file (which would corrupt it). Code-side
-/// descriptor data only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HookFormat {
-    /// Flat `{ hooks: { <event>: [ { command } ] } }` (Cursor's `hooks.json`).
-    #[default]
-    Flat,
-    /// Claude Code's nested matcher schema in `.claude/settings.json`
-    /// (`hooks.<event>: [{ matcher?, hooks: [{ type, command, timeout? }] }]`).
-    ClaudeNested,
-}
-
 /// Registration of a loadout freshness hook in an agent's **user-level** hooks
 /// file (e.g. Cursor's `~/.cursor/hooks.json`): the agent then re-renders the
 /// overlay itself on its own lifecycle events — the freshness path for IDE
@@ -218,10 +196,6 @@ pub struct HookRegistry {
     /// adopted by hand.
     #[serde(default = "default_true")]
     pub auto_adopt: bool,
-    /// The hooks-file dialect this entry writes (`Flat` vs `ClaudeNested`).
-    /// Descriptor data only; defaults to `Flat`.
-    #[serde(skip)]
-    pub format: HookFormat,
 }
 
 fn default_true() -> bool {
@@ -380,7 +354,6 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
                 event: "sessionStart".into(),
                 subcommand: "hook cursor".into(),
                 auto_adopt: true,
-                format: HookFormat::Flat,
             }),
             wire_hint: Some(
                 "Cursor reads .cursor/rules/*.mdc; loadout writes the overlay to a \
@@ -1246,33 +1219,13 @@ fn apply_hook_registry_at(
         }
     };
 
-    // Claude Code disables every hook when this top-level flag is set — our entry
-    // would be inert, so we register nothing and tell the user learning falls back
-    // to entry-point triggers.
-    if hr.format == HookFormat::ClaudeNested
-        && hooks_claude::hooks_disabled(existing.as_deref().unwrap_or(""))
-    {
-        notes.push(hooks_claude::DISABLE_ALL_HOOKS_NOTE.to_string());
-        return Ok(());
-    }
-
     let Ok(exe) = std::env::current_exe() else {
         warnings.push("could not resolve the load binary path for hook registration".into());
         return Ok(());
     };
     let command = format!("\"{}\" {}", exe.display(), hr.subcommand);
 
-    let updated = match hr.format {
-        HookFormat::Flat => {
-            upsert_hook_command(existing.as_deref(), &hr.event, &hr.subcommand, &command)
-        }
-        HookFormat::ClaudeNested => hooks_claude::upsert_claude_hook(
-            existing.as_deref().unwrap_or(""),
-            &hr.event,
-            &hr.subcommand,
-            &command,
-        ),
-    };
+    let updated = upsert_hook_command(existing.as_deref(), &hr.event, &hr.subcommand, &command);
     match updated {
         Ok(Some(updated)) => {
             // One-time backup of a pre-existing file we're about to modify.

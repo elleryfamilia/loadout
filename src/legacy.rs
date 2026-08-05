@@ -97,8 +97,8 @@ pub fn retire_learning(dry_run: bool) -> Vec<String> {
     let learn_data = has_harvested_evidence(&learn_dir);
     let inbox_data = inbox_dir.as_deref().map(has_any_file).unwrap_or(false);
     let had_data = learn_data || inbox_data;
-    let hook_files = registered_hook_files();
-    if !had_flag && !had_ack && !had_data && hook_files.is_empty() {
+    let hook_plan = plan_hook_removals();
+    if !had_flag && !had_ack && !had_data && hook_plan.is_empty() {
         return Vec::new();
     }
 
@@ -181,7 +181,7 @@ pub fn retire_learning(dry_run: bool) -> Vec<String> {
     }
 
     // 3. Deregister the session-end hooks.
-    for note in remove_learn_hooks() {
+    for note in apply_hook_removals(&hook_plan) {
         out.push(format!("  {} {}", p.dim("·"), note));
     }
 
@@ -276,40 +276,28 @@ fn set_learn_enabled_false() -> crate::Result<PathBuf> {
     Ok(path)
 }
 
-/// The hooks files that currently carry a learning entry. Cheap pre-check so a
-/// machine that never had learning produces no output at all.
-fn registered_hook_files() -> Vec<PathBuf> {
-    let Some(home) = config::home_dir() else {
-        return Vec::new();
-    };
-    LEARN_HOOKS
-        .iter()
-        .filter_map(|&(_, file, _, subcommand, _)| {
-            let path = home.join(file);
-            let text = std::fs::read_to_string(&path).ok()?;
-            text.contains(subcommand).then_some(path)
-        })
-        .collect()
+/// One planned hook removal: which agent's entry, which file, and the rewritten
+/// JSON that takes it out.
+struct HookRemoval {
+    agent: &'static str,
+    path: PathBuf,
+    updated: String,
 }
 
-/// Strip the learning hook entries from every agent's hooks file.
+/// Work out which hook entries would actually be removed, without writing
+/// anything.
 ///
-/// Scoped two ways so nothing else in these shared, user-owned files is at
-/// risk: to the exact command suffix, and to the one event the entry was
-/// registered under. Cursor's *freshness* hook lives in the same
-/// `hooks.json` and survives — it sits on a different event and carries the
-/// shorter ` hook cursor` suffix, which cannot match the longer
-/// ` hook cursor --event session-end` we remove.
-///
-/// A one-time `.loadout-bak` backup precedes the first edit of each file.
-/// Corrupt JSON is left strictly alone and warned about — the no-op shim in
-/// `commands::hook` means a hook we fail to remove still cannot break a
-/// session, so refusing to guess is always the safer half of the trade.
-fn remove_learn_hooks() -> Vec<String> {
+/// Deliberately runs the **same matchers** that do the writing, rather than a
+/// cheaper approximation like a substring search. A `contains` pre-check would
+/// fire on a foreign command that merely mentions those words without ending in
+/// the suffix, and the cleanup would then announce itself and remove nothing.
+/// Computing the real answer once means the "is there anything to do?" question
+/// and the removal can never disagree.
+fn plan_hook_removals() -> Vec<HookRemoval> {
     let Some(home) = config::home_dir() else {
         return Vec::new();
     };
-    let mut notes = Vec::new();
+    let mut plan = Vec::new();
     for &(agent, file, event, subcommand, nested) in LEARN_HOOKS {
         let path = home.join(file);
         let Ok(existing) = std::fs::read_to_string(&path) else {
@@ -321,24 +309,50 @@ fn remove_learn_hooks() -> Vec<String> {
             remove_hook_command(&existing, subcommand, Some(event))
         };
         match removed {
-            Ok(Some(updated)) => {
-                let bak = path.with_extension("json.loadout-bak");
-                if !bak.exists() {
-                    let _ = std::fs::copy(&path, &bak);
-                }
-                if crate::writer::atomic_write(&path, &updated).is_ok() {
-                    notes.push(format!(
-                        "removed the {agent} session-end hook from {}",
-                        path.display()
-                    ));
-                }
-            }
+            Ok(Some(updated)) => plan.push(HookRemoval {
+                agent,
+                path,
+                updated,
+            }),
             Ok(None) => {} // no entry of ours present
             Err(_) => crate::warn_user!(
                 "{} is not valid JSON — leaving it alone. The retired {agent} session-end \
                  hook entry may still be in it; it is inert and safe to delete by hand.",
                 path.display()
             ),
+        }
+    }
+    plan
+}
+
+/// Write out a plan from [`plan_hook_removals`], returning a note per file
+/// actually changed.
+///
+/// The matching behind the plan is scoped two ways so nothing else in these
+/// shared, user-owned files is at risk: to the exact command suffix, and to the
+/// one event the entry was registered under. Cursor's *freshness* hook lives in
+/// the same `hooks.json` and survives — it sits on a different event and
+/// carries the shorter ` hook cursor` suffix, which cannot match the longer
+/// ` hook cursor --event session-end` we remove.
+///
+/// A one-time `.loadout-bak` backup precedes the first edit of each file.
+/// Corrupt JSON never reaches here: [`plan_hook_removals`] leaves it strictly
+/// alone and warns. The no-op shim in `commands::hook` means a hook we fail to
+/// remove still cannot break a session, so refusing to guess is always the
+/// safer half of the trade.
+fn apply_hook_removals(plan: &[HookRemoval]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for r in plan {
+        let bak = r.path.with_extension("json.loadout-bak");
+        if !bak.exists() {
+            let _ = std::fs::copy(&r.path, &bak);
+        }
+        if crate::writer::atomic_write(&r.path, &r.updated).is_ok() {
+            notes.push(format!(
+                "removed the {} session-end hook from {}",
+                r.agent,
+                r.path.display()
+            ));
         }
     }
     notes
