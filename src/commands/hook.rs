@@ -36,8 +36,8 @@ const DEBOUNCE: Duration = Duration::from_secs(30);
 /// Entry point for `load hook`.
 pub fn run(rt: &Runtime, args: &HookArgs) -> crate::Result<()> {
     // Retired ambient-learning session-end path. Ambient learning was removed in
-    // 0.19.0, but its `SessionEnd`/`stop` hook entries may still sit in an
-    // agent's hooks file — on a machine that upgraded past 0.19 without ever
+    // 0.21.0, but its `SessionEnd`/`stop` hook entries may still sit in an
+    // agent's hooks file — on a machine that upgraded past 0.21 without ever
     // running its cleanup, or one whose hooks file wasn't writable when it did.
     // Such an entry must never fail a session, so this returns success and does
     // nothing at all.

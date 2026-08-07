@@ -180,8 +180,9 @@ pub fn retire_learning(dry_run: bool) -> Vec<String> {
         }
     }
 
-    // 3. Deregister the session-end hooks.
-    for note in apply_hook_removals(&hook_plan) {
+    // 3. Deregister the session-end hooks. A failed write fails the pass, so
+    //    the marker is withheld and the removal is retried next invocation.
+    for note in apply_hook_removals(&hook_plan, &mut clean_pass) {
         out.push(format!("  {} {}", p.dim("·"), note));
     }
 
@@ -340,19 +341,30 @@ fn plan_hook_removals() -> Vec<HookRemoval> {
 /// alone and warns. The no-op shim in `commands::hook` means a hook we fail to
 /// remove still cannot break a session, so refusing to guess is always the
 /// safer half of the trade.
-fn apply_hook_removals(plan: &[HookRemoval]) -> Vec<String> {
+///
+/// A failed write clears `clean_pass` (with a note saying so), so the caller
+/// withholds the idempotency marker and the removal is retried on the next
+/// invocation instead of a stale hook surviving forever.
+fn apply_hook_removals(plan: &[HookRemoval], clean_pass: &mut bool) -> Vec<String> {
     let mut notes = Vec::new();
     for r in plan {
         let bak = r.path.with_extension("json.loadout-bak");
         if !bak.exists() {
             let _ = std::fs::copy(&r.path, &bak);
         }
-        if crate::writer::atomic_write(&r.path, &r.updated).is_ok() {
-            notes.push(format!(
+        match crate::writer::atomic_write(&r.path, &r.updated) {
+            Ok(()) => notes.push(format!(
                 "removed the {} session-end hook from {}",
                 r.agent,
                 r.path.display()
-            ));
+            )),
+            Err(e) => {
+                *clean_pass = false;
+                notes.push(format!(
+                    "could not update {} ({e}) — will retry on the next command",
+                    r.path.display()
+                ));
+            }
         }
     }
     notes
@@ -471,5 +483,43 @@ mod tests {
             .is_err(),
             "corrupt JSON must surface an error, not a guessed rewrite"
         );
+    }
+
+    /// A hook removal whose write fails must fail the pass (so the caller
+    /// withholds the idempotency marker and retries next run) and say so —
+    /// never silently leave the stale hook behind forever.
+    #[test]
+    fn failed_hook_write_fails_the_pass_and_notes_the_retry() {
+        let d = tempfile::tempdir().unwrap();
+        // The removal's target sits UNDER a regular file, so atomic_write's
+        // create_dir_all fails deterministically on every platform.
+        let blocker = d.path().join("hooks.json");
+        std::fs::write(&blocker, "{}").unwrap();
+        let plan = vec![HookRemoval {
+            agent: "cursor",
+            path: blocker.join("nested.json"),
+            updated: "{}".to_string(),
+        }];
+
+        let mut clean_pass = true;
+        let notes = apply_hook_removals(&plan, &mut clean_pass);
+        assert!(!clean_pass, "a failed write must fail the pass");
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].contains("will retry on the next command"),
+            "the failure must be surfaced, not swallowed: {}",
+            notes[0]
+        );
+
+        // And a successful write keeps the pass clean.
+        let ok = vec![HookRemoval {
+            agent: "cursor",
+            path: d.path().join("ok.json"),
+            updated: "{}".to_string(),
+        }];
+        let mut clean_pass = true;
+        let notes = apply_hook_removals(&ok, &mut clean_pass);
+        assert!(clean_pass);
+        assert!(notes[0].contains("removed the cursor session-end hook"));
     }
 }

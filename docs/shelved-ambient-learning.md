@@ -1,6 +1,6 @@
 # Shelved: ambient learning
 
-Ambient learning was removed in **0.19.0**. It shipped in 0.16.0 and was
+Ambient learning was removed in **0.21.0**. It shipped in 0.16.0 and was
 refined through 0.18.0. This note records what it did, why it came out, and how
 to bring it back.
 
@@ -105,7 +105,7 @@ brings back nothing but the design documents.
 - `"learn"` in `config.rs`'s `KNOWN_TOP_LEVEL` — a tombstone, so a synced config
   still carrying a `[learn]` table loads without an unrecognized-key warning.
 - `load hook <agent> --event session-end` — accepted as a no-op that exits 0, so
-  a stale hook on a machine that upgraded past 0.19 without running it cannot
+  a stale hook on a machine that upgraded past 0.21 without running it cannot
   fail a session.
 - Your data. `~/.local/state/loadout/learn/` and `~/.config/loadout/inbox/` are
   left in place; the upgrade points at them once and says they are safe to
