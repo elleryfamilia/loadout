@@ -3583,7 +3583,7 @@ fn retiring_learning_clears_both_control_gates_and_the_hooks() {
         .arg("refresh")
         .assert()
         .success()
-        .stdout(predicate::str::contains(
+        .stderr(predicate::str::contains(
             "ambient learning was removed in 0.21.0",
         ));
 
@@ -3656,7 +3656,7 @@ fn retiring_learning_never_deletes_harvested_data() {
         .arg("refresh")
         .assert()
         .success()
-        .stdout(predicate::str::contains("safe to delete"));
+        .stderr(predicate::str::contains("safe to delete"));
 
     // The inbox lives inside the user's synced config git repo. Pointing at it
     // is our job; deleting it is not.
@@ -3687,7 +3687,7 @@ fn retiring_learning_happens_once_and_then_stays_quiet() {
         .arg("refresh")
         .assert()
         .success()
-        .stdout(predicate::str::contains("ambient learning was removed").not());
+        .stderr(predicate::str::contains("ambient learning was removed").not());
 }
 
 #[test]
@@ -3700,7 +3700,7 @@ fn retiring_learning_says_nothing_on_a_machine_that_never_ran_it() {
         .arg("refresh")
         .assert()
         .success()
-        .stdout(predicate::str::contains("ambient learning").not());
+        .stderr(predicate::str::contains("ambient learning").not());
     assert!(
         !fx.state_exists("learning-retired"),
         "no marker on a machine with nothing to clean — it never had the feature"
@@ -3717,7 +3717,7 @@ fn retiring_learning_under_dry_run_changes_nothing_and_leaves_no_marker() {
         .args(["--dry-run", "refresh"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("dry run: would turn off"));
+        .stderr(predicate::str::contains("dry run: would turn off"));
 
     assert!(
         fx.read_global("config.toml").contains("enabled = true"),
@@ -3816,8 +3816,8 @@ fn retiring_learning_stays_quiet_about_data_when_only_bookkeeping_is_left() {
         .arg("refresh")
         .assert()
         .success()
-        .stdout(predicate::str::contains("ambient learning was removed"))
-        .stdout(predicate::str::contains("harvested suggestions").not());
+        .stderr(predicate::str::contains("ambient learning was removed"))
+        .stderr(predicate::str::contains("harvested suggestions").not());
 }
 
 #[test]
@@ -3831,8 +3831,8 @@ fn retiring_learning_points_at_evidence_when_it_actually_exists() {
         .arg("refresh")
         .assert()
         .success()
-        .stdout(predicate::str::contains("harvested suggestions"))
-        .stdout(predicate::str::contains("learn/evidence"));
+        .stderr(predicate::str::contains("harvested suggestions"))
+        .stderr(predicate::str::contains("learn/evidence"));
 }
 
 #[test]
@@ -3860,7 +3860,7 @@ fn retiring_learning_ignores_a_foreign_hook_that_merely_mentions_our_command() {
         .arg("refresh")
         .assert()
         .success()
-        .stdout(predicate::str::contains("ambient learning was removed").not());
+        .stderr(predicate::str::contains("ambient learning was removed").not());
 
     // And the foreign entry is still there, untouched.
     let cursor: serde_json::Value =

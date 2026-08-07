@@ -348,9 +348,19 @@ fn plan_hook_removals() -> Vec<HookRemoval> {
 fn apply_hook_removals(plan: &[HookRemoval], clean_pass: &mut bool) -> Vec<String> {
     let mut notes = Vec::new();
     for r in plan {
+        // Never overwrite a user-owned hooks file we failed to back up: skip
+        // this removal (failing the pass, so it retries) rather than proceed
+        // without a recoverable original.
         let bak = r.path.with_extension("json.loadout-bak");
         if !bak.exists() {
-            let _ = std::fs::copy(&r.path, &bak);
+            if let Err(e) = std::fs::copy(&r.path, &bak) {
+                *clean_pass = false;
+                notes.push(format!(
+                    "could not back up {} ({e}) — leaving it untouched; will retry on the next command",
+                    r.path.display()
+                ));
+                continue;
+            }
         }
         match crate::writer::atomic_write(&r.path, &r.updated) {
             Ok(()) => notes.push(format!(
@@ -511,10 +521,14 @@ mod tests {
             notes[0]
         );
 
-        // And a successful write keeps the pass clean.
+        // And a successful write keeps the pass clean. The source exists (as
+        // it always does in production — the plan was built by reading it), so
+        // the backup copy succeeds too.
+        let ok_path = d.path().join("ok.json");
+        std::fs::write(&ok_path, r#"{"hooks":{}}"#).unwrap();
         let ok = vec![HookRemoval {
             agent: "cursor",
-            path: d.path().join("ok.json"),
+            path: ok_path,
             updated: "{}".to_string(),
         }];
         let mut clean_pass = true;

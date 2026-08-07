@@ -26,10 +26,12 @@ fn main() -> ExitCode {
     // than in `run`/`refresh` so it reaches people who mostly use `studio` or
     // `sync` too — it is a cheap `stat` of a marker file on every later
     // invocation. Never for `hook`: that is machine-invoked, and the agent
-    // parses its stdout as the hook response.
+    // parses its stdout as the hook response. The notes go to stderr so a
+    // machine-parsed stdout (`plan check --json` and friends) is never
+    // corrupted by the one run that happens to trigger the cleanup.
     if !matches!(cli.command, Command::Hook(_)) {
         for line in loadout::legacy::retire_learning(rt.dry_run) {
-            println!("{line}");
+            eprintln!("{line}");
         }
     }
 
