@@ -41,6 +41,7 @@ pub mod markdown;
 pub mod pack;
 pub mod plan;
 pub mod profile;
+pub mod progress;
 pub mod providers;
 pub mod recents;
 pub mod redact;

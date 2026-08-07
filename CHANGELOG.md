@@ -10,6 +10,18 @@ version and date (see [RELEASING.md](RELEASING.md)).
 
 ## Unreleased
 
+### Added
+
+- **An equipping bar above the `load run` startup steps.** Launching an agent
+  now draws an amber progress bar — dungeon-crawl style, `▓▒░` shading — that
+  fills as each startup phase completes (sync, loadout selection, gear checks,
+  render, workflow, learn, update) and flashes **EQUIPPED** just before the
+  agent takes over the terminal. It's pure presentation: nothing is slowed
+  down, and it freezes out of the way if loadout needs to ask you something
+  mid-launch. Truecolor where the terminal supports it, 256-color otherwise;
+  disabled automatically for pipes, `NO_COLOR`, `TERM=dumb`, and dry runs, so
+  scripted output is unchanged.
+
 ### Changed
 
 - **The update nudge now runs on every `load` command, not once a day.**
