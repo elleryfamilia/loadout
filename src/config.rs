@@ -36,6 +36,8 @@ pub struct Config {
     pub env: EnvConfig,
     /// Codex-adapter knobs.
     pub codex: CodexConfig,
+    /// Ambient update-check behavior (`[update]`).
+    pub update: UpdateConfig,
     /// Your profiles (entirely user-authored; one is selected per context).
     pub profiles: Vec<LoadoutConfig>,
     /// Your fragment library (the `[[fragments]]` you authored, merged by
@@ -102,6 +104,15 @@ pub struct EnvConfig {
     pub allowlist: Vec<String>,
     /// Regexes over variable *names*; matches are always dropped.
     pub deny_name_patterns: Vec<String>,
+}
+
+/// Ambient update-check configuration (`[update]`).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct UpdateConfig {
+    /// When the "newer release available" nudge checks and prints:
+    /// `always` (every command, network-capped — the default), `daily`, or
+    /// `off`. The `LOADOUT_NO_UPDATE_CHECK` env var is a hard off regardless.
+    pub check: crate::update::CheckMode,
 }
 
 /// Codex adapter configuration.
@@ -313,10 +324,13 @@ fn strip_global_only(layer: crate::fragment::Layer, parsed: &mut RawConfig) {
         //   - `[env]` widens which environment variables are surfaced into the
         //     overlay; since the loader *appends* allowlists, a repo could
         //     otherwise add names (e.g. `DATABASE_URL`) to leak their values.
+        //   - `[update]` governs the update-check nudge; a repo must not be
+        //     able to silence (or force) it.
         parsed.defaults = None;
         parsed.sync = None;
         parsed.codex = None;
         parsed.env = None;
+        parsed.update = None;
     }
     if !layer.contributes_profiles() {
         parsed.profiles.clear();
@@ -345,6 +359,7 @@ struct RawConfig {
     env: Option<RawEnv>,
     codex: Option<RawCodex>,
     sync: Option<RawSync>,
+    update: Option<RawUpdate>,
     // The user-authored loadouts. Canonical TOML key is `[[loadouts]]`; the old
     // `[[loadouts]]` key is still accepted (legacy alias) so existing configs
     // keep loading. The Rust field stays `profiles` — it's internal and renaming
@@ -401,6 +416,14 @@ struct RawSync {
 }
 
 // Deliberately NOT `deny_unknown_fields`, matching `RawSync`/the top-level
+// `RawConfig`: an operational table written by a newer loadout must not brick
+// an older binary. Unknown subkeys are tolerated and surfaced via
+// `warn_unknown_config_keys`.
+#[derive(Debug, Default, Deserialize)]
+struct RawUpdate {
+    check: Option<String>, // "always" (default) | "daily" | "off"
+}
+
 /// Every top-level key [`RawConfig`] models. A key outside this set is from a
 /// newer loadout (forward-compat) or a typo — tolerated, but warned about.
 const KNOWN_TOP_LEVEL: &[&str] = &[
@@ -408,11 +431,12 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "env",
     "codex",
     "sync",
-    // Tombstone: `[learn]` drove ambient learning, removed in 0.19.0. A synced
+    // Tombstone: `[learn]` drove ambient learning, removed in 0.21.0. A synced
     // config written before then still carries the table, and warning about it
     // on every load would be noise for a key the user never typed. Parsed to
     // nothing; see `crate::legacy`.
     "learn",
+    "update",
     "loadouts",
     "profiles",
     "fragments",
@@ -455,6 +479,7 @@ fn warn_unknown_config_keys(text: &str, path: &Path) {
             "learn",
             &["enabled", "interval", "scope", "cli", "model"][..],
         ),
+        ("update", &["check"][..]),
     ] {
         if let Some(sub) = table.get(section).and_then(|v| v.as_table()) {
             for key in sub.keys() {
@@ -530,6 +555,12 @@ impl RawConfig {
             }
             if s.timeout.is_some() {
                 slot.timeout = s.timeout;
+            }
+        }
+        if let Some(u) = other.update {
+            let slot = self.update.get_or_insert_with(Default::default);
+            if u.check.is_some() {
+                slot.check = u.check;
             }
         }
         // Later-layer profiles replace earlier ones of the same name.
@@ -617,6 +648,11 @@ impl RawConfig {
             codex: CodexConfig {
                 write_override: codex.write_override.unwrap_or(true),
                 max_output_kib: codex.max_output_kib.unwrap_or(32),
+            },
+            update: UpdateConfig {
+                check: crate::update::CheckMode::parse(
+                    self.update.as_ref().and_then(|u| u.check.as_deref()),
+                ),
             },
             profiles,
             fragments,
@@ -825,6 +861,50 @@ mod tests {
         assert!(c.fragments.is_empty());
         // Same for workflows — the built-in catalog is separate, not merged in.
         assert!(c.workflows.is_empty());
+    }
+
+    #[test]
+    fn update_check_defaults_to_always_and_parses_each_mode() {
+        use crate::fragment::Layer;
+        use crate::update::CheckMode;
+        let c = Config::defaults();
+        assert_eq!(
+            c.update.check,
+            CheckMode::Always,
+            "[update] defaults to always"
+        );
+
+        for (value, expect) in [
+            ("always", CheckMode::Always),
+            ("daily", CheckMode::Daily),
+            ("off", CheckMode::Off),
+        ] {
+            let c = Config::from_layer_strs(vec![(
+                Layer::Global,
+                PathBuf::from("/g/config.toml"),
+                format!("[update]\ncheck = \"{value}\"\n"),
+            )])
+            .unwrap();
+            assert_eq!(c.update.check, expect, "check = \"{value}\"");
+        }
+
+        // A value written by a newer loadout degrades to daily, never bricks.
+        let c = Config::from_layer_strs(vec![(
+            Layer::Global,
+            PathBuf::from("/g/config.toml"),
+            "[update]\ncheck = \"hourly\"\n".to_string(),
+        )])
+        .unwrap();
+        assert_eq!(c.update.check, CheckMode::Daily);
+    }
+
+    #[test]
+    fn update_check_later_layer_wins_on_merge() {
+        let mut base: RawConfig = toml::from_str("[update]\ncheck = \"off\"\n").unwrap();
+        let overlay: RawConfig = toml::from_str("[update]\ncheck = \"daily\"\n").unwrap();
+        base.merge(overlay);
+        let c = base.finalize(vec![]);
+        assert_eq!(c.update.check, crate::update::CheckMode::Daily);
     }
 
     #[test]
@@ -1112,6 +1192,9 @@ mod tests {
 
         [learn]
         enabled = true
+
+        [update]
+        check = "off"
     "#;
 
     fn assert_operational_tables_stripped(c: &Config) {
@@ -1128,6 +1211,11 @@ mod tests {
         assert!(
             !c.env.allowlist.iter().any(|n| n == "DATABASE_URL"),
             "repo must not widen the env allowlist"
+        );
+        assert_eq!(
+            c.update.check,
+            crate::update::CheckMode::Always,
+            "repo must not change [update].check — it can't silence (or force) the nudge"
         );
     }
 

@@ -118,7 +118,7 @@ pub struct HookArgs {
     #[arg(long)]
     pub remove: bool,
     /// Which lifecycle event fired. `session-end` is a retired path (it drove
-    /// ambient learning, removed in 0.19.0) and is now accepted as a no-op, so
+    /// ambient learning, removed in 0.21.0) and is now accepted as a no-op, so
     /// a stale hook entry can never fail a session; absent is the freshness
     /// serve path. Set by the registered hook command, never typed by hand.
     #[arg(long)]

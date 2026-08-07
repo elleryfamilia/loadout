@@ -3518,7 +3518,7 @@ fn doctor_treats_old_failure_and_pause_as_historical_when_disabled() {
         .stdout(predicate::str::contains("output_json_invalid").not());
 }
 
-// --- retiring ambient learning (removed in 0.19.0) ---------------------------
+// --- retiring ambient learning (removed in 0.21.0) ---------------------------
 //
 // The feature is gone, but it left control state behind on every machine that
 // ran it: a synced `[learn] enabled` flag, a per-machine activation ack, and
@@ -3584,7 +3584,7 @@ fn retiring_learning_clears_both_control_gates_and_the_hooks() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "ambient learning was removed in 0.19.0",
+            "ambient learning was removed in 0.21.0",
         ));
 
     // Gate 1: the synced intent flag. This is what stops a second machine still

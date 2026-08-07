@@ -3111,11 +3111,16 @@ mod tests {
             body.contains("Every's loop where each cycle makes the next one easier."),
             "card blurb shown"
         );
-        // The bound workflow shows an "equipped on a loadout" marker — there's no
-        // global "active workflow" concept anymore.
+        // The bound workflow shows an explicit "in use" pill (equipped on ≥1
+        // loadout) — there's no global "active workflow" concept anymore, and
+        // the marker must say so in text, not just an icon.
+        assert!(
+            body.contains(r#"class="wf-card-pill""#) && body.contains("in use"),
+            "visible in-use pill for spec-driven"
+        );
         assert!(
             body.contains("equipped on"),
-            "binding marker for spec-driven"
+            "tooltip carries the loadout count"
         );
         assert!(
             body.contains(r#"<span class="cmd-name">explore</span>"#),

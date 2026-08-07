@@ -10,7 +10,7 @@
 //! block the agent.
 //!
 //! `--event session-end` is a retired path. It drove ambient learning, which was
-//! removed in 0.19.0. The flag is still accepted and now does nothing at all,
+//! removed in 0.21.0. The flag is still accepted and now does nothing at all,
 //! because an agent's hooks file may still carry the entry that calls it; see
 //! [`run`].
 //!

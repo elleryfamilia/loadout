@@ -522,8 +522,7 @@ body {
 .wf-card-glyph { display: inline-flex; color: var(--accent); flex: none; }
 .wf-card-glyph .icon { width: 17px; height: 17px; }
 .wf-card-name { font-weight: 600; font-size: 13.5px; flex: 1; min-width: 0; }
-.wf-card-dot { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--ok); color: var(--bg); }
-.wf-card-dot .icon { width: 12px; height: 12px; }
+.wf-card-pill { flex: none; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ok); background: rgba(127, 214, 160, 0.14); border-radius: 999px; padding: 1px 7px; }
 .wf-card-tag { flex: none; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: var(--elevated); border-radius: var(--r-sm); padding: 1px 5px; }
 .wf-card-blurb { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
 /* detail — the focused workflow filling the fixed spine */
@@ -535,7 +534,6 @@ body {
 .wf-source:hover { text-decoration: underline; }
 .wf-source .icon { width: 12px; height: 12px; }
 .wf-detail-actions { flex: none; }
-.wf-active-pill { font-size: 11px; padding: 4px 9px; color: var(--ok); background: rgba(127, 214, 160, 0.14); }
 
 /* slots — the fixed steps as an equal-height grid across the width, so the
    cells stay put and only their contents change when you switch workflows. The

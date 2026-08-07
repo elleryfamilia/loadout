@@ -203,6 +203,28 @@ hostnames/secrets) is gitignored and never leaves the box. Put `[sync]` in
 `local.toml` to vary it per machine — e.g. a CI box that should pull but never
 push: `auto_push = false`.
 
+## `[update]` (implemented)
+
+When the ambient "a newer loadout is available — run `load update`" nudge
+checks and prints. The nudge appears after any interactive `load` command
+(and before an agent launch); it is TTY-only and never blocks — the network
+check is time-bounded and its verdict is cached, so a stale install is
+reminded on every command without a network call each time.
+
+```toml
+[update]
+check = "always"   # "always" (default) | "daily" | "off"
+```
+
+- `always` — evaluated on every command; the actual network check runs at most
+  once per 10 minutes (the cached verdict covers the window).
+- `daily` — at most one network check per day.
+- `off` — never check, never nudge. The `LOADOUT_NO_UPDATE_CHECK` environment
+  variable is a hard off regardless of this setting.
+
+Global-only: a repo layer that sets `[update]` is stripped (a cloned repo
+must not be able to silence — or force — the nudge).
+
 ## `[[agents]]` (implemented)
 
 Built-in agents are a base layer; override by `id` or add new ones — no code

@@ -265,7 +265,8 @@ pub struct WorkflowView {
 }
 
 /// The Workflows tab snapshot: the curated catalog plus your own (the gallery),
-/// which one's slots are shown (`focused_id`), and which is the global active.
+/// and which one's slots are shown (`focused_id`). Per-card loadout bindings
+/// live on each [`WorkflowView::bound_by`]; there is no global active workflow.
 pub struct WorkflowsView {
     pub workflows: Vec<WorkflowView>,
     /// The workflow whose slots are shown below the gallery.
@@ -980,9 +981,9 @@ fn stage_content_differs(
 }
 
 /// Build the Workflows tab view: the curated catalog plus your own (the gallery
-/// cards), with the global active workflow flagged and one workflow `focus`ed
-/// (its slots shown below). `focus` is the card the user clicked; it falls back
-/// to the active workflow, then the first card.
+/// cards), each carrying the loadouts that bind it (`bound_by` — the "in use"
+/// marker), and one workflow `focus`ed (its slots shown below). `focus` is the
+/// card the user clicked; it falls back to the first card.
 pub fn workflows_view(snap: &Snapshot, focus: Option<&str>) -> WorkflowsView {
     let cfg = staged_config(snap).ok();
     let effective = cfg

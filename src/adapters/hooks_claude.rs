@@ -3,7 +3,7 @@
 //! `hooks.json`.
 //!
 //! Nothing registers here any more. Claude's only hook was ambient learning's
-//! `SessionEnd` entry, removed in 0.19.0; all that survives is the remover the
+//! `SessionEnd` entry, removed in 0.21.0; all that survives is the remover the
 //! one-time cleanup in [`crate::legacy`] needs to take that entry back out.
 //! This module goes when that cleanup retires.
 //!

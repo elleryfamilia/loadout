@@ -4,11 +4,30 @@
 
 use std::io::IsTerminal;
 
-use anstyle::{AnsiColor, Style};
+use anstyle::{Ansi256Color, AnsiColor, Color, RgbColor, Style};
 
 /// Whether ANSI color should be emitted (stdout is a TTY and `NO_COLOR` unset).
 pub fn enabled() -> bool {
     std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+}
+
+/// Whether the terminal declares 24-bit color (`COLORTERM=truecolor`/`24bit`).
+/// Anything else gets the 256-color cube approximation from [`Painter::rgb`].
+fn truecolor() -> bool {
+    std::env::var_os("COLORTERM").is_some_and(|v| v == "truecolor" || v == "24bit")
+}
+
+/// Nearest xterm-256 color-cube index for an RGB value (the standard
+/// 16 + 6×6×6 mapping; the levels are 0,95,135,175,215,255).
+fn cube_index(r: u8, g: u8, b: u8) -> u8 {
+    fn level(c: u8) -> u8 {
+        match c {
+            0..=47 => 0,
+            48..=114 => 1,
+            c => ((c as u16 - 35) / 40) as u8,
+        }
+    }
+    16 + 36 * level(r) + 6 * level(g) + level(b)
 }
 
 /// A painter capturing whether color is on, so call sites read cleanly.
@@ -54,6 +73,18 @@ impl Painter {
     }
     pub fn bold(&self, s: &str) -> String {
         self.paint(s, Style::new().bold())
+    }
+
+    /// An exact RGB foreground on truecolor terminals, degrading to the
+    /// nearest xterm-256 cube color elsewhere (256-color support is effectively
+    /// universal among TTYs that pass [`enabled`], macOS Terminal included).
+    pub fn rgb(&self, s: &str, (r, g, b): (u8, u8, u8)) -> String {
+        let color: Color = if truecolor() {
+            RgbColor(r, g, b).into()
+        } else {
+            Ansi256Color(cube_index(r, g, b)).into()
+        };
+        self.paint(s, Style::new().fg_color(Some(color)))
     }
 }
 

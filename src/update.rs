@@ -14,14 +14,59 @@ use std::time::{Duration, SystemTime};
 /// The app name axoupdater uses to locate the install receipt and releases.
 const APP: &str = "loadout";
 
-/// Opt out of the `load run` update nudge (any value disables it).
+/// Opt out of the update nudge entirely (any value disables it). The hard
+/// kill switch — it wins over any `[update] check` config.
 pub const NUDGE_OPT_OUT_ENV: &str = "LOADOUT_NO_UPDATE_CHECK";
 
-/// How often the `run` nudge re-checks for a newer release.
-const NUDGE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// How often `check = "daily"` re-asks the release host.
+const DAILY_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How often `check = "always"` re-asks the release host. "Always" means the
+/// nudge is *evaluated* on every command; the network call itself is capped at
+/// once per this window (GitHub's unauthenticated API allows 60 calls/hour per
+/// IP, shared with everything else on the machine) — within the window the
+/// cached verdict still nudges, so a stale install is reminded on every run.
+const ALWAYS_INTERVAL: Duration = Duration::from_secs(10 * 60);
 
 /// Bound the nudge's network check so a slow release host can't stall a launch.
 const NUDGE_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// When the ambient "newer release available" check runs. Configured via
+/// `[update] check = "always" | "daily" | "off"` in the global config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckMode {
+    /// Evaluate on every loadout command (network-capped; see [`ALWAYS_INTERVAL`]).
+    #[default]
+    Always,
+    /// At most one network check per day (the pre-0.20 behavior).
+    Daily,
+    /// Never check, never nudge.
+    Off,
+}
+
+impl CheckMode {
+    /// Parse the config string leniently. `None` (key absent) → the default;
+    /// an unrecognized value (likely written by a newer loadout) degrades to
+    /// `Daily` — still useful, minimal network — rather than erroring.
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            None => Self::default(),
+            Some(s) => match s.to_ascii_lowercase().as_str() {
+                "always" => Self::Always,
+                "daily" => Self::Daily,
+                "off" | "never" => Self::Off,
+                other => {
+                    crate::warn_user!(
+                        "unknown `[update] check` value '{other}' (expected always/daily/off); \
+                         using daily"
+                    );
+                    Self::Daily
+                }
+            },
+        }
+    }
+}
 
 /// What [`perform`] did, or why it couldn't.
 pub enum Outcome {
@@ -53,62 +98,189 @@ pub fn perform(check_only: bool) -> crate::Result<Outcome> {
         });
     }
     match updater.run_sync()? {
-        Some(result) => Ok(Outcome::Updated {
-            from: result.old_version.map(|v| v.to_string()),
-            to: result.new_version.to_string(),
-        }),
+        Some(result) => {
+            // A cached "available" verdict was computed against the binary we
+            // just replaced — drop it so the next command doesn't nudge about
+            // the update that already happened. (The version stamp in the
+            // cache guards this too; deleting is belt and braces.)
+            if let Some(cache) = cache_path() {
+                let _ = std::fs::remove_file(cache);
+            }
+            Ok(Outcome::Updated {
+                from: result.old_version.map(|v| v.to_string()),
+                to: result.new_version.to_string(),
+            })
+        }
         None => Ok(Outcome::AlreadyCurrent),
     }
 }
 
-/// Best-effort "update available" hint for `load run`. Returns the detail line
-/// to show (the caller renders it in its own step style), or `None` to stay
-/// quiet. It never errors and is cheap on the common path: gated on a TTY and the
-/// opt-out env, throttled to once per [`NUDGE_INTERVAL`] via an on-disk stamp, and
-/// the actual network check is time-bounded so it can't slow a launch.
-pub fn nudge_detail() -> Option<String> {
+/// Best-effort "update available" hint. Returns the detail line to show (the
+/// caller renders it in its own step style), or `None` to stay quiet. Never
+/// errors and is cheap on the common path: gated on a TTY and the opt-out env,
+/// the network call is capped per [`CheckMode`] via an on-disk verdict cache,
+/// and the check itself is time-bounded so it can't slow a launch. Within the
+/// cap window a cached "available" verdict still nudges — a stale install is
+/// reminded on every command, not just the one that happened to check.
+pub fn nudge_detail(mode: CheckMode) -> Option<String> {
+    if mode == CheckMode::Off {
+        return None;
+    }
     if std::env::var_os(NUDGE_OPT_OUT_ENV).is_some() {
         return None;
     }
     if !std::io::stdout().is_terminal() {
         return None;
     }
-    let stamp = stamp_path()?;
-    if !is_due(read_stamp(&stamp), SystemTime::now(), NUDGE_INTERVAL) {
-        return None;
+    let path = cache_path()?;
+    let (nudge, write) = decide(
+        mode,
+        read_cache(&path).as_ref(),
+        SystemTime::now(),
+        check_available_bounded,
+    );
+    if let Some(cache) = write {
+        let _ = write_cache(&path, &cache);
     }
-    // Stamp once per interval regardless of the outcome, so a flaky or offline
-    // check never nags and never repeatedly delays launches.
-    let available = check_available_bounded();
-    let _ = write_stamp(&stamp, SystemTime::now());
-    if available == Some(true) {
-        Some("a newer loadout is available — run `load update`".to_string())
-    } else {
-        None
+    nudge.then(|| "a newer loadout is available — run `load update`".to_string())
+}
+
+/// The ambient post-command nudge: [`nudge_detail`] with the mode read from
+/// the global config, printed in the standard step style. Called from `main`
+/// after interactive commands; `run` calls [`nudge_detail`] itself (it must
+/// print *before* the launch `exec()`s away). Infallible: an unreadable
+/// config falls back to the default mode.
+pub fn ambient_nudge(cwd: &Path) {
+    let repo_base = crate::context::repo_base_for(cwd);
+    let mode = crate::config::Config::load(&repo_base)
+        .map(|c| c.update.check)
+        .unwrap_or_default();
+    if let Some(detail) = nudge_detail(mode) {
+        let p = crate::style::Painter::auto();
+        println!(
+            "{}",
+            crate::commands::apply::step(&p, p.cyan("↑"), "update", detail)
+        );
     }
 }
 
-/// Where the once-a-day check timestamp lives (alongside the global config).
-fn stamp_path() -> Option<PathBuf> {
+/// What the last completed network check concluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    /// A newer release exists.
+    Available,
+    /// This binary is the newest release.
+    Current,
+    /// The check could not complete (offline, timeout, no receipt).
+    Failed,
+}
+
+impl Verdict {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Current => "current",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "available" => Some(Self::Available),
+            "current" => Some(Self::Current),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// The persisted result of the last check: when, by which binary version, and
+/// what it concluded. The version stamp invalidates the verdict across a
+/// binary swap (`load update`, reinstall) — an "available" computed by 0.19.0
+/// must not nudge the 0.20.0 that replaced it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CheckCache {
+    at: SystemTime,
+    version: String,
+    verdict: Verdict,
+}
+
+/// The one decision, pure over `(mode, cache, now)` with the network call
+/// injected — the whole matrix is unit-tested without touching the network.
+/// Returns `(nudge, cache-to-write)`.
+fn decide(
+    mode: CheckMode,
+    cache: Option<&CheckCache>,
+    now: SystemTime,
+    run_check: impl FnOnce() -> Option<bool>,
+) -> (bool, Option<CheckCache>) {
+    let interval = match mode {
+        CheckMode::Always => ALWAYS_INTERVAL,
+        CheckMode::Daily => DAILY_INTERVAL,
+        // Handled by the caller; treated as Daily defensively if it gets here.
+        CheckMode::Off => DAILY_INTERVAL,
+    };
+    // A cache from a different binary version is meaningless — ignore it (and
+    // check now). This also self-heals right after an update.
+    let valid = cache.filter(|c| c.version == env!("CARGO_PKG_VERSION"));
+    if valid.is_none_or(|c| is_due(Some(c.at), now, interval)) {
+        let verdict = match run_check() {
+            Some(true) => Verdict::Available,
+            Some(false) => Verdict::Current,
+            // Offline/timeout also stamps: the interval doubles as the retry
+            // backoff, so a dead network never pays the bound repeatedly.
+            None => Verdict::Failed,
+        };
+        let cache = CheckCache {
+            at: now,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            verdict,
+        };
+        return (verdict == Verdict::Available, Some(cache));
+    }
+    // Within the window: no network, but a known-available verdict still nudges.
+    (valid.is_some_and(|c| c.verdict == Verdict::Available), None)
+}
+
+/// Where the check cache lives (alongside the global config).
+fn cache_path() -> Option<PathBuf> {
     crate::config::global_config_dir().map(|d| d.join("update-check"))
 }
 
-/// Read the last-check time (unix seconds), or `None` if unset/unreadable.
-fn read_stamp(path: &Path) -> Option<SystemTime> {
-    let secs: u64 = std::fs::read_to_string(path).ok()?.trim().parse().ok()?;
-    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+/// Read the cache: one line, `<unix-secs> <version> <verdict>`. A legacy file
+/// holding only `<unix-secs>` (pre-0.20 stamp) reads as a `Failed` verdict at
+/// that time by this version — it throttles like before and never nudges from
+/// stale data.
+fn read_cache(path: &Path) -> Option<CheckCache> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut parts = text.split_whitespace();
+    let secs: u64 = parts.next()?.parse().ok()?;
+    let at = SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+    let (version, verdict) = match (parts.next(), parts.next().and_then(Verdict::parse)) {
+        (Some(v), Some(verdict)) => (v.to_string(), verdict),
+        _ => (env!("CARGO_PKG_VERSION").to_string(), Verdict::Failed),
+    };
+    Some(CheckCache {
+        at,
+        version,
+        verdict,
+    })
 }
 
-/// Record the last-check time (unix seconds), creating the dir if needed.
-fn write_stamp(path: &Path, at: SystemTime) -> std::io::Result<()> {
+/// Persist the cache (see [`read_cache`] for the format).
+fn write_cache(path: &Path, cache: &CheckCache) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let secs = at
+    let secs = cache
+        .at
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    std::fs::write(path, secs.to_string())
+    std::fs::write(
+        path,
+        format!("{secs} {} {}", cache.version, cache.verdict.as_str()),
+    )
 }
 
 /// Whether a check is due: never checked, or `interval` has elapsed. A clock that
@@ -163,20 +335,135 @@ mod tests {
     }
 
     #[test]
-    fn stamp_round_trips_at_second_granularity() {
+    fn cache_round_trips_and_reads_the_legacy_stamp() {
         let dir = tempfile::tempdir().unwrap();
-        // Parent dir doesn't exist yet — write_stamp must create it.
+        // Parent dir doesn't exist yet — write_cache must create it.
         let path = dir.path().join("nested").join("update-check");
-        assert_eq!(read_stamp(&path), None, "missing stamp reads as None");
+        assert!(read_cache(&path).is_none(), "missing cache reads as None");
 
-        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        write_stamp(&path, at).unwrap();
-        let back = read_stamp(&path).unwrap();
+        let cache = CheckCache {
+            at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+            version: "0.20.0".to_string(),
+            verdict: Verdict::Available,
+        };
+        write_cache(&path, &cache).unwrap();
+        assert_eq!(read_cache(&path).unwrap(), cache);
+
+        // A pre-0.20 stamp (bare unix seconds) reads as a Failed verdict at
+        // that time — it throttles, but can never nudge from stale data.
+        std::fs::write(&path, "1700000000").unwrap();
+        let legacy = read_cache(&path).unwrap();
+        assert_eq!(legacy.verdict, Verdict::Failed);
+        assert_eq!(legacy.at, cache.at);
+    }
+
+    /// A cache entry `age` seconds old, written by this binary version.
+    fn cache_aged(now: SystemTime, age: u64, verdict: Verdict) -> CheckCache {
+        CheckCache {
+            at: now - Duration::from_secs(age),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            verdict,
+        }
+    }
+
+    fn now() -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000)
+    }
+
+    #[test]
+    fn due_check_runs_and_persists_its_verdict() {
+        // No cache at all → the check runs; an available result nudges and is
+        // written back for the cap window.
+        let (nudge, write) = decide(CheckMode::Always, None, now(), || Some(true));
+        assert!(nudge);
+        assert_eq!(write.unwrap().verdict, Verdict::Available);
+
+        // Up to date → quiet, verdict still cached.
+        let (nudge, write) = decide(CheckMode::Always, None, now(), || Some(false));
+        assert!(!nudge);
+        assert_eq!(write.unwrap().verdict, Verdict::Current);
+    }
+
+    #[test]
+    fn within_the_window_a_cached_available_still_nudges_without_network() {
+        // 5 min old (inside the 10-min always-window): the injected check
+        // panicking proves no network call is made.
+        let cache = cache_aged(now(), 5 * 60, Verdict::Available);
+        let (nudge, write) = decide(CheckMode::Always, Some(&cache), now(), || {
+            panic!("must not hit the network inside the cap window")
+        });
+        assert!(nudge, "a known-stale install is reminded on every command");
+        assert!(write.is_none(), "nothing to re-write inside the window");
+
+        // Same window, current verdict → quiet.
+        let cache = cache_aged(now(), 5 * 60, Verdict::Current);
+        let (nudge, _) = decide(CheckMode::Always, Some(&cache), now(), || {
+            panic!("must not hit the network inside the cap window")
+        });
+        assert!(!nudge);
+    }
+
+    #[test]
+    fn always_rechecks_after_its_window_daily_after_a_day() {
+        // 11 min old: due under Always, not under Daily.
+        let cache = cache_aged(now(), 11 * 60, Verdict::Current);
+        let (nudge, write) = decide(CheckMode::Always, Some(&cache), now(), || Some(true));
+        assert!(nudge, "always re-checks after 10 minutes");
+        assert!(write.is_some());
+
+        let (nudge, write) = decide(CheckMode::Daily, Some(&cache), now(), || {
+            panic!("daily must not re-check an 11-minute-old verdict")
+        });
+        assert!(!nudge);
+        assert!(write.is_none());
+
+        // 25h old: due under Daily too.
+        let cache = cache_aged(now(), 25 * 60 * 60, Verdict::Current);
+        let (nudge, _) = decide(CheckMode::Daily, Some(&cache), now(), || Some(true));
+        assert!(nudge);
+    }
+
+    #[test]
+    fn failed_check_stamps_so_offline_never_pays_the_bound_repeatedly() {
+        let (nudge, write) = decide(CheckMode::Always, None, now(), || None);
+        assert!(!nudge);
         assert_eq!(
-            back.duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            1_700_000_000
+            write.unwrap().verdict,
+            Verdict::Failed,
+            "a failed check is cached — the interval doubles as retry backoff"
         );
+
+        // Within the window the failure is honored: no retry, no nudge.
+        let cache = cache_aged(now(), 60, Verdict::Failed);
+        let (nudge, write) = decide(CheckMode::Always, Some(&cache), now(), || {
+            panic!("must not retry inside the backoff window")
+        });
+        assert!(!nudge);
+        assert!(write.is_none());
+    }
+
+    #[test]
+    fn cache_from_another_binary_version_is_ignored() {
+        // An "available" verdict computed by the binary this one replaced must
+        // not nudge — the check re-runs instead, whatever its age.
+        let cache = CheckCache {
+            at: now() - Duration::from_secs(60),
+            version: "0.0.1-not-this-binary".to_string(),
+            verdict: Verdict::Available,
+        };
+        let (nudge, write) = decide(CheckMode::Always, Some(&cache), now(), || Some(false));
+        assert!(!nudge, "stale-version verdict discarded; fresh check wins");
+        assert_eq!(write.unwrap().verdict, Verdict::Current);
+    }
+
+    #[test]
+    fn check_mode_parses_leniently() {
+        assert_eq!(CheckMode::parse(None), CheckMode::Always, "default");
+        assert_eq!(CheckMode::parse(Some("always")), CheckMode::Always);
+        assert_eq!(CheckMode::parse(Some("Daily")), CheckMode::Daily);
+        assert_eq!(CheckMode::parse(Some("off")), CheckMode::Off);
+        assert_eq!(CheckMode::parse(Some("never")), CheckMode::Off);
+        // Unknown (a newer loadout's value) degrades to Daily, never errors.
+        assert_eq!(CheckMode::parse(Some("hourly")), CheckMode::Daily);
     }
 }

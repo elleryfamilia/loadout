@@ -40,6 +40,36 @@ version and date (see [RELEASING.md](RELEASING.md)).
 - Overlays re-render once on the first refresh after upgrading, because the
   generated header changed.
 
+## 0.20.0 — 2026-08-07
+
+### Added
+
+- **An equipping bar above the `load run` startup steps.** Launching an agent
+  now draws an amber progress bar — dungeon-crawl style, `▓▒░` shading — that
+  fills as each startup phase completes (sync, loadout selection, gear checks,
+  render, workflow, learn, update) and flashes **EQUIPPED** just before the
+  agent takes over the terminal. It's pure presentation: nothing is slowed
+  down, and it freezes out of the way if loadout needs to ask you something
+  mid-launch. Truecolor where the terminal supports it, 256-color otherwise;
+  disabled automatically for pipes, `NO_COLOR`, `TERM=dumb`, and dry runs, so
+  scripted output is unchanged.
+
+### Changed
+
+- **The update nudge now runs on every `load` command, not once a day.**
+  Any interactive command — `refresh`, `studio` (after it stops), `doctor`,
+  `explain`, and the launch line before `load run` — prints
+  `↑ update  a newer loadout is available — run \`load update\`` when a newer
+  release exists. The network check itself is capped at once per 10 minutes
+  and its verdict is cached, so the reminder costs nothing in between and an
+  offline machine never waits on it. Configure with `[update]
+  check = "always" | "daily" | "off"` in the global config (`always` is the
+  default; `daily` is the old cadence; the `LOADOUT_NO_UPDATE_CHECK`
+  environment variable remains a hard off). The setting is global-only — a
+  repo layer can't silence or force the nudge.
+
+## 0.19.0 — 2026-08-07
+
 ### Changed
 
 - **The plan viewer is redesigned as an editorial document.** `load plan
@@ -69,6 +99,10 @@ version and date (see [RELEASING.md](RELEASING.md)).
 
 ### Fixed
 
+- The studio's workflow gallery marked an equipped workflow with a bare
+  checkmark that read as a global "selected" state — a model that no longer
+  exists. The card now says **in use** in an explicit pill, and its tooltip
+  still names how many loadouts have the workflow equipped.
 - Comment editors were a fraction of their container: the textarea sat at
   its intrinsic width (about 204px) regardless of the space available, and
   an editor opened on an acceptance criterion was 28px wide. Editors now

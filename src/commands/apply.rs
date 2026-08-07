@@ -112,8 +112,17 @@ pub(crate) fn step(p: &Painter, glyph: String, label: &str, detail: String) -> S
 }
 
 pub(crate) fn print_sync_step(p: &Painter, s: &SyncStatus) {
+    if let Some(line) = sync_step_line(p, s) {
+        println!("{line}");
+    }
+}
+
+/// The sync step line, or `None` when sync is disabled (nothing to show).
+/// Split from [`print_sync_step`] so `run` can route it through its progress
+/// bar while `refresh` keeps printing directly.
+pub(crate) fn sync_step_line(p: &Painter, s: &SyncStatus) -> Option<String> {
     let line = match s {
-        SyncStatus::Disabled => return,
+        SyncStatus::Disabled => return None,
         SyncStatus::Skipped { age } => step(
             p,
             p.green("✓"),
@@ -160,7 +169,7 @@ pub(crate) fn print_sync_step(p: &Painter, s: &SyncStatus) {
             "diverged — run `load sync` to reconcile".to_string(),
         ),
     };
-    println!("{line}");
+    Some(line)
 }
 
 /// "1 change" / "N changes".

@@ -1,6 +1,6 @@
 //! One-time cleanup of features loadout used to have.
 //!
-//! Right now that means exactly one: **ambient learning**, removed in 0.19.0.
+//! Right now that means exactly one: **ambient learning**, removed in 0.21.0.
 //! It mined your own agent session transcripts for durable preferences and
 //! staged them in a review inbox. See `docs/shelved-ambient-learning.md`.
 //!
@@ -113,7 +113,7 @@ pub fn retire_learning(dry_run: bool) -> Vec<String> {
     }
 
     out.push(format!(
-        "{} ambient learning was removed in 0.19.0 — cleaning up after it, once.",
+        "{} ambient learning was removed in 0.21.0 — cleaning up after it, once.",
         p.dim("·")
     ));
     let mut clean_pass = true;
@@ -210,7 +210,7 @@ pub fn retire_learning(dry_run: bool) -> Vec<String> {
     // the next command instead of being silently skipped forever.
     if clean_pass {
         if let Err(e) = std::fs::create_dir_all(&state).and_then(|()| {
-            std::fs::write(state.join(MARKER), "ambient learning, removed in 0.19.0\n")
+            std::fs::write(state.join(MARKER), "ambient learning, removed in 0.21.0\n")
         }) {
             crate::warn_user!("could not record that the learning cleanup ran: {e}");
         }

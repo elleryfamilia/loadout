@@ -22,16 +22,26 @@ fn main() -> ExitCode {
     };
     let rt = Runtime::new(cwd, cli.global.dry_run);
 
-    // One-time cleanup after ambient learning, removed in 0.19.0. Sits here
-    // rather than in `run`/`refresh` so it reaches people who mostly use
-    // `studio` or `sync` too — it is a cheap `stat` of a marker file on every
-    // later invocation. Never for `hook`: that is machine-invoked, and the
-    // agent parses its stdout as the hook response.
+    // One-time cleanup after ambient learning was removed. Sits here rather
+    // than in `run`/`refresh` so it reaches people who mostly use `studio` or
+    // `sync` too — it is a cheap `stat` of a marker file on every later
+    // invocation. Never for `hook`: that is machine-invoked, and the agent
+    // parses its stdout as the hook response.
     if !matches!(cli.command, Command::Hook(_)) {
         for line in loadout::legacy::retire_learning(rt.dry_run) {
             println!("{line}");
         }
     }
+
+    // The ambient update nudge runs after every interactive command, except:
+    // `run`/`launch` print their own before the launch `exec()`s away, `update`
+    // would be telling you what you just did, and `hook` is a machine caller
+    // whose stdout must stay clean. `nudge_detail`'s own gates (config mode,
+    // TTY, opt-out env, cap window) keep everything else quiet and cheap.
+    let ambient_nudge = !matches!(
+        &cli.command,
+        Command::Run(_) | Command::Launch(_) | Command::Update(_) | Command::Hook(_)
+    );
 
     let result = match &cli.command {
         Command::Detect(args) => commands::detect::run(&rt, args),
@@ -59,7 +69,12 @@ fn main() -> ExitCode {
     };
 
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            if ambient_nudge {
+                loadout::update::ambient_nudge(&rt.cwd);
+            }
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("error: {e:#}");
             ExitCode::FAILURE
