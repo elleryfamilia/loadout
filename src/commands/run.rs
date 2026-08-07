@@ -16,13 +16,14 @@
 //! var to the directory holding the generated overlay, so the agent discovers it
 //! at launch without any committed file being touched.
 
+use std::cell::RefCell;
 use std::io::{IsTerminal, Write as _};
 use std::process::Command;
 
 use anyhow::anyhow;
 
 use super::apply::{
-    apply_for_agents, learn_pending_count, print_sync_step, step, sync_before_render,
+    apply_for_agents, learn_pending_count, step, sync_before_render, sync_step_line,
 };
 use super::{
     now_rfc3339, prepare_with_live, Aborted, Choice, MissingPolicy, ProfileChooser, Runtime,
@@ -34,9 +35,21 @@ use crate::context::Context;
 use crate::hash;
 use crate::learn::trigger::{maybe_spawn, Trigger};
 use crate::profile::LoadoutConfig;
+use crate::progress::EquipBar;
 use crate::skills::{self, LinkState, SkillState};
 use crate::style::Painter;
 use crate::vlog;
+
+/// [`StdinChooser`] behind the progress bar: freezes the bar before the
+/// interactive prompt so a redraw can never garble it, then delegates.
+struct BarChooser<'a>(&'a RefCell<EquipBar>);
+
+impl ProfileChooser for BarChooser<'_> {
+    fn choose(&self, ctx: &Context, candidates: &[LoadoutConfig]) -> crate::Result<Choice> {
+        self.0.borrow_mut().abandon();
+        StdinChooser.choose(ctx, candidates)
+    }
+}
 
 /// Interactive "which profile?" prompt for `load run` when 2+ profiles match
 /// and no choice is remembered yet. Falls back to no-profile (no prompt) when
@@ -158,13 +171,23 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     let agent = args.agent.as_str();
     let p = Painter::auto();
 
+    // The equipping bar: drawn first, above the step lines, advanced once per
+    // startup phase (7 ticks), finished right before the launch. Every step
+    // line below it must go through `bar.println` (it counts lines for the
+    // in-place redraw), and every path that prompts must `abandon` it first.
+    // Disabled (plain prints, no escapes) on non-TTY / NO_COLOR / dry runs.
+    let bar = RefCell::new(EquipBar::start(7, rt.dry_run));
+
     // Pull the latest config first — best-effort, throttled, timeout-bounded;
     // it never blocks the launch. Done before `prepare_with` so the render below
     // composes freshly-pulled fragments/profiles. Print the line right away.
     let sync_status = sync_before_render(rt);
-    print_sync_step(&p, &sync_status);
+    if let Some(line) = sync_step_line(&p, &sync_status) {
+        bar.borrow_mut().println(&line);
+    }
+    bar.borrow_mut().tick(); // 1/7 sync
 
-    let prep = match prepare_with_live(rt, &StdinChooser, MissingPolicy::Defer, true) {
+    let prep = match prepare_with_live(rt, &BarChooser(&bar), MissingPolicy::Defer, true) {
         Ok(prep) => prep,
         // The user cancelled the profile chooser — exit cleanly, launch nothing.
         Err(e) if e.downcast_ref::<Aborted>().is_some() => {
@@ -177,6 +200,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         }
         Err(e) => return Err(e),
     };
+    bar.borrow_mut().tick(); // 2/7 loadout selected
 
     // Passive hook bootstrap (see `bootstrap_hook_registrations`): launching
     // any agent also wires the IDE freshness hooks of installed ones. Learn
@@ -185,13 +209,15 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     for note in
         crate::adapters::bootstrap_hook_registrations(&prep.config, learn_active, rt.dry_run)
     {
-        println!("  {} {}", p.green("✓"), p.dim(&note));
+        let line = format!("  {} {}", p.green("✓"), p.dim(&note));
+        bar.borrow_mut().println(&line);
     }
 
     // A profile that references a fragment id not in the library would silently
     // drop it from the overlay. Interrupt here — before any render/launch work —
     // and let the user decide: ignore once, open studio to fix it, or quit.
     if !prep.composition.missing.is_empty() {
+        bar.borrow_mut().abandon(); // resolve_missing prompts
         match resolve_missing(&prep, &p)? {
             MissingChoice::Continue => {}
             MissingChoice::OpenStudio => return open_studio_handoff(rt, agent),
@@ -212,8 +238,9 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     // TTY-gated, only while the user looks pre-migration — offer the migrate
     // skill. Best-effort: a skill hiccup must never block the launch.
     if !rt.dry_run {
-        skill_preflight(&prep, &p);
+        skill_preflight(&prep, &p, &bar);
     }
+    bar.borrow_mut().tick(); // 3/7 gear checked (hooks, fragments, skills)
 
     // Accept the agent's launch program as an alias for its id — people type
     // the binary they know (`load cursor-agent`) for the `cursor` agent.
@@ -263,15 +290,23 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         vlog!("skipping pre-launch render (--skip-render)");
         None
     };
-    print_render_step(&p, &prep, agent, result.as_ref());
+    bar.borrow_mut()
+        .println(&render_step_line(&p, &prep, agent, result.as_ref()));
+    bar.borrow_mut().tick(); // 4/7 render
 
     // The workflow active for this run (override wins, else the profile binding),
     // resolved the same way the render did. Drives the launch-env wiring + notice.
     let workflow = prep
         .config
         .resolve_active_workflow(args.workflow.as_deref(), prep.composition.primary_profile());
-    print_workflow_step(&p, workflow.as_ref());
-    print_learn_step(&p, learn_pending);
+    if let Some(line) = workflow_step_line(&p, workflow.as_ref()) {
+        bar.borrow_mut().println(&line);
+    }
+    bar.borrow_mut().tick(); // 5/7 flow
+    if let Some(line) = learn_step_line(&p, learn_pending) {
+        bar.borrow_mut().println(&line);
+    }
+    bar.borrow_mut().tick(); // 6/7 learn
 
     let rendered_at = now_rfc3339();
     let launch_args = build_launch_args(
@@ -308,9 +343,13 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     // `LOADOUT_NO_UPDATE_CHECK`. Printed here rather than by main's ambient
     // nudge because the launch `exec`s away on Unix — nothing after it runs.
     if let Some(detail) = crate::update::nudge_detail(prep.config.update.check) {
-        println!("{}", step(&p, p.cyan("↑"), "update", detail));
+        let line = step(&p, p.cyan("↑"), "update", detail);
+        bar.borrow_mut().println(&line);
     }
-    print_launch_step(&p, &program, &args.args);
+    bar.borrow_mut().tick(); // 7/7 update
+    bar.borrow_mut().finish(); // ▓▓▓ EQUIPPED
+    let launch_line = launch_step_line(&p, &program, &args.args);
+    bar.borrow_mut().println(&launch_line);
 
     // Fire the trigger fast path right before the launch `exec()`s away
     // (unix) and replaces this process: `maybe_spawn` only ever waits on a
@@ -329,7 +368,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
 /// best-effort: errors are logged verbosely and never abort the run. Undecided,
 /// not-yet-installed skills are collected into ONE bundled offer — a fresh user
 /// gets a single question no matter how many skills loadout ships.
-fn skill_preflight(prep: &super::Prepared, p: &Painter) {
+fn skill_preflight(prep: &super::Prepared, p: &Painter, bar: &RefCell<EquipBar>) {
     let Some(home) = crate::config::home_dir() else {
         return;
     };
@@ -337,7 +376,7 @@ fn skill_preflight(prep: &super::Prepared, p: &Painter) {
     for skill in skills::all() {
         let outcome = match crate::binding::read_skill_decision(skill.id) {
             Some(SkillDecision::Declined) => Ok(()),
-            Some(SkillDecision::Accepted) => maintain_skill(&home, skill, p),
+            Some(SkillDecision::Accepted) => maintain_skill(&home, skill, p, bar),
             None => match skills::status(&home, skill).state {
                 // Already present with our marker (installed elsewhere or on
                 // another loadout version): adopt silently instead of asking.
@@ -356,7 +395,7 @@ fn skill_preflight(prep: &super::Prepared, p: &Painter) {
         }
     }
     if !offerable.is_empty() {
-        if let Err(e) = offer_skills(&home, &offerable, prep, p) {
+        if let Err(e) = offer_skills(&home, &offerable, prep, p, bar) {
             vlog!("skill offer failed: {e:#}");
         }
     }
@@ -366,24 +405,27 @@ fn skill_preflight(prep: &super::Prepared, p: &Painter) {
 /// links, refresh a pristine install when this binary ships a newer version.
 /// A user-deleted canonical dir is respected (recorded as declined, one notice);
 /// user-edited files are never touched (`doctor` reports them).
-fn maintain_skill(home: &std::path::Path, skill: &skills::Skill, p: &Painter) -> crate::Result<()> {
+fn maintain_skill(
+    home: &std::path::Path,
+    skill: &skills::Skill,
+    p: &Painter,
+    bar: &RefCell<EquipBar>,
+) -> crate::Result<()> {
     let st = skills::status(home, skill);
     match st.state {
         SkillState::NotInstalled => {
             // The user deleted it; don't resurrect. Remember the opt-out.
             crate::binding::write_skill_decision(skill.id, SkillDecision::Declined)?;
-            println!(
-                "{}",
-                step(
-                    p,
-                    p.dim("·"),
-                    "skill",
-                    p.dim(&format!(
-                        "'{}' was removed — leaving it; `load skill install` restores it",
-                        skill.id
-                    )),
-                )
+            let line = step(
+                p,
+                p.dim("·"),
+                "skill",
+                p.dim(&format!(
+                    "'{}' was removed — leaving it; `load skill install` restores it",
+                    skill.id
+                )),
             );
+            bar.borrow_mut().println(&line);
         }
         SkillState::Unmanaged
         | SkillState::Managed {
@@ -404,10 +446,8 @@ fn maintain_skill(home: &std::path::Path, skill: &skills::Skill, p: &Painter) ->
                 } else {
                     "repaired agent links"
                 };
-                println!(
-                    "{}",
-                    step(p, p.green("✓"), "skill", format!("'{}' {what}", skill.id))
-                );
+                let line = step(p, p.green("✓"), "skill", format!("'{}' {what}", skill.id));
+                bar.borrow_mut().println(&line);
             }
         }
     }
@@ -424,6 +464,7 @@ fn offer_skills(
     offerable: &[&skills::Skill],
     prep: &super::Prepared,
     p: &Painter,
+    bar: &RefCell<EquipBar>,
 ) -> crate::Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Ok(());
@@ -431,6 +472,8 @@ fn offer_skills(
     if !prep.config.profiles.is_empty() {
         return Ok(());
     }
+    // Interactive from here on — freeze the bar before the prompt.
+    bar.borrow_mut().abandon();
 
     let ids = offerable
         .iter()
@@ -509,12 +552,12 @@ fn skill_blurb(id: &str) -> &'static str {
 
 // --- the stepped run summary --------------------------------------------------
 
-fn print_render_step(
+fn render_step_line(
     p: &Painter,
     prep: &super::Prepared,
     agent: &str,
     result: Option<&ApplyResult>,
-) {
+) -> String {
     let label = prep.profile_label();
     let profile = if label.is_empty() {
         "no loadout"
@@ -528,53 +571,47 @@ fn print_render_step(
         ),
         None => format!("{profile} → {agent} {}", p.dim("· render skipped")),
     };
-    println!("{}", step(p, p.green("✓"), "render", detail));
+    step(p, p.green("✓"), "render", detail)
 }
 
-fn print_launch_step(p: &Painter, program: &str, args: &[String]) {
+fn launch_step_line(p: &Painter, program: &str, args: &[String]) -> String {
     let cmd = if args.is_empty() {
         program.to_string()
     } else {
         format!("{program} {}", args.join(" "))
     };
-    println!("{}", step(p, p.cyan("▸"), "launch", cmd));
+    step(p, p.cyan("▸"), "launch", cmd)
 }
 
-/// One concise run-summary line naming the active workflow (or nothing when
+/// One concise run-summary line naming the active workflow (or `None` when
 /// none is bound). Tells the user the spine is live and how to invoke a stage.
-fn print_workflow_step(p: &Painter, workflow: Option<&crate::workflow::Workflow>) {
-    let Some(wf) = workflow else { return };
-    println!(
-        "{}",
-        step(
-            p,
-            p.cyan("◆"),
-            "flow",
-            format!(
-                "{} {}",
-                wf.title(),
-                p.dim(&format!("· {} stages · /loadout:<stage>", wf.stages.len()))
-            ),
-        )
-    );
+fn workflow_step_line(p: &Painter, workflow: Option<&crate::workflow::Workflow>) -> Option<String> {
+    let wf = workflow?;
+    Some(step(
+        p,
+        p.cyan("◆"),
+        "flow",
+        format!(
+            "{} {}",
+            wf.title(),
+            p.dim(&format!("· {} stages · /loadout:<stage>", wf.stages.len()))
+        ),
+    ))
 }
 
 /// The learn discovery step line: at most one, present only when candidates
 /// are actually staged. `pending` is folded once (see `learn_pending_count`)
 /// and passed in — this function is display-only, no I/O of its own.
-fn print_learn_step(p: &Painter, pending: usize) {
+fn learn_step_line(p: &Painter, pending: usize) -> Option<String> {
     if pending == 0 {
-        return;
+        return None;
     }
-    println!(
-        "{}",
-        step(
-            p,
-            p.cyan("✦"),
-            "learn",
-            format!("{pending} staged suggestions await review — load studio"),
-        )
-    );
+    Some(step(
+        p,
+        p.cyan("✦"),
+        "learn",
+        format!("{pending} staged suggestions await review — load studio"),
+    ))
 }
 
 /// The `LOADOUT_<NAME>_PATH` env vars for a bound workflow's handoff artifacts,
