@@ -1355,7 +1355,8 @@ pub fn targets_tab_fragment(view: &TargetsView) -> String {
 
 /// The Workflows tab: an always-visible gallery of curated + your own workflows
 /// (tiny named cards across the top), and below it the focused one shown as its
-/// ordered slots. Picking one makes it your single global active workflow.
+/// ordered slots. Browse/edit only — a workflow is used by equipping it in a
+/// loadout's Workflow slot, not activated globally.
 pub fn workflows_tab(view: &WorkflowsView, flash: Option<&str>) -> Markup {
     let focused = view
         .focused_id
@@ -1402,8 +1403,8 @@ pub fn workflows_tab_fragment(view: &WorkflowsView) -> String {
     workflows_tab(view, None).into_string()
 }
 
-/// Re-render the Workflows tab after selecting an active workflow: the tab (with
-/// a flash) plus a staged-changes indicator refresh.
+/// Re-render the Workflows tab after a gallery mutation (create/edit/delete):
+/// the tab (with a flash) plus a staged-changes indicator refresh.
 pub fn workflows_result(view: &WorkflowsView, flash: &str) -> String {
     html! {
         (workflows_tab(view, Some(flash)))
@@ -1507,7 +1508,7 @@ fn workflow_gallery_card(w: &WorkflowView, focused: bool) -> Markup {
             span class="wf-card-top" {
                 span class="wf-card-glyph" { (icon(glyph)) }
                 span class="wf-card-name" { (w.title) }
-                @if in_use { span class="wf-card-dot" title=(format!("equipped on {} loadout(s)", w.bound_by.len())) { (icon("check")) } }
+                @if in_use { span class="wf-card-pill" title=(format!("equipped on {} loadout(s)", w.bound_by.len())) { "in use" } }
                 @else if !w.builtin { span class="wf-card-tag" { "yours" } }
             }
             @if let Some(b) = &w.blurb { span class="wf-card-blurb" { (b) } }
@@ -1515,8 +1516,8 @@ fn workflow_gallery_card(w: &WorkflowView, focused: bool) -> Markup {
     }
 }
 
-/// The focused workflow in full: title + provenance + the slot spine + a "use
-/// this" action that sets it as the global active workflow.
+/// The focused workflow in full: title + provenance + the slot spine +
+/// browse/edit actions (Customize for built-ins; Edit/Delete for owned).
 fn workflow_detail(w: &WorkflowView) -> Markup {
     html! {
         div class="wf-detail" {
