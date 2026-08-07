@@ -8,7 +8,7 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased
+## 0.19.0 — 2026-08-07
 
 ### Changed
 
@@ -39,6 +39,10 @@ version and date (see [RELEASING.md](RELEASING.md)).
 
 ### Fixed
 
+- The studio's workflow gallery marked an equipped workflow with a bare
+  checkmark that read as a global "selected" state — a model that no longer
+  exists. The card now says **in use** in an explicit pill, and its tooltip
+  still names how many loadouts have the workflow equipped.
 - Comment editors were a fraction of their container: the textarea sat at
   its intrinsic width (about 204px) regardless of the space available, and
   an editor opened on an acceptance criterion was 28px wide. Editors now
