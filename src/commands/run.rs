@@ -303,10 +303,11 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         std::fs::create_dir_all(crate::workflow::artifacts_dir(&prep.repo_base)).ok();
     }
 
-    // Best-effort, throttled (once/day), time-bounded "update available" hint —
-    // skipped on dry-run, non-TTY, and via `LOADOUT_NO_UPDATE_CHECK`. Printed
-    // before the launch line since the launch `exec`s away on Unix.
-    if let Some(detail) = crate::update::nudge_detail() {
+    // Best-effort, time-bounded "update available" hint, capped per the
+    // `[update] check` mode — skipped on dry-run, non-TTY, and via
+    // `LOADOUT_NO_UPDATE_CHECK`. Printed here rather than by main's ambient
+    // nudge because the launch `exec`s away on Unix — nothing after it runs.
+    if let Some(detail) = crate::update::nudge_detail(prep.config.update.check) {
         println!("{}", step(&p, p.cyan("↑"), "update", detail));
     }
     print_launch_step(&p, &program, &args.args);

@@ -36,6 +36,8 @@ pub struct Config {
     pub env: EnvConfig,
     /// Codex-adapter knobs.
     pub codex: CodexConfig,
+    /// Ambient update-check behavior (`[update]`).
+    pub update: UpdateConfig,
     /// Your profiles (entirely user-authored; one is selected per context).
     pub profiles: Vec<LoadoutConfig>,
     /// Your fragment library (the `[[fragments]]` you authored, merged by
@@ -137,6 +139,15 @@ pub struct EnvConfig {
     pub allowlist: Vec<String>,
     /// Regexes over variable *names*; matches are always dropped.
     pub deny_name_patterns: Vec<String>,
+}
+
+/// Ambient update-check configuration (`[update]`).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct UpdateConfig {
+    /// When the "newer release available" nudge checks and prints:
+    /// `always` (every command, network-capped — the default), `daily`, or
+    /// `off`. The `LOADOUT_NO_UPDATE_CHECK` env var is a hard off regardless.
+    pub check: crate::update::CheckMode,
 }
 
 /// Codex adapter configuration.
@@ -350,11 +361,14 @@ fn strip_global_only(layer: crate::fragment::Layer, parsed: &mut RawConfig) {
         //     otherwise add names (e.g. `DATABASE_URL`) to leak their values.
         //   - `[learn]` toggles ambient harvesting from your agent sessions;
         //     a cloned repo must never be able to flip it on.
+        //   - `[update]` governs the update-check nudge; a repo must not be
+        //     able to silence (or force) it.
         parsed.defaults = None;
         parsed.sync = None;
         parsed.codex = None;
         parsed.env = None;
         parsed.learn = None;
+        parsed.update = None;
     }
     if !layer.contributes_profiles() {
         parsed.profiles.clear();
@@ -384,6 +398,7 @@ struct RawConfig {
     codex: Option<RawCodex>,
     sync: Option<RawSync>,
     learn: Option<RawLearn>,
+    update: Option<RawUpdate>,
     // The user-authored loadouts. Canonical TOML key is `[[loadouts]]`; the old
     // `[[loadouts]]` key is still accepted (legacy alias) so existing configs
     // keep loading. The Rust field stays `profiles` — it's internal and renaming
@@ -452,6 +467,13 @@ struct RawLearn {
     model: Option<String>,
 }
 
+// Deliberately NOT `deny_unknown_fields`, same forward-compat stance as the
+// other operational tables.
+#[derive(Debug, Default, Deserialize)]
+struct RawUpdate {
+    check: Option<String>, // "always" (default) | "daily" | "off"
+}
+
 /// Every top-level key [`RawConfig`] models. A key outside this set is from a
 /// newer loadout (forward-compat) or a typo — tolerated, but warned about.
 const KNOWN_TOP_LEVEL: &[&str] = &[
@@ -460,6 +482,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "codex",
     "sync",
     "learn",
+    "update",
     "loadouts",
     "profiles",
     "fragments",
@@ -500,6 +523,7 @@ fn warn_unknown_config_keys(text: &str, path: &Path) {
             "learn",
             &["enabled", "interval", "scope", "cli", "model"][..],
         ),
+        ("update", &["check"][..]),
     ] {
         if let Some(sub) = table.get(section).and_then(|v| v.as_table()) {
             for key in sub.keys() {
@@ -575,6 +599,12 @@ impl RawConfig {
             }
             if s.timeout.is_some() {
                 slot.timeout = s.timeout;
+            }
+        }
+        if let Some(u) = other.update {
+            let slot = self.update.get_or_insert_with(Default::default);
+            if u.check.is_some() {
+                slot.check = u.check;
             }
         }
         if let Some(l) = other.learn {
@@ -681,6 +711,11 @@ impl RawConfig {
             codex: CodexConfig {
                 write_override: codex.write_override.unwrap_or(true),
                 max_output_kib: codex.max_output_kib.unwrap_or(32),
+            },
+            update: UpdateConfig {
+                check: crate::update::CheckMode::parse(
+                    self.update.as_ref().and_then(|u| u.check.as_deref()),
+                ),
             },
             profiles,
             fragments,
@@ -958,6 +993,50 @@ mod tests {
         assert_eq!(c.learn.model.as_deref(), Some("sonnet"));
         // The earlier layer's `interval` survives — the overlay never set it.
         assert_eq!(c.learn.interval, std::time::Duration::from_secs(3600));
+    }
+
+    #[test]
+    fn update_check_defaults_to_always_and_parses_each_mode() {
+        use crate::fragment::Layer;
+        use crate::update::CheckMode;
+        let c = Config::defaults();
+        assert_eq!(
+            c.update.check,
+            CheckMode::Always,
+            "[update] defaults to always"
+        );
+
+        for (value, expect) in [
+            ("always", CheckMode::Always),
+            ("daily", CheckMode::Daily),
+            ("off", CheckMode::Off),
+        ] {
+            let c = Config::from_layer_strs(vec![(
+                Layer::Global,
+                PathBuf::from("/g/config.toml"),
+                format!("[update]\ncheck = \"{value}\"\n"),
+            )])
+            .unwrap();
+            assert_eq!(c.update.check, expect, "check = \"{value}\"");
+        }
+
+        // A value written by a newer loadout degrades to daily, never bricks.
+        let c = Config::from_layer_strs(vec![(
+            Layer::Global,
+            PathBuf::from("/g/config.toml"),
+            "[update]\ncheck = \"hourly\"\n".to_string(),
+        )])
+        .unwrap();
+        assert_eq!(c.update.check, CheckMode::Daily);
+    }
+
+    #[test]
+    fn update_check_later_layer_wins_on_merge() {
+        let mut base: RawConfig = toml::from_str("[update]\ncheck = \"off\"\n").unwrap();
+        let overlay: RawConfig = toml::from_str("[update]\ncheck = \"daily\"\n").unwrap();
+        base.merge(overlay);
+        let c = base.finalize(vec![]);
+        assert_eq!(c.update.check, crate::update::CheckMode::Daily);
     }
 
     #[test]
@@ -1259,6 +1338,9 @@ mod tests {
 
         [learn]
         enabled = true
+
+        [update]
+        check = "off"
     "#;
 
     fn assert_operational_tables_stripped(c: &Config) {
@@ -1279,6 +1361,11 @@ mod tests {
         assert!(
             !c.learn.enabled,
             "repo must not enable [learn] — a cloned repo must never toggle learning"
+        );
+        assert_eq!(
+            c.update.check,
+            crate::update::CheckMode::Always,
+            "repo must not change [update].check — it can't silence (or force) the nudge"
         );
     }
 
