@@ -8,6 +8,22 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Changed
+
+- **The update nudge now runs on every `load` command, not once a day.**
+  Any interactive command — `refresh`, `studio` (after it stops), `doctor`,
+  `explain`, and the launch line before `load run` — prints
+  `↑ update  a newer loadout is available — run \`load update\`` when a newer
+  release exists. The network check itself is capped at once per 10 minutes
+  and its verdict is cached, so the reminder costs nothing in between and an
+  offline machine never waits on it. Configure with `[update]
+  check = "always" | "daily" | "off"` in the global config (`always` is the
+  default; `daily` is the old cadence; the `LOADOUT_NO_UPDATE_CHECK`
+  environment variable remains a hard off). The setting is global-only — a
+  repo layer can't silence or force the nudge.
+
 ## 0.19.0 — 2026-08-07
 
 ### Changed
