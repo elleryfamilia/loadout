@@ -169,7 +169,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     let p = Painter::auto();
 
     // The equipping bar: drawn first, above the step lines, advanced once per
-    // startup phase (7 ticks), finished right before the launch. Every step
+    // startup phase (6 ticks), finished right before the launch. Every step
     // line below it must go through `bar.println` (it counts lines for the
     // in-place redraw), and every path that prompts must `abandon` it first.
     // Disabled (plain prints, no escapes) on non-TTY / NO_COLOR / dry runs.

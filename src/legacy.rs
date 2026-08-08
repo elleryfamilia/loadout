@@ -136,24 +136,34 @@ pub fn retire_learning(dry_run: bool) -> Vec<String> {
                 // on 0.18 reads this flag out of the synced repo and keeps
                 // harvesting until it changes there. Bounded and
                 // warn-don't-fail — never leave this machine half-retired
-                // because a remote was slow or had moved on.
+                // because a remote was slow or had moved on. Honors
+                // `[sync] auto_push = false` like every other automatic push:
+                // an opted-out user gets the "run `load sync`" warning instead
+                // of an unsolicited commit+push of their config repo.
                 if let Some(dir) = config::global_config_dir() {
                     if crate::sync::is_synced(&dir) {
-                        match crate::sync::commit_push(
-                            &dir,
-                            "loadout: retire ambient learning",
-                            PUSH_TIMEOUT,
-                        ) {
-                            Ok(crate::sync::PushOutcome::Pushed) => out.push(format!(
-                                "  {} pushed the change — your other machines pick it up at their next launch.",
-                                p.dim("·")
-                            )),
-                            Ok(crate::sync::PushOutcome::NothingToPush) => {}
-                            Ok(crate::sync::PushOutcome::Diverged) | Err(_) => {
-                                crate::warn_user!(
-                                    "turned learning off here, but couldn't push it. Run `load sync` \
-                                     so your other machines stop harvesting too."
-                                );
+                        if !auto_push_enabled() {
+                            crate::warn_user!(
+                                "turned learning off here, but auto_push is off — run `load sync` \
+                                 so your other machines stop harvesting too."
+                            );
+                        } else {
+                            match crate::sync::commit_push(
+                                &dir,
+                                "loadout: retire ambient learning",
+                                PUSH_TIMEOUT,
+                            ) {
+                                Ok(crate::sync::PushOutcome::Pushed) => out.push(format!(
+                                    "  {} pushed the change — your other machines pick it up at their next launch.",
+                                    p.dim("·")
+                                )),
+                                Ok(crate::sync::PushOutcome::NothingToPush) => {}
+                                Ok(crate::sync::PushOutcome::Diverged) | Err(_) => {
+                                    crate::warn_user!(
+                                        "turned learning off here, but couldn't push it. Run `load sync` \
+                                         so your other machines stop harvesting too."
+                                    );
+                                }
                             }
                         }
                     }
@@ -252,6 +262,30 @@ fn learn_flag_is_on() -> bool {
         .ok()
         .and_then(|t| t.get("learn")?.as_table()?.get("enabled")?.as_bool())
         .unwrap_or(false)
+}
+
+/// Whether the user has opted out of automatic pushes (`[sync]
+/// auto_push = false` in the global `config.toml` or `local.toml`; later layer
+/// wins, absent means the `true` default). Read raw, same self-contained style
+/// as [`learn_flag_is_on`]: the retire push must honor the same preference
+/// every other automatic push honors.
+fn auto_push_enabled() -> bool {
+    let Some(dir) = config::global_config_dir() else {
+        return true;
+    };
+    let mut enabled = true;
+    for file in ["config.toml", "local.toml"] {
+        let Ok(text) = std::fs::read_to_string(dir.join(file)) else {
+            continue;
+        };
+        if let Some(v) = toml::from_str::<toml::Table>(&text)
+            .ok()
+            .and_then(|t| t.get("sync")?.as_table()?.get("auto_push")?.as_bool())
+        {
+            enabled = v;
+        }
+    }
+    enabled
 }
 
 /// Set `[learn] enabled = false` in the global config, preserving comments and

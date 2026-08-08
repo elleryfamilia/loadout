@@ -1190,13 +1190,10 @@ fn apply_hook_registry(
     apply_hook_registry_at(writer, &home, hr, files, notes, warnings)
 }
 
-/// Home-explicit core of [`apply_hook_registry`] (the `_at` test seam). Routes on
-/// [`HookRegistry::format`]: `Flat` writes Cursor's single-array dialect;
-/// `ClaudeNested` writes Claude Code's nested matcher schema in
-/// `.claude/settings.json` via [`hooks_claude`]. Both share the read → backup →
-/// atomic-write → note path; only the JSON transform differs. Claude Code's
-/// top-level `disableAllHooks: true` short-circuits (register nothing) and
-/// surfaces [`hooks_claude::DISABLE_ALL_HOOKS_NOTE`].
+/// Home-explicit core of [`apply_hook_registry`] (the `_at` test seam). Writes
+/// Cursor's flat single-array hooks dialect — the only registry format left now
+/// that the Claude-nested learn hooks are gone — via the shared read → backup →
+/// atomic-write → note path.
 fn apply_hook_registry_at(
     writer: &dyn Writer,
     home: &Path,
