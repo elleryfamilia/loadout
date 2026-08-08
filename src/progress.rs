@@ -48,11 +48,14 @@ const MUTED: (u8, u8, u8) = (150, 110, 40);
 /// The unlit color for a box whose phase hasn't started.
 const PENDING: (u8, u8, u8) = (78, 74, 66);
 
-/// Inner content width of each box (3 boxes × `BOX_W + 3` border/label cells
-/// must fit [`MIN_GRID_COLS`]).
-const BOX_W: usize = 22;
+/// Inner width of each box — the columns between the left and right borders,
+/// identical on all three lines (top border, content, bottom border). Each box
+/// occupies `BOX_W + 2` columns; 3 boxes plus the 2-space indent must fit
+/// [`MIN_GRID_COLS`].
+const BOX_W: usize = 23;
 /// Below this terminal width the grid would wrap, so the HUD stays off and the
-/// classic step lines are used instead.
+/// classic step lines are used instead. (`2 + 3 × (BOX_W + 2) = 77`, so 78
+/// leaves a column of slack.)
 const MIN_GRID_COLS: u16 = 78;
 /// Render cadence.
 const FRAME: Duration = Duration::from_millis(45);
@@ -377,6 +380,18 @@ impl EquipHud {
     }
 }
 
+impl Drop for EquipHud {
+    /// Safety net for exit paths that never called [`EquipHud::finish`] — an
+    /// early `Err` return from render/prepare, or a panic. Without it the
+    /// detached render thread would keep repainting stdout while the error is
+    /// printed, and the captured warnings would be lost. [`EquipHud::abandon`]
+    /// is idempotent, so a normal `finish`/`abandon` already having run makes
+    /// this a no-op.
+    fn drop(&mut self) {
+        self.abandon();
+    }
+}
+
 /// Best-effort terminal width in columns via `TIOCGWINSZ`. `None` off a TTY or
 /// on any platform without the ioctl → the caller treats it as "too narrow"
 /// and keeps the HUD off.
@@ -492,16 +507,20 @@ fn render_box(phase: Phase, state: &BoxPhase, now: Instant, p: &Painter) -> [Str
             painted
         }
     };
-    let dashes = BOX_W.saturating_sub(char_len(phase.label()));
+    // All three lines span `BOX_W` inner columns between their border corners:
+    //   top     ┌ ─ LABEL {fill} ┐   → 1 + label + fill = BOX_W
+    //   content │ <padded content> │ → BOX_W
+    //   bottom  └ {BOX_W dashes}   ┘ → BOX_W
+    let fill = BOX_W.saturating_sub(1 + char_len(phase.label()));
     let bar = |s: &str| p.rgb(s, color);
     [
         format!(
             "{}{title}{}",
             bar("┌─"),
-            bar(&format!("{}┐", "─".repeat(dashes)))
+            bar(&format!("{}┐", "─".repeat(fill)))
         ),
         format!("{}{content}{}", bar("│"), bar("│")),
-        bar(&format!("└{}┘", "─".repeat(BOX_W + 1))),
+        bar(&format!("└{}┘", "─".repeat(BOX_W))),
     ]
 }
 
@@ -657,6 +676,58 @@ mod tests {
             "cycled word: {active:?}"
         );
         assert!(active[1].contains('⋯'), "cycle marker: {active:?}");
+    }
+
+    /// Visible width of a line with ANSI SGR sequences stripped.
+    fn visible_width(s: &str) -> usize {
+        let mut n = 0;
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                // Skip a `\x1b[ … m` sequence.
+                for e in chars.by_ref() {
+                    if e == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn a_box_top_content_and_bottom_are_the_same_width() {
+        let p = Painter::new(false); // no escapes → width is just char count
+        for state in [
+            BoxPhase::Pending,
+            BoxPhase::Active {
+                since: Instant::now(),
+                settle: None,
+            },
+            BoxPhase::Settled(Settled {
+                glyph: Glyph::Go,
+                detail: Some("claude".into()),
+            }),
+            BoxPhase::Settled(Settled {
+                glyph: Glyph::Ok,
+                detail: None,
+            }),
+        ] {
+            // LOADOUT is the widest label — the tightest fill case.
+            let lines = render_box(Phase::Loadout, &state, Instant::now(), &p);
+            let widths: Vec<usize> = lines.iter().map(|l| visible_width(l)).collect();
+            assert_eq!(
+                widths[0], widths[1],
+                "top vs content misaligned: {widths:?} for {lines:?}"
+            );
+            assert_eq!(
+                widths[1], widths[2],
+                "content vs bottom misaligned: {widths:?} for {lines:?}"
+            );
+            assert_eq!(widths[0], BOX_W + 2, "each box spans BOX_W + 2 columns");
+        }
     }
 
     #[test]
