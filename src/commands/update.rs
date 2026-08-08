@@ -11,6 +11,12 @@ use crate::update::{self, Outcome};
 
 /// Entry point for `load update`.
 pub fn run(_rt: &Runtime, args: &UpdateArgs) -> crate::Result<()> {
+    // The detached refresher spawned by the ambient nudge: refresh the verdict
+    // cache, print nothing, exit 0. Handled before anything interactive.
+    if args.refresh_cache {
+        update::refresh_cache();
+        return Ok(());
+    }
     let p = Painter::auto();
     match update::perform(args.check)? {
         Outcome::Updated { from, to } => {

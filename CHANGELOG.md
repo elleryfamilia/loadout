@@ -25,6 +25,19 @@ version and date (see [RELEASING.md](RELEASING.md)).
   is too narrow for the grid, and it steps aside cleanly if loadout needs to
   prompt you mid-launch.
 
+### Fixed
+
+- **The update nudge can no longer miss a fresh release or slow a launch.**
+  The check now runs entirely in the background: every command reads the
+  cached verdict instantly, and a stale verdict spawns a tiny detached
+  refresher that asks the release host without a deadline and writes the
+  answer for the next command. Previously the check ran inline under a
+  1.5-second cap — a cold network hop could silently swallow the nudge, and
+  the 10-minute verdict window meant the minutes right after a release (when
+  you most expect the nudge) were exactly when it stayed quiet. A known
+  "update available" verdict now also keeps nudging while its refresh runs,
+  instead of going silent the moment it turns stale.
+
 ## 0.21.0 — 2026-08-08
 
 ### Removed
