@@ -10,6 +10,21 @@ version and date (see [RELEASING.md](RELEASING.md)).
 
 ## Unreleased
 
+### Changed
+
+- **The `load run` startup is now a game-style equipping HUD.** Instead of a
+  progress bar over a list of steps, launching an agent draws a grid of boxes —
+  one per startup phase (sync, loadout, gear, render, flow, launch). While a
+  phase runs, its box rapidly cycles that phase's real sub-steps
+  (`pulling refs ⋯`, `folding fragments ⋯`) and then lands on the outcome, all
+  in the same amber as the old bar. A background thread animates the grid while
+  the real work happens, so nothing is slowed down (the reel just guarantees
+  each box is visible for a moment before it settles). It falls back to the
+  plain step lines — byte-for-byte as before — when output isn't an interactive
+  terminal, `NO_COLOR`/`TERM=dumb` is set, on `--dry-run`, or when the terminal
+  is too narrow for the grid, and it steps aside cleanly if loadout needs to
+  prompt you mid-launch.
+
 ### Fixed
 
 - **The update nudge can no longer miss a fresh release or slow a launch.**
