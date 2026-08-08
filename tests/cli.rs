@@ -3690,6 +3690,33 @@ fn retiring_learning_happens_once_and_then_stays_quiet() {
         .stderr(predicate::str::contains("ambient learning was removed").not());
 }
 
+// --- ambient update-check refresher -------------------------------------------
+
+/// The detached refresher (`load update --refresh-cache`) must be silent,
+/// exit 0, and persist a verdict for the next command's nudge. Offline-safe
+/// in tests: the fixture has no install receipt, so the check concludes
+/// `failed` without any network dependence.
+#[test]
+fn update_refresh_cache_is_silent_and_writes_the_verdict() {
+    let fx = Fixture::new();
+    fx.cmd()
+        .args(["update", "--refresh-cache"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
+
+    let cache = fx.read_global("update-check");
+    assert!(
+        cache.contains("failed"),
+        "no receipt in the fixture -> a failed verdict is persisted: {cache}"
+    );
+    assert!(
+        cache.contains(env!("CARGO_PKG_VERSION")),
+        "the verdict is stamped with the binary version: {cache}"
+    );
+}
+
 #[test]
 fn retiring_learning_says_nothing_on_a_machine_that_never_ran_it() {
     let fx = Fixture::new();
