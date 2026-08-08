@@ -21,15 +21,12 @@ pub const NUDGE_OPT_OUT_ENV: &str = "LOADOUT_NO_UPDATE_CHECK";
 /// How often `check = "daily"` re-asks the release host.
 const DAILY_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// How often `check = "always"` re-asks the release host. "Always" means the
-/// nudge is *evaluated* on every command; the network call itself is capped at
-/// once per this window (GitHub's unauthenticated API allows 60 calls/hour per
-/// IP, shared with everything else on the machine) — within the window the
+/// How often `check = "always"` refreshes its verdict. "Always" means the
+/// nudge is *evaluated* on every command; the network refresh itself is capped
+/// at once per this window (GitHub's unauthenticated API allows 60 calls/hour
+/// per IP, shared with everything else on the machine) — within the window the
 /// cached verdict still nudges, so a stale install is reminded on every run.
 const ALWAYS_INTERVAL: Duration = Duration::from_secs(10 * 60);
-
-/// Bound the nudge's network check so a slow release host can't stall a launch.
-const NUDGE_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// When the ambient "newer release available" check runs. Configured via
 /// `[update] check = "always" | "daily" | "off"` in the global config.
@@ -116,12 +113,16 @@ pub fn perform(check_only: bool) -> crate::Result<Outcome> {
 }
 
 /// Best-effort "update available" hint. Returns the detail line to show (the
-/// caller renders it in its own step style), or `None` to stay quiet. Never
-/// errors and is cheap on the common path: gated on a TTY and the opt-out env,
-/// the network call is capped per [`CheckMode`] via an on-disk verdict cache,
-/// and the check itself is time-bounded so it can't slow a launch. Within the
-/// cap window a cached "available" verdict still nudges — a stale install is
-/// reminded on every command, not just the one that happened to check.
+/// caller renders it in its own step style), or `None` to stay quiet.
+///
+/// **Never touches the network inline.** The nudge only reads the on-disk
+/// verdict cache; when the verdict is stale per [`CheckMode`], it spawns a
+/// tiny detached `load update --refresh-cache` that performs the (unbounded)
+/// check and writes the verdict for the *next* command. So a launch is never
+/// delayed and a slow release host can never suppress the nudge — the only
+/// cost is that a brand-new release shows up at most one command late.
+/// Within the refresh window a cached "available" verdict nudges on every
+/// command, so a stale install is reminded until it updates.
 pub fn nudge_detail(mode: CheckMode) -> Option<String> {
     if mode == CheckMode::Off {
         return None;
@@ -133,16 +134,70 @@ pub fn nudge_detail(mode: CheckMode) -> Option<String> {
         return None;
     }
     let path = cache_path()?;
-    let (nudge, write) = decide(
-        mode,
-        read_cache(&path).as_ref(),
-        SystemTime::now(),
-        check_available_bounded,
-    );
-    if let Some(cache) = write {
-        let _ = write_cache(&path, &cache);
+    let (nudge, refresh) = decide(mode, read_cache(&path).as_ref(), SystemTime::now());
+    if refresh {
+        // Stamp before spawning so a burst of commands starts ONE refresher,
+        // not a swarm: the stamp closes the window immediately, and the child
+        // overwrites it with the real verdict. `Failed` is the honest
+        // placeholder ("no verdict"), and doubles as the retry backoff if the
+        // child dies before writing.
+        let _ = write_cache(
+            &path,
+            &CheckCache {
+                at: SystemTime::now(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                verdict: Verdict::Failed,
+            },
+        );
+        spawn_refresher();
     }
     nudge.then(|| "a newer loadout is available — run `load update`".to_string())
+}
+
+/// The detached cache refresher (the `load update --refresh-cache` child):
+/// perform the release check without a deadline and persist the verdict.
+/// Silent and infallible by design — its only observable effect is the cache
+/// file the next command's nudge reads.
+pub fn refresh_cache() {
+    let Some(path) = cache_path() else {
+        return;
+    };
+    let verdict = match check_available() {
+        Some(true) => Verdict::Available,
+        Some(false) => Verdict::Current,
+        None => Verdict::Failed,
+    };
+    let _ = write_cache(
+        &path,
+        &CheckCache {
+            at: SystemTime::now(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            verdict,
+        },
+    );
+}
+
+/// Launch `load update --refresh-cache` detached: no wait, no inherited stdio,
+/// its own process group. Short-lived parents exit right after (init reaps);
+/// `run`'s exec reparents it the same way. Best-effort — a failed spawn just
+/// means the stamped window retries later.
+fn spawn_refresher() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["update", "--refresh-cache"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+    if let Ok(child) = cmd.spawn() {
+        drop(child);
+    }
 }
 
 /// The ambient post-command nudge: [`nudge_detail`] with the mode read from
@@ -205,15 +260,14 @@ struct CheckCache {
     verdict: Verdict,
 }
 
-/// The one decision, pure over `(mode, cache, now)` with the network call
-/// injected — the whole matrix is unit-tested without touching the network.
-/// Returns `(nudge, cache-to-write)`.
-fn decide(
-    mode: CheckMode,
-    cache: Option<&CheckCache>,
-    now: SystemTime,
-    run_check: impl FnOnce() -> Option<bool>,
-) -> (bool, Option<CheckCache>) {
+/// The one decision, pure over `(mode, cache, now)` — no I/O, fully
+/// unit-tested. Returns `(nudge, spawn-a-refresh)`.
+///
+/// The nudge always comes from the last known verdict — a due-for-refresh
+/// "available" still nudges (stale-but-known beats silent). The refresh flag
+/// is simply "the verdict is older than the mode's window, or missing, or
+/// from another binary version".
+fn decide(mode: CheckMode, cache: Option<&CheckCache>, now: SystemTime) -> (bool, bool) {
     let interval = match mode {
         CheckMode::Always => ALWAYS_INTERVAL,
         CheckMode::Daily => DAILY_INTERVAL,
@@ -221,25 +275,11 @@ fn decide(
         CheckMode::Off => DAILY_INTERVAL,
     };
     // A cache from a different binary version is meaningless — ignore it (and
-    // check now). This also self-heals right after an update.
+    // refresh now). This also self-heals right after an update.
     let valid = cache.filter(|c| c.version == env!("CARGO_PKG_VERSION"));
-    if valid.is_none_or(|c| is_due(Some(c.at), now, interval)) {
-        let verdict = match run_check() {
-            Some(true) => Verdict::Available,
-            Some(false) => Verdict::Current,
-            // Offline/timeout also stamps: the interval doubles as the retry
-            // backoff, so a dead network never pays the bound repeatedly.
-            None => Verdict::Failed,
-        };
-        let cache = CheckCache {
-            at: now,
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            verdict,
-        };
-        return (verdict == Verdict::Available, Some(cache));
-    }
-    // Within the window: no network, but a known-available verdict still nudges.
-    (valid.is_some_and(|c| c.verdict == Verdict::Available), None)
+    let nudge = valid.is_some_and(|c| c.verdict == Verdict::Available);
+    let refresh = valid.is_none_or(|c| is_due(Some(c.at), now, interval));
+    (nudge, refresh)
 }
 
 /// Where the check cache lives (alongside the global config).
@@ -292,18 +332,9 @@ fn is_due(last: Option<SystemTime>, now: SystemTime, interval: Duration) -> bool
     }
 }
 
-/// The network check, bounded by [`NUDGE_TIMEOUT`]. Timeout, offline, or a missing
-/// receipt all collapse to `None` ("don't nudge").
-fn check_available_bounded() -> Option<bool> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(check_available());
-    });
-    rx.recv_timeout(NUDGE_TIMEOUT).ok().flatten()
-}
-
 /// `Some(true/false)` if we could ask the release host; `None` if there's no
-/// receipt or the query failed.
+/// receipt or the query failed. Only the detached refresher calls this — the
+/// nudge itself never touches the network.
 fn check_available() -> Option<bool> {
     use axoupdater::AxoUpdater;
     let mut updater = AxoUpdater::new_for(APP);
@@ -371,89 +402,85 @@ mod tests {
     }
 
     #[test]
-    fn due_check_runs_and_persists_its_verdict() {
-        // No cache at all → the check runs; an available result nudges and is
-        // written back for the cap window.
-        let (nudge, write) = decide(CheckMode::Always, None, now(), || Some(true));
-        assert!(nudge);
-        assert_eq!(write.unwrap().verdict, Verdict::Available);
-
-        // Up to date → quiet, verdict still cached.
-        let (nudge, write) = decide(CheckMode::Always, None, now(), || Some(false));
-        assert!(!nudge);
-        assert_eq!(write.unwrap().verdict, Verdict::Current);
+    fn no_verdict_spawns_a_refresh_and_stays_quiet() {
+        // No cache at all: nothing to nudge from; a refresh is requested.
+        let (nudge, refresh) = decide(CheckMode::Always, None, now());
+        assert!(!nudge, "no verdict yet - never nudge on a guess");
+        assert!(refresh, "missing verdict must request a refresh");
     }
 
     #[test]
-    fn within_the_window_a_cached_available_still_nudges_without_network() {
-        // 5 min old (inside the 10-min always-window): the injected check
-        // panicking proves no network call is made.
+    fn within_the_window_the_cached_verdict_rules_and_nothing_respawns() {
+        // 5 min old (inside the 10-min always-window): available nudges,
+        // current stays quiet, and neither asks for a refresh.
         let cache = cache_aged(now(), 5 * 60, Verdict::Available);
-        let (nudge, write) = decide(CheckMode::Always, Some(&cache), now(), || {
-            panic!("must not hit the network inside the cap window")
-        });
+        let (nudge, refresh) = decide(CheckMode::Always, Some(&cache), now());
         assert!(nudge, "a known-stale install is reminded on every command");
-        assert!(write.is_none(), "nothing to re-write inside the window");
+        assert!(!refresh, "fresh verdict - no refresh");
 
-        // Same window, current verdict → quiet.
         let cache = cache_aged(now(), 5 * 60, Verdict::Current);
-        let (nudge, _) = decide(CheckMode::Always, Some(&cache), now(), || {
-            panic!("must not hit the network inside the cap window")
-        });
+        let (nudge, refresh) = decide(CheckMode::Always, Some(&cache), now());
         assert!(!nudge);
+        assert!(!refresh);
     }
 
     #[test]
-    fn always_rechecks_after_its_window_daily_after_a_day() {
+    fn a_due_available_verdict_still_nudges_while_refreshing() {
+        // Stale-but-known beats silent: an 11-minute-old "available" nudges
+        // AND requests a refresh in the same command.
+        let cache = cache_aged(now(), 11 * 60, Verdict::Available);
+        let (nudge, refresh) = decide(CheckMode::Always, Some(&cache), now());
+        assert!(nudge, "the last known verdict keeps nudging");
+        assert!(
+            refresh,
+            "and the stale verdict is refreshed in the background"
+        );
+    }
+
+    #[test]
+    fn always_refreshes_after_its_window_daily_after_a_day() {
         // 11 min old: due under Always, not under Daily.
         let cache = cache_aged(now(), 11 * 60, Verdict::Current);
-        let (nudge, write) = decide(CheckMode::Always, Some(&cache), now(), || Some(true));
-        assert!(nudge, "always re-checks after 10 minutes");
-        assert!(write.is_some());
-
-        let (nudge, write) = decide(CheckMode::Daily, Some(&cache), now(), || {
-            panic!("daily must not re-check an 11-minute-old verdict")
-        });
-        assert!(!nudge);
-        assert!(write.is_none());
+        let (_, refresh) = decide(CheckMode::Always, Some(&cache), now());
+        assert!(refresh, "always refreshes after 10 minutes");
+        let (_, refresh) = decide(CheckMode::Daily, Some(&cache), now());
+        assert!(!refresh, "daily must not refresh an 11-minute-old verdict");
 
         // 25h old: due under Daily too.
         let cache = cache_aged(now(), 25 * 60 * 60, Verdict::Current);
-        let (nudge, _) = decide(CheckMode::Daily, Some(&cache), now(), || Some(true));
-        assert!(nudge);
+        let (_, refresh) = decide(CheckMode::Daily, Some(&cache), now());
+        assert!(refresh);
     }
 
     #[test]
-    fn failed_check_stamps_so_offline_never_pays_the_bound_repeatedly() {
-        let (nudge, write) = decide(CheckMode::Always, None, now(), || None);
-        assert!(!nudge);
-        assert_eq!(
-            write.unwrap().verdict,
-            Verdict::Failed,
-            "a failed check is cached — the interval doubles as retry backoff"
-        );
-
-        // Within the window the failure is honored: no retry, no nudge.
+    fn failed_verdict_backs_off_inside_the_window_and_retries_after() {
+        // A fresh Failed stamp (the pre-spawn placeholder, or a dead-network
+        // child's verdict): quiet, and no respawn inside the window - so a
+        // burst of commands starts exactly one refresher.
         let cache = cache_aged(now(), 60, Verdict::Failed);
-        let (nudge, write) = decide(CheckMode::Always, Some(&cache), now(), || {
-            panic!("must not retry inside the backoff window")
-        });
+        let (nudge, refresh) = decide(CheckMode::Always, Some(&cache), now());
         assert!(!nudge);
-        assert!(write.is_none());
+        assert!(!refresh, "the window doubles as the retry backoff");
+
+        // Past the window the refresh is requested again.
+        let cache = cache_aged(now(), 11 * 60, Verdict::Failed);
+        let (nudge, refresh) = decide(CheckMode::Always, Some(&cache), now());
+        assert!(!nudge);
+        assert!(refresh);
     }
 
     #[test]
     fn cache_from_another_binary_version_is_ignored() {
         // An "available" verdict computed by the binary this one replaced must
-        // not nudge — the check re-runs instead, whatever its age.
+        // not nudge - it is treated as absent, and a refresh is requested.
         let cache = CheckCache {
             at: now() - Duration::from_secs(60),
             version: "0.0.1-not-this-binary".to_string(),
             verdict: Verdict::Available,
         };
-        let (nudge, write) = decide(CheckMode::Always, Some(&cache), now(), || Some(false));
-        assert!(!nudge, "stale-version verdict discarded; fresh check wins");
-        assert_eq!(write.unwrap().verdict, Verdict::Current);
+        let (nudge, refresh) = decide(CheckMode::Always, Some(&cache), now());
+        assert!(!nudge, "stale-version verdict discarded");
+        assert!(refresh);
     }
 
     #[test]

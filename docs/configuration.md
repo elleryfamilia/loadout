@@ -207,18 +207,21 @@ push: `auto_push = false`.
 
 When the ambient "a newer loadout is available — run `load update`" nudge
 checks and prints. The nudge appears after any interactive `load` command
-(and before an agent launch); it is TTY-only and never blocks — the network
-check is time-bounded and its verdict is cached, so a stale install is
-reminded on every command without a network call each time.
+(and before an agent launch); it is TTY-only and **never touches the network
+inline** — it reads a cached verdict, and when that verdict is stale it
+spawns a tiny detached refresher (`load update --refresh-cache`) that checks
+without a deadline and writes the verdict for the next command. Launches are
+never delayed, a slow release host can't suppress the nudge, and the only
+cost is a brand-new release showing up at most one command late.
 
 ```toml
 [update]
 check = "always"   # "always" (default) | "daily" | "off"
 ```
 
-- `always` — evaluated on every command; the actual network check runs at most
+- `always` — evaluated on every command; the background refresh runs at most
   once per 10 minutes (the cached verdict covers the window).
-- `daily` — at most one network check per day.
+- `daily` — at most one background refresh per day.
 - `off` — never check, never nudge. The `LOADOUT_NO_UPDATE_CHECK` environment
   variable is a hard off regardless of this setting.
 

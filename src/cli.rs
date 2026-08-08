@@ -196,6 +196,10 @@ pub struct UpdateArgs {
     /// Only report whether a newer release exists; don't install it.
     #[arg(long)]
     pub check: bool,
+    /// Internal: refresh the ambient update-check verdict cache and exit
+    /// silently. Spawned detached by the nudge; not for interactive use.
+    #[arg(long, hide = true)]
+    pub refresh_cache: bool,
 }
 
 /// `use` options — pin this project to a named loadout.
