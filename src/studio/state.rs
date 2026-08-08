@@ -38,23 +38,12 @@ pub struct StudioState {
     pub onboarding_active: bool,
     /// The tab the user is currently on (`profiles`/`library`/`settings`).
     /// Tracked so Apply re-renders the tab in place instead of always
-    /// bouncing back to Profiles. A drawer (recents/inbox) overlays whatever
-    /// tab is current and never sets this.
+    /// bouncing back to Profiles. A drawer (recents) overlays whatever tab is
+    /// current and never sets this.
     pub active_tab: String,
     /// Where the per-machine recents registry lives (None: no state dir).
     /// Injected so route() tests point it at a fixture tempdir.
     pub recents_path: Option<PathBuf>,
-    /// Where the Inbox drawer's journals + evidence + run log live (None: no
-    /// config/state dir). Injected so route() tests point it at a fixture
-    /// tempdir, the same seam as `recents_path`.
-    pub inbox: Option<crate::studio::inbox::InboxPaths>,
-    /// Whether a landed `[learn] enabled` change should run the real hook
-    /// bootstrap (see `server::learn_bootstrap_after_apply`). True in
-    /// production; false in the studio route-test fixture — the bootstrap
-    /// resolves hook files under the real `$HOME` (`config::home_dir()`), and
-    /// there is no test seam to redirect that, so tests must skip the call
-    /// entirely rather than risk writing into a developer's real dotfiles.
-    pub bootstrap_learn_hooks: bool,
 }
 
 impl StudioState {
@@ -558,9 +547,6 @@ fn render_profile_in_config(
         config: cfg,
         generated_at: now_rfc3339(),
         dynamic: mode,
-        // A staged/draft preview, not an applied overlay — the learn
-        // discovery line only needs to reach the real, written files.
-        learn_pending: 0,
     })?;
     let fragment_count = composition
         .fragments

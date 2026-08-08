@@ -22,9 +22,7 @@ use std::process::Command;
 
 use anyhow::anyhow;
 
-use super::apply::{
-    apply_for_agents, learn_pending_count, step, sync_before_render, sync_step_line,
-};
+use super::apply::{apply_for_agents, step, sync_before_render, sync_step_line};
 use super::{
     now_rfc3339, prepare_with_live, Aborted, Choice, MissingPolicy, ProfileChooser, Runtime,
 };
@@ -33,7 +31,6 @@ use crate::binding::SkillDecision;
 use crate::cli::{RunArgs, StudioArgs};
 use crate::context::Context;
 use crate::hash;
-use crate::learn::trigger::{maybe_spawn, Trigger};
 use crate::profile::LoadoutConfig;
 use crate::progress::EquipBar;
 use crate::skills::{self, LinkState, SkillState};
@@ -172,11 +169,11 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     let p = Painter::auto();
 
     // The equipping bar: drawn first, above the step lines, advanced once per
-    // startup phase (7 ticks), finished right before the launch. Every step
+    // startup phase (6 ticks), finished right before the launch. Every step
     // line below it must go through `bar.println` (it counts lines for the
     // in-place redraw), and every path that prompts must `abandon` it first.
     // Disabled (plain prints, no escapes) on non-TTY / NO_COLOR / dry runs.
-    let bar = RefCell::new(EquipBar::start(7, rt.dry_run));
+    let bar = RefCell::new(EquipBar::start(6, rt.dry_run));
 
     // Pull the latest config first — best-effort, throttled, timeout-bounded;
     // it never blocks the launch. Done before `prepare_with` so the render below
@@ -185,7 +182,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     if let Some(line) = sync_step_line(&p, &sync_status) {
         bar.borrow_mut().println(&line);
     }
-    bar.borrow_mut().tick(); // 1/7 sync
+    bar.borrow_mut().tick(); // 1/6 sync
 
     let prep = match prepare_with_live(rt, &BarChooser(&bar), MissingPolicy::Defer, true) {
         Ok(prep) => prep,
@@ -200,15 +197,11 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         }
         Err(e) => return Err(e),
     };
-    bar.borrow_mut().tick(); // 2/7 loadout selected
+    bar.borrow_mut().tick(); // 2/6 loadout selected
 
     // Passive hook bootstrap (see `bootstrap_hook_registrations`): launching
-    // any agent also wires the IDE freshness hooks of installed ones. Learn
-    // hooks register only while learning is active on this machine.
-    let learn_active = crate::learn::state::learn_active(&prep.config);
-    for note in
-        crate::adapters::bootstrap_hook_registrations(&prep.config, learn_active, rt.dry_run)
-    {
+    // any agent also wires the IDE freshness hooks of installed ones.
+    for note in crate::adapters::bootstrap_hook_registrations(&prep.config, rt.dry_run) {
         let line = format!("  {} {}", p.green("✓"), p.dim(&note));
         bar.borrow_mut().println(&line);
     }
@@ -240,7 +233,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     if !rt.dry_run {
         skill_preflight(&prep, &p, &bar);
     }
-    bar.borrow_mut().tick(); // 3/7 gear checked (hooks, fragments, skills)
+    bar.borrow_mut().tick(); // 3/6 gear checked (hooks, fragments, skills)
 
     // Accept the agent's launch program as an alias for its id — people type
     // the binary they know (`load cursor-agent`) for the `cursor` agent.
@@ -268,11 +261,6 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         ));
     }
 
-    // Learn discovery count: folded ONCE for this whole invocation (zero cost
-    // when `[learn]` is disabled) and reused for both the header (via the
-    // render below) and the `learn` step line just after it.
-    let learn_pending = learn_pending_count(&prep.config);
-
     // Preflight render (quiet — `run` prints its own concise summary).
     let rendered = !args.skip_render;
     let result = if rendered {
@@ -282,7 +270,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
             force: false,
             workflow_override: args.workflow.clone(),
         };
-        apply_for_agents(rt, &prep, &[agent.to_string()], &opts, learn_pending)?
+        apply_for_agents(rt, &prep, &[agent.to_string()], &opts)?
             .into_iter()
             .next()
             .map(|(_, r)| r)
@@ -292,7 +280,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     };
     bar.borrow_mut()
         .println(&render_step_line(&p, &prep, agent, result.as_ref()));
-    bar.borrow_mut().tick(); // 4/7 render
+    bar.borrow_mut().tick(); // 4/6 render
 
     // The workflow active for this run (override wins, else the profile binding),
     // resolved the same way the render did. Drives the launch-env wiring + notice.
@@ -302,11 +290,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     if let Some(line) = workflow_step_line(&p, workflow.as_ref()) {
         bar.borrow_mut().println(&line);
     }
-    bar.borrow_mut().tick(); // 5/7 flow
-    if let Some(line) = learn_step_line(&p, learn_pending) {
-        bar.borrow_mut().println(&line);
-    }
-    bar.borrow_mut().tick(); // 6/7 learn
+    bar.borrow_mut().tick(); // 5/6 flow
 
     let rendered_at = now_rfc3339();
     let launch_args = build_launch_args(
@@ -346,18 +330,10 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         let line = step(&p, p.cyan("↑"), "update", detail);
         bar.borrow_mut().println(&line);
     }
-    bar.borrow_mut().tick(); // 7/7 update
+    bar.borrow_mut().tick(); // 6/6 update
     bar.borrow_mut().finish(); // ▓▓▓ EQUIPPED
     let launch_line = launch_step_line(&p, &program, &args.args);
     bar.borrow_mut().println(&launch_line);
-
-    // Fire the trigger fast path right before the launch `exec()`s away
-    // (unix) and replaces this process: `maybe_spawn` only ever waits on a
-    // millisecond-lived intermediate, and the double-spawn it performs
-    // reparents the real worker to init — so the worker survives the exec
-    // that's about to happen. Never blocks, never errors outward; a disabled/
-    // unactivated/off-interval machine pays only the cheap guard-chain checks.
-    maybe_spawn(&prep.config, Trigger::Run);
 
     launch(&program, &launch_args, &rendered_at, &rt.cwd, &extra_env)
 }
@@ -596,21 +572,6 @@ fn workflow_step_line(p: &Painter, workflow: Option<&crate::workflow::Workflow>)
             wf.title(),
             p.dim(&format!("· {} stages · /loadout:<stage>", wf.stages.len()))
         ),
-    ))
-}
-
-/// The learn discovery step line: at most one, present only when candidates
-/// are actually staged. `pending` is folded once (see `learn_pending_count`)
-/// and passed in — this function is display-only, no I/O of its own.
-fn learn_step_line(p: &Painter, pending: usize) -> Option<String> {
-    if pending == 0 {
-        return None;
-    }
-    Some(step(
-        p,
-        p.cyan("✦"),
-        "learn",
-        format!("{pending} staged suggestions await review — load studio"),
     ))
 }
 

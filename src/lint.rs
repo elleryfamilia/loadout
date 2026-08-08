@@ -75,19 +75,11 @@ fn collect(value: &toml::Value, patterns: &[Regex], out: &mut Vec<String>) {
 /// each pattern carries the human label surfaced in warnings. Ships in the
 /// binary; not user-configurable in this release.
 ///
-/// **Adding a pattern (binding):** any new *text* pattern MUST be either
-/// case-insensitive (`(?i)`, as every text pattern here is) or otherwise
-/// invariant under [`crate::learn::journal::normalize`] (lowercase + whitespace
-/// collapse). Two consumers depend on this. First, the claim gate
-/// ([`crate::learn::gate`]) runs [`find_injection`] over the union of a claim's
-/// raw text AND its normalized form; a pattern that matched only one casing
-/// would give different verdicts for the raw vs normalized text of the same
-/// claim. Second, the journal fold's rule is **latest observation's quarantine
-/// verdict wins**: [`crate::learn::journal::candidate_id`] folds case/whitespace
-/// variants to one candidate, so a re-observation that came back clean only
-/// because of casing would silently clear an earlier quarantine. A
-/// character-class pattern (the hidden-Unicode rules below) is inherently
-/// normalization-invariant and needs no `(?i)`.
+/// **Adding a pattern (binding):** any new *text* pattern should be
+/// case-insensitive (`(?i)`, as every text pattern here is), so the same text
+/// cannot produce different verdicts depending on how it was cased or
+/// whitespace-collapsed upstream. A character-class pattern (the hidden-Unicode
+/// rules below) is inherently invariant and needs no `(?i)`.
 pub fn injection_patterns() -> &'static [(Regex, &'static str)] {
     static PATTERNS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
     PATTERNS.get_or_init(|| {

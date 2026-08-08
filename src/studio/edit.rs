@@ -87,11 +87,6 @@ pub enum StagedOp {
     DeleteWorkflow { layer: Layer, id: String },
     /// Set `[defaults] agent` — the default launch agent.
     SetDefaultAgent { layer: Layer, agent: String },
-    /// Set `[learn] enabled` — the synced ambient-learning intent flag. The
-    /// machine-local side effects (activation ack, hook registration) are NOT
-    /// part of the op: they belong to the settings handlers / post-apply hook
-    /// (see `handle_apply`), keeping the op a pure config mutation.
-    SetLearnEnabled { layer: Layer, enabled: bool },
 }
 
 impl StagedOp {
@@ -109,8 +104,7 @@ impl StagedOp {
             | StagedOp::CreateWorkflow { layer, .. }
             | StagedOp::EditWorkflow { layer, .. }
             | StagedOp::DeleteWorkflow { layer, .. }
-            | StagedOp::SetDefaultAgent { layer, .. }
-            | StagedOp::SetLearnEnabled { layer, .. } => *layer,
+            | StagedOp::SetDefaultAgent { layer, .. } => *layer,
             StagedOp::DuplicatePaletteItem { to_layer, .. } => *to_layer,
         }
     }
@@ -145,13 +139,6 @@ impl StagedOp {
             StagedOp::SetDefaultAgent { agent, .. } => {
                 format!("set the default agent to \u{201c}{agent}\u{201d}")
             }
-            StagedOp::SetLearnEnabled { enabled, .. } => {
-                if *enabled {
-                    "turn ambient learning on \u{2014} adds [learn] enabled = true".to_string()
-                } else {
-                    "turn ambient learning off \u{2014} sets [learn] enabled = false".to_string()
-                }
-            }
         }
     }
 }
@@ -181,18 +168,6 @@ pub struct Session {
     /// entry per accepted script-bearing `EditFragment`/`EditTarget`. The
     /// explicit studio edit *is* the trust approval.
     pub(crate) pending_trust: Vec<(trust::Kind, String, std::collections::BTreeSet<String>)>,
-    /// Inbox dispositions to append to this machine's journal once `apply()`'s
-    /// config write succeeds — the studio-inbox analogue of `pending_trust`.
-    /// Same guarantee: the disposition lands **iff** the config write lands
-    /// (queued on stage, flushed in `apply()`, dropped by `discard()`). Used by
-    /// the Inbox drawer's promote flow so a candidate is only marked `Promoted` if
-    /// its fragment actually reached the config files.
-    pub(crate) pending_dispositions: Vec<crate::learn::journal::Disposition>,
-    /// Where [`pending_dispositions`](Self::pending_dispositions) flush:
-    /// `(inbox_dir, machine_id)` naming this machine's `journal-<id>.jsonl`.
-    /// Set when the first disposition is queued; every queued disposition on a
-    /// session shares one sink.
-    pub(crate) disposition_sink: Option<(PathBuf, String)>,
 }
 
 /// A per-file diff of the staged document against the raw on-disk bytes.
@@ -239,25 +214,7 @@ impl Session {
             layers,
             ops: Vec::new(),
             pending_trust: Vec::new(),
-            pending_dispositions: Vec::new(),
-            disposition_sink: None,
         })
-    }
-
-    /// Queue a journal disposition to append on the next successful
-    /// [`apply`](Self::apply) — the inbox-promote analogue of `pending_trust`.
-    /// `inbox_dir`/`machine_id` name this machine's `journal-<id>.jsonl`; every
-    /// queued disposition on a session shares that one sink. The disposition is
-    /// written **only if** `apply()`'s config write lands (and is dropped by
-    /// [`discard`](Self::discard)).
-    pub fn queue_disposition(
-        &mut self,
-        inbox_dir: &Path,
-        machine_id: &str,
-        disposition: crate::learn::journal::Disposition,
-    ) {
-        self.disposition_sink = Some((inbox_dir.to_path_buf(), machine_id.to_string()));
-        self.pending_dispositions.push(disposition);
     }
 
     /// Stage one typed op: mutate the target layer's working document and record
@@ -308,11 +265,9 @@ impl Session {
             lf.reread()?;
         }
         self.ops.clear();
-        // Abandoned ops must not leave a stray trust approval — or a stray inbox
-        // disposition — queued for a later, unrelated apply().
+        // Abandoned ops must not leave a stray trust approval queued for a
+        // later, unrelated apply().
         self.pending_trust.clear();
-        self.pending_dispositions.clear();
-        self.disposition_sink = None;
         Ok(())
     }
 
@@ -481,22 +436,6 @@ impl Session {
             }
         }
 
-        // The inbox analogue of pending_trust: a queued promote disposition lands
-        // in this machine's journal iff the config write above landed. Best-effort
-        // append (like trust) — a journal hiccup must not fail a successful config
-        // write; the candidate simply stays Pending until re-promoted.
-        if let Some((inbox_dir, machine_id)) = self.disposition_sink.take() {
-            if !self.pending_dispositions.is_empty() {
-                let events: Vec<crate::learn::journal::Event> = self
-                    .pending_dispositions
-                    .drain(..)
-                    .map(crate::learn::journal::Event::Disposition)
-                    .collect();
-                let _ = crate::learn::journal::append_events_at(&inbox_dir, &machine_id, &events);
-            }
-        }
-        self.pending_dispositions.clear();
-
         Ok(written)
     }
 
@@ -605,9 +544,6 @@ fn apply_op(doc: &mut DocumentMut, op: &StagedOp) -> Result<()> {
         }
         StagedOp::SetDefaultAgent { agent, .. } => {
             table_mut(doc, "defaults")["agent"] = toml_edit::value(agent.as_str());
-        }
-        StagedOp::SetLearnEnabled { enabled, .. } => {
-            table_mut(doc, "learn")["enabled"] = toml_edit::value(*enabled);
         }
     }
     Ok(())
@@ -1217,74 +1153,6 @@ mod tests {
         assert!(s.pending_trust.is_empty());
     }
 
-    // --- inbox promote dispositions: land iff the config write lands ----------
-
-    fn disposition(id: &str) -> crate::learn::journal::Disposition {
-        crate::learn::journal::Disposition {
-            id: id.into(),
-            action: crate::learn::journal::Action::Promote,
-            ts: "2026-07-11T10:00:00Z".into(),
-        }
-    }
-
-    #[test]
-    fn queued_disposition_is_appended_to_the_journal_on_apply() {
-        let (d, gdir) = repo_with_global("");
-        let inbox = d.path().join("inbox");
-        let mut s = session_global(d.path(), &gdir);
-        // A real config change so apply() writes a file (the disposition is
-        // gated on that write landing).
-        s.stage(StagedOp::CreateFragment {
-            layer: Layer::Global,
-            cap: Box::new(cap("prefer-pnpm", "Always use pnpm.")),
-        })
-        .unwrap();
-        s.queue_disposition(&inbox, "machine-a", disposition("cand-1"));
-
-        s.apply().unwrap();
-
-        let journal = inbox.join("journal-machine-a.jsonl");
-        let content = std::fs::read_to_string(&journal).unwrap();
-        assert!(
-            content.contains("\"type\":\"disposition\"")
-                && content.contains("\"id\":\"cand-1\"")
-                && content.contains("\"action\":\"promote\""),
-            "the promote disposition must land in this machine's journal: {content}"
-        );
-        // The queue is drained after a successful apply (no stray re-flush).
-        assert!(s.pending_dispositions.is_empty());
-        assert!(s.disposition_sink.is_none());
-    }
-
-    #[test]
-    fn queued_disposition_is_dropped_by_discard_and_never_journaled() {
-        let (d, gdir) = repo_with_global("");
-        let inbox = d.path().join("inbox");
-        let mut s = session_global(d.path(), &gdir);
-        s.stage(StagedOp::CreateFragment {
-            layer: Layer::Global,
-            cap: Box::new(cap("prefer-pnpm", "Always use pnpm.")),
-        })
-        .unwrap();
-        s.queue_disposition(&inbox, "machine-a", disposition("cand-1"));
-
-        s.discard().unwrap();
-        assert!(s.pending_dispositions.is_empty());
-        assert!(s.disposition_sink.is_none());
-
-        // A later, unrelated apply must not resurrect the abandoned disposition.
-        s.stage(StagedOp::CreateFragment {
-            layer: Layer::Global,
-            cap: Box::new(cap("other", "Something else.")),
-        })
-        .unwrap();
-        s.apply().unwrap();
-        assert!(
-            !inbox.join("journal-machine-a.jsonl").exists(),
-            "a discarded disposition must never be written"
-        );
-    }
-
     // --- StagedOp::describe (review page's plain-language summary) -----------
 
     #[test]
@@ -1309,55 +1177,24 @@ mod tests {
     }
 
     #[test]
-    fn describe_set_learn_enabled_differs_on_and_off() {
-        let on = StagedOp::SetLearnEnabled {
-            layer: Layer::Global,
-            enabled: true,
-        };
-        assert_eq!(
-            on.describe(),
-            "turn ambient learning on \u{2014} adds [learn] enabled = true"
-        );
-        let off = StagedOp::SetLearnEnabled {
-            layer: Layer::Global,
-            enabled: false,
-        };
-        assert_eq!(
-            off.describe(),
-            "turn ambient learning off \u{2014} sets [learn] enabled = false"
-        );
-    }
-
-    #[test]
-    fn scalar_ops_write_defaults_and_learn_tables() {
+    fn scalar_ops_write_the_defaults_table() {
         let d = tempfile::tempdir().unwrap();
         let gdir = d.path().join("global");
         std::fs::create_dir_all(&gdir).unwrap();
-        std::fs::write(
-            gdir.join("config.toml"),
-            "# my config\n[learn]\nenabled = false\n",
-        )
-        .unwrap();
+        std::fs::write(gdir.join("config.toml"), "# my config\n").unwrap();
         let mut s = Session::open(d.path(), Some(&gdir)).unwrap();
         s.stage(StagedOp::SetDefaultAgent {
             layer: Layer::Global,
             agent: "codex".into(),
         })
         .unwrap();
-        s.stage(StagedOp::SetLearnEnabled {
-            layer: Layer::Global,
-            enabled: true,
-        })
-        .unwrap();
         s.apply().unwrap();
         let text = std::fs::read_to_string(gdir.join("config.toml")).unwrap();
         assert!(text.contains("# my config"), "comment preserved");
         assert!(text.contains("agent = \"codex\""));
-        assert!(text.contains("enabled = true"));
         // The written config must round-trip through the real loader.
         let cfg =
             crate::config::Config::load_from(Some(&gdir.join("config.toml")), d.path()).unwrap();
         assert_eq!(cfg.default_agent, "codex");
-        assert!(cfg.learn.enabled);
     }
 }

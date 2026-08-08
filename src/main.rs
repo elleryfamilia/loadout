@@ -22,6 +22,19 @@ fn main() -> ExitCode {
     };
     let rt = Runtime::new(cwd, cli.global.dry_run);
 
+    // One-time cleanup after ambient learning was removed. Sits here rather
+    // than in `run`/`refresh` so it reaches people who mostly use `studio` or
+    // `sync` too — it is a cheap `stat` of a marker file on every later
+    // invocation. Never for `hook`: that is machine-invoked, and the agent
+    // parses its stdout as the hook response. The notes go to stderr so a
+    // machine-parsed stdout (`plan check --json` and friends) is never
+    // corrupted by the one run that happens to trigger the cleanup.
+    if !matches!(cli.command, Command::Hook(_)) {
+        for line in loadout::legacy::retire_learning(rt.dry_run) {
+            eprintln!("{line}");
+        }
+    }
+
     // The ambient update nudge runs after every interactive command, except:
     // `run`/`launch` print their own before the launch `exec()`s away, `update`
     // would be telling you what you just did, and `hook` is a machine caller
@@ -47,8 +60,6 @@ fn main() -> ExitCode {
         Command::Skill(args) => commands::skill::run(&rt, args),
         Command::Plan(args) => commands::plan::run(&rt, args),
         Command::Update(args) => commands::update::run(&rt, args),
-        Command::Harvest(args) => commands::harvest::run(&rt, args),
-        Command::Learn(args) => commands::learn::run(&rt, args),
         Command::Hook(args) => commands::hook::run(&rt, args),
         Command::Use(args) => commands::bind::run(&rt, args),
         Command::List(args) => commands::introspect::list(&rt, args),

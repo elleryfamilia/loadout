@@ -1,5 +1,11 @@
-//! Writer for Claude Code's `.claude/settings.json` hooks — the **nested matcher
-//! schema**, a different on-disk shape from Cursor's flat `hooks.json`.
+//! Remover for loadout's entry in Claude Code's `.claude/settings.json` hooks —
+//! the **nested matcher schema**, a different on-disk shape from Cursor's flat
+//! `hooks.json`.
+//!
+//! Nothing registers here any more. Claude's only hook was ambient learning's
+//! `SessionEnd` entry, removed in 0.21.0; all that survives is the remover the
+//! one-time cleanup in [`crate::legacy`] needs to take that entry back out.
+//! This module goes when that cleanup retires.
 //!
 //! Claude Code stores hooks as:
 //!
@@ -20,33 +26,13 @@
 //! survives a round-trip. It is *not* byte preservation — serde_json re-serializes
 //! the document and may reorder object keys and normalize whitespace. What is
 //! guaranteed is that no foreign key/value is altered or dropped, our entry is
-//! matched by its ` <subcommand>` command suffix (so a moved binary is repointed,
-//! not duplicated), and containers **we created and then emptied** (our matcher
-//! group, an otherwise-empty `SessionEnd` array, an otherwise-empty `hooks`
-//! object) are removed on deregistration — while any foreign sibling is kept.
-//!
-//! When Claude Code's top-level `disableAllHooks: true` is set, every hook is
-//! inert, so [`upsert_claude_hook`] writes nothing and the caller surfaces
-//! [`DISABLE_ALL_HOOKS_NOTE`].
+//! matched by its ` <subcommand>` command suffix, and containers **we created
+//! and then emptied** (our matcher group, an otherwise-empty `SessionEnd`
+//! array, an otherwise-empty `hooks` object) are removed — while any foreign
+//! sibling is kept.
 
-use anyhow::{anyhow, bail, Context as _};
-use serde_json::{json, Map, Value};
-
-/// Note the caller surfaces when Claude Code has `disableAllHooks: true` — our
-/// SessionEnd hook would never fire, so learning relies on entry-point triggers.
-pub const DISABLE_ALL_HOOKS_NOTE: &str =
-    "claude hooks disabled by disableAllHooks — learning will rely on entry-point triggers";
-
-/// True when the settings JSON has a top-level `disableAllHooks: true`. A missing
-/// key, a non-boolean value, `false`, or unparseable input all read as "not
-/// disabled" (we still register, and an unparseable file surfaces its parse error
-/// through [`upsert_claude_hook`] instead).
-pub fn hooks_disabled(existing: &str) -> bool {
-    serde_json::from_str::<Value>(existing)
-        .ok()
-        .and_then(|v| v.get("disableAllHooks").and_then(Value::as_bool))
-        .unwrap_or(false)
-}
+use anyhow::Context as _;
+use serde_json::Value;
 
 /// True when `command` is a loadout entry, i.e. its `command` string ends with
 /// the ` <subcommand>` suffix. An exact suffix match, so a foreign command that
@@ -59,79 +45,6 @@ fn is_ours(entry: &Value, suffix: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Ensure a `{ type: "command", command, timeout: 10 }` entry running `command`
-/// exists under `hooks.<event>` in Claude Code's nested settings JSON, matched by
-/// the ` <subcommand>` command suffix. A moved binary is repointed **in place**
-/// (its group and timeout preserved); an already-current entry returns `Ok(None)`
-/// (no churn). `disableAllHooks: true` returns `Ok(None)` (register nothing).
-/// Every foreign key/value is preserved. Returns the new pretty-printed JSON.
-pub fn upsert_claude_hook(
-    existing: &str,
-    event: &str,
-    subcommand: &str,
-    command: &str,
-) -> anyhow::Result<Option<String>> {
-    let mut root: Value = if existing.trim().is_empty() {
-        Value::Object(Map::new())
-    } else {
-        serde_json::from_str(existing).context("parsing existing .claude/settings.json")?
-    };
-    let obj = root
-        .as_object_mut()
-        .ok_or_else(|| anyhow!(".claude/settings.json root is not a JSON object"))?;
-
-    // `disableAllHooks: true` → every hook is inert; register nothing (the caller
-    // surfaces DISABLE_ALL_HOOKS_NOTE).
-    if obj.get("disableAllHooks").and_then(Value::as_bool) == Some(true) {
-        return Ok(None);
-    }
-
-    let groups = obj
-        .entry("hooks")
-        .or_insert_with(|| Value::Object(Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("`hooks` is not a JSON object"))?
-        .entry(event)
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let Value::Array(groups) = groups else {
-        bail!("`hooks.{event}` is not an array");
-    };
-
-    let suffix = format!(" {subcommand}");
-    let mut handled = false;
-    let mut no_change = false;
-    // Find our command inside any matcher group's `hooks` array and repoint it in
-    // place (preserving the group, its matcher, and the entry's timeout).
-    for group in groups.iter_mut() {
-        let Some(inner) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
-            continue;
-        };
-        if let Some(cmd) = inner.iter_mut().find(|c| is_ours(c, &suffix)) {
-            handled = true;
-            if cmd.get("command").and_then(Value::as_str) == Some(command) {
-                no_change = true; // already current with this binary
-            } else {
-                cmd.as_object_mut()
-                    .ok_or_else(|| anyhow!("hook command entry is not an object"))?
-                    .insert("command".into(), json!(command));
-            }
-            break;
-        }
-    }
-    if !handled {
-        // Not present: append a fresh matcher group with no matcher (fires for all
-        // end reasons) and our short timeout.
-        groups.push(json!({
-            "hooks": [ { "type": "command", "command": command, "timeout": 10 } ]
-        }));
-    }
-
-    if no_change {
-        return Ok(None);
-    }
-    Ok(Some(format!("{}\n", serde_json::to_string_pretty(&root)?)))
-}
-
 /// Strip our SessionEnd command entry (matched by the ` <subcommand>` suffix) from
 /// the nested settings JSON, then remove any container **we emptied** — our matcher
 /// group, an event array that became empty through our removal, and the `hooks`
@@ -141,7 +54,15 @@ pub fn upsert_claude_hook(
 /// no entry of ours was present. Deliberately ignores `disableAllHooks`:
 /// deregistration always cleans up our entry, even while hooks are globally
 /// disabled — leaving a dead entry behind would be worse.
-pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Option<String>> {
+///
+/// `only_event` restricts the scan to a single lifecycle event (`Some("SessionEnd")`);
+/// `None` scans them all. Pass `Some` whenever the caller knows which event it
+/// registered under, so ownership never rests on the command suffix alone.
+pub fn remove_claude_hook(
+    existing: &str,
+    subcommand: &str,
+    only_event: Option<&str>,
+) -> anyhow::Result<Option<String>> {
     let mut root: Value =
         serde_json::from_str(existing).context("parsing existing .claude/settings.json")?;
     let suffix = format!(" {subcommand}");
@@ -156,6 +77,13 @@ pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Op
     let mut removed = false;
     let mut empty_events: Vec<String> = Vec::new();
     for (event, groups_val) in hooks.iter_mut() {
+        // `only_event` narrows removal to the one lifecycle event the entry was
+        // registered under (e.g. `SessionEnd`). Without it, ownership rests on
+        // the command suffix alone, so a foreign hook on an unrelated event
+        // whose command happens to end in the same words would be removed.
+        if only_event.is_some_and(|want| want != event) {
+            continue;
+        }
         let Some(groups) = groups_val.as_array_mut() else {
             continue;
         };
@@ -207,6 +135,7 @@ pub fn remove_claude_hook(existing: &str, subcommand: &str) -> anyhow::Result<Op
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     const SUB: &str = "hook claude --event session-end";
     const CMD: &str = "\"/usr/local/bin/load\" hook claude --event session-end";
@@ -239,36 +168,27 @@ mod tests {
         })
     }
 
-    // (1) Empty file → creates the nested SessionEnd shape with no matcher.
+    /// Removal against a realistically dense, user-owned settings.json: our
+    /// entry goes, and every foreign key survives at the VALUE level (serde may
+    /// reorder keys, so this asserts values, not bytes). This is the shape that
+    /// matters — a real `.claude/settings.json` carries permissions, plugins,
+    /// mcpServers and other tools' hooks alongside ours.
     #[test]
-    fn upsert_into_empty_file_creates_nested_shape() {
-        let out = upsert_claude_hook("", "SessionEnd", SUB, CMD)
+    fn remove_from_a_dense_file_preserves_every_foreign_value() {
+        let mut before = dense();
+        // Splice our entry in beside the foreign SessionEnd sibling.
+        before["hooks"]["SessionEnd"]
+            .as_array_mut()
             .unwrap()
-            .expect("empty file → a write");
-        let v: Value = serde_json::from_str(&out).unwrap();
-        let groups = v["hooks"]["SessionEnd"].as_array().unwrap();
-        assert_eq!(groups.len(), 1);
-        assert!(
-            groups[0].get("matcher").is_none(),
-            "no matcher → fires for all end reasons"
-        );
-        let inner = groups[0]["hooks"].as_array().unwrap();
-        assert_eq!(inner.len(), 1);
-        assert_eq!(inner[0]["type"], "command");
-        assert_eq!(inner[0]["command"], CMD);
-        assert_eq!(inner[0]["timeout"], 10);
-    }
+            .push(json!({ "hooks": [ { "type": "command", "command": CMD, "timeout": 10 } ] }));
 
-    // (2) Dense foreign settings.json → every foreign VALUE survives (serde may
-    //     reorder keys; we assert value-level, not byte-level, preservation).
-    #[test]
-    fn upsert_preserves_every_foreign_value() {
-        let before = dense();
-        let out = upsert_claude_hook(&before.to_string(), "SessionEnd", SUB, CMD)
+        let out = remove_claude_hook(&before.to_string(), SUB, Some("SessionEnd"))
             .unwrap()
-            .expect("ours is not present yet → a write");
+            .expect("ours present → a write");
         let after: Value = serde_json::from_str(&out).unwrap();
 
+        // Every foreign top-level key survives value-identical.
+        let original = dense();
         for key in [
             "env",
             "permissions",
@@ -277,58 +197,22 @@ mod tests {
             "statusLine",
             "mcpServers",
         ] {
-            assert_eq!(after[key], before[key], "foreign key `{key}` preserved");
+            assert_eq!(after[key], original[key], "foreign key {key} must survive");
         }
-        // Foreign hook under another event untouched.
-        assert_eq!(after["hooks"]["PreToolUse"], before["hooks"]["PreToolUse"]);
-        // Foreign SessionEnd sibling kept; ours appended alongside it.
-        let se = after["hooks"]["SessionEnd"].as_array().unwrap();
-        assert_eq!(se.len(), 2, "foreign group kept, ours appended");
+        // Both foreign hooks survive; ours is gone.
         assert_eq!(
-            se[0], before["hooks"]["SessionEnd"][0],
-            "foreign SessionEnd group value-identical"
+            after["hooks"]["PreToolUse"],
+            original["hooks"]["PreToolUse"]
         );
-        let ours = &se[1]["hooks"][0];
-        assert_eq!(ours["command"], CMD);
-        assert_eq!(ours["timeout"], 10);
-        assert!(
-            se[1].get("matcher").is_none(),
-            "our appended group carries no matcher"
+        assert_eq!(
+            after["hooks"]["SessionEnd"],
+            original["hooks"]["SessionEnd"]
         );
+        assert!(!out.contains(CMD), "our entry must be gone: {out}");
     }
 
-    // (3) Repoint a moved binary in place (group + timeout preserved).
-    #[test]
-    fn repoints_moved_binary_in_place() {
-        let first = upsert_claude_hook("", "SessionEnd", SUB, CMD)
-            .unwrap()
-            .unwrap();
-        let moved = "\"/new/home/load\" hook claude --event session-end";
-        let out = upsert_claude_hook(&first, "SessionEnd", SUB, moved)
-            .unwrap()
-            .expect("binary moved → an in-place update");
-        let v: Value = serde_json::from_str(&out).unwrap();
-        let se = v["hooks"]["SessionEnd"].as_array().unwrap();
-        assert_eq!(se.len(), 1, "updated in place, not duplicated");
-        let inner = se[0]["hooks"].as_array().unwrap();
-        assert_eq!(inner.len(), 1);
-        assert_eq!(inner[0]["command"], moved);
-        assert_eq!(inner[0]["timeout"], 10, "timeout preserved on repoint");
-    }
-
-    // (4) Idempotent second upsert with the same binary → None (no churn).
-    #[test]
-    fn second_upsert_same_binary_is_no_churn() {
-        let first = upsert_claude_hook("", "SessionEnd", SUB, CMD)
-            .unwrap()
-            .unwrap();
-        assert!(upsert_claude_hook(&first, "SessionEnd", SUB, CMD)
-            .unwrap()
-            .is_none());
-    }
-
-    // (5a) Remove drops the group we emptied but keeps a foreign SessionEnd
-    //      sibling and every other key.
+    // Remove drops the group we emptied but keeps a foreign SessionEnd sibling
+    // and every other key.
     #[test]
     fn remove_drops_our_group_keeps_foreign_sibling() {
         let existing = json!({
@@ -345,7 +229,7 @@ mod tests {
             }
         })
         .to_string();
-        let out = remove_claude_hook(&existing, SUB)
+        let out = remove_claude_hook(&existing, SUB, None)
             .unwrap()
             .expect("ours present → a change");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -359,7 +243,7 @@ mod tests {
         );
         assert_eq!(v["model"], "keep-me", "foreign key preserved");
         // Idempotent: nothing of ours left.
-        assert!(remove_claude_hook(&out, SUB).unwrap().is_none());
+        assert!(remove_claude_hook(&out, SUB, None).unwrap().is_none());
     }
 
     // (5b) When ours is the only content, removal cascades group → event → the
@@ -375,7 +259,7 @@ mod tests {
             }
         })
         .to_string();
-        let out = remove_claude_hook(&existing, SUB)
+        let out = remove_claude_hook(&existing, SUB, None)
             .unwrap()
             .expect("ours present → a change");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -386,30 +270,10 @@ mod tests {
         assert_eq!(v["model"], "keep-me", "foreign key preserved");
     }
 
-    // (6) disableAllHooks short-circuits registration; predicate is exact.
-    #[test]
-    fn disable_all_hooks_short_circuits() {
-        let disabled = json!({ "disableAllHooks": true, "model": "x" }).to_string();
-        assert!(hooks_disabled(&disabled));
-        assert!(
-            upsert_claude_hook(&disabled, "SessionEnd", SUB, CMD)
-                .unwrap()
-                .is_none(),
-            "disableAllHooks → register nothing"
-        );
-        // A false / absent / empty flag does NOT short-circuit.
-        assert!(!hooks_disabled(
-            &json!({ "disableAllHooks": false }).to_string()
-        ));
-        assert!(!hooks_disabled(&json!({ "model": "x" }).to_string()));
-        assert!(!hooks_disabled(""));
-    }
-
     // Parity with the flat writer: malformed JSON errors rather than clobbering.
     #[test]
     fn garbage_json_errors_rather_than_clobbering() {
-        assert!(upsert_claude_hook("not json", "SessionEnd", SUB, CMD).is_err());
-        assert!(remove_claude_hook("not json", SUB).is_err());
+        assert!(remove_claude_hook("not json", SUB, None).is_err());
     }
 
     // (fix 1a) Reviewer's reproduction: a FOREIGN pre-existing empty event array
@@ -426,7 +290,7 @@ mod tests {
             }
         })
         .to_string();
-        let out = remove_claude_hook(&existing, SUB)
+        let out = remove_claude_hook(&existing, SUB, None)
             .unwrap()
             .expect("ours present → a change");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -456,7 +320,7 @@ mod tests {
             }
         })
         .to_string();
-        let out = remove_claude_hook(&existing, SUB)
+        let out = remove_claude_hook(&existing, SUB, None)
             .unwrap()
             .expect("ours present → a change");
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -464,22 +328,10 @@ mod tests {
         assert_eq!(v["hooks"]["PostToolUse"], json!([]), "foreign kept: {v}");
         assert_eq!(v["model"], "keep-me");
         // Idempotent: nothing of ours left, foreign shape untouched.
-        assert!(remove_claude_hook(&out, SUB).unwrap().is_none());
+        assert!(remove_claude_hook(&out, SUB, None).unwrap().is_none());
     }
 
-    // (fix 2) Structural type confusion: never destroy what we don't understand.
-    #[test]
-    fn hooks_not_an_object_errors_no_clobber() {
-        let existing = json!({ "hooks": "nope" }).to_string();
-        assert!(upsert_claude_hook(&existing, "SessionEnd", SUB, CMD).is_err());
-    }
-
-    #[test]
-    fn event_not_an_array_errors_no_clobber() {
-        let existing = json!({ "hooks": { "SessionEnd": {} } }).to_string();
-        assert!(upsert_claude_hook(&existing, "SessionEnd", SUB, CMD).is_err());
-    }
-
+    // Structural type confusion: never destroy what we don't understand.
     #[test]
     fn non_string_command_entry_is_preserved_untouched() {
         let weird = json!({ "type": "command", "command": 42 });
@@ -487,22 +339,20 @@ mod tests {
             "hooks": { "SessionEnd": [ { "hooks": [ weird.clone() ] } ] }
         })
         .to_string();
-        // Upsert: the numeric-command entry is never mistaken for ours — it
-        // survives value-identical and ours is appended as a fresh group.
-        let out = upsert_claude_hook(&existing, "SessionEnd", SUB, CMD)
-            .unwrap()
-            .expect("ours absent → a write");
-        let v: Value = serde_json::from_str(&out).unwrap();
+        // A non-string `command` is never mistaken for ours, so there is
+        // nothing to remove and the file is left exactly as it was.
+        assert!(
+            remove_claude_hook(&existing, SUB, None).unwrap().is_none(),
+            "nothing of ours present → no write"
+        );
+        let v: Value = serde_json::from_str(&existing).unwrap();
         let se = v["hooks"]["SessionEnd"].as_array().unwrap();
-        assert_eq!(se.len(), 2);
+        assert_eq!(se.len(), 1);
         assert_eq!(se[0]["hooks"][0], weird, "weird entry preserved untouched");
-        // Remove from the ORIGINAL (ours not present): nothing of ours → None.
-        assert!(remove_claude_hook(&existing, SUB).unwrap().is_none());
     }
 
     #[test]
-    fn non_object_root_errors_on_upsert_and_noops_on_remove() {
-        assert!(upsert_claude_hook("[1, 2]", "SessionEnd", SUB, CMD).is_err());
-        assert!(remove_claude_hook("[1, 2]", SUB).unwrap().is_none());
+    fn non_object_root_noops_on_remove() {
+        assert!(remove_claude_hook("[1, 2]", SUB, None).unwrap().is_none());
     }
 }
