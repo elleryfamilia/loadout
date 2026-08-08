@@ -8,6 +8,14 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Fixed
+
+- **The equipping HUD's box text is now near-white instead of amber**, so the
+  cycling sub-steps and settled outcomes stay readable on dark or translucent
+  terminal backgrounds. The box frames (border + label) stay amber.
+
 ## 0.22.0 — 2026-08-08
 
 ### Changed

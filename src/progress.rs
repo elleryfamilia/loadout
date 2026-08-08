@@ -1,8 +1,9 @@
 //! The `load run` startup HUD — a game-style "equipping" panel drawn above the
 //! command output. Each startup phase is a box in a 2×3 grid; while its phase
 //! runs the box rapidly cycles that phase's real sub-steps (`pulling refs ⋯`,
-//! `folding fragments ⋯`), then **lands** on the phase's outcome. All amber, to
-//! match the release's dungeon-crawl palette.
+//! `folding fragments ⋯`), then **lands** on the phase's outcome. Amber frames
+//! (matching the release's dungeon-crawl palette) with near-white content, so
+//! the text stays readable on dark or translucent backgrounds.
 //!
 //! ## Why a background thread
 //!
@@ -41,8 +42,11 @@ use std::time::{Duration, Instant};
 
 use crate::style::Painter;
 
-/// The amber the fill bar used — cycling text and settled outcomes both use it.
+/// The box frame color (border + label) — the amber the fill bar used.
 const AMBER: (u8, u8, u8) = (255, 176, 0);
+/// Box *content* color: near-white, so the cycling and settled text stays
+/// readable on dark or translucent backgrounds (amber text was too low-contrast).
+const TEXT: (u8, u8, u8) = (240, 240, 245);
 /// A dim amber for a settled-but-muted box (a skipped phase, e.g. no workflow).
 const MUTED: (u8, u8, u8) = (150, 110, 40);
 /// The unlit color for a box whose phase hasn't started.
@@ -480,6 +484,9 @@ fn render_grid(st: &HudState, p: &Painter) -> Vec<String> {
 
 /// One box → its 3 lines (top border w/ label, content, bottom border).
 fn render_box(phase: Phase, state: &BoxPhase, now: Instant, p: &Painter) -> [String; 3] {
+    // `color` frames the box (border + label); `content` carries its own color.
+    // Active/settled boxes get an AMBER frame with near-white TEXT content, so
+    // the reel words and outcomes stay readable; pending/skipped stay dim.
     let (color, label_bold, content) = match state {
         BoxPhase::Pending => (PENDING, false, p.rgb(&center("·", BOX_W), PENDING)),
         BoxPhase::Active { since, .. } => {
@@ -487,12 +494,12 @@ fn render_box(phase: Phase, state: &BoxPhase, now: Instant, p: &Painter) -> [Str
             let idx = (now.duration_since(*since).as_millis() / WORD_EVERY.as_millis()) as usize
                 % reel.len();
             let word = format!("{} ⋯", reel[idx]);
-            (AMBER, true, p.rgb(&pad(&word, BOX_W), AMBER))
+            (AMBER, true, p.rgb(&pad(&word, BOX_W), TEXT))
         }
         BoxPhase::Settled(s) => match &s.detail {
             Some(d) => {
                 let text = format!("{} {d}", s.glyph.ch());
-                (AMBER, true, p.rgb(&pad(&text, BOX_W), AMBER))
+                (AMBER, true, p.rgb(&pad(&text, BOX_W), TEXT))
             }
             None => (MUTED, false, p.rgb(&pad("· —", BOX_W), MUTED)),
         },
