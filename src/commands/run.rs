@@ -16,7 +16,6 @@
 //! var to the directory holding the generated overlay, so the agent discovers it
 //! at launch without any committed file being touched.
 
-use std::cell::RefCell;
 use std::io::{IsTerminal, Write as _};
 use std::process::Command;
 
@@ -32,18 +31,18 @@ use crate::cli::{RunArgs, StudioArgs};
 use crate::context::Context;
 use crate::hash;
 use crate::profile::LoadoutConfig;
-use crate::progress::EquipBar;
+use crate::progress::{EquipHud, Glyph, Phase};
 use crate::skills::{self, LinkState, SkillState};
 use crate::style::Painter;
 use crate::vlog;
 
-/// [`StdinChooser`] behind the progress bar: freezes the bar before the
-/// interactive prompt so a redraw can never garble it, then delegates.
-struct BarChooser<'a>(&'a RefCell<EquipBar>);
+/// [`StdinChooser`] behind the equipping HUD: tears the HUD down before the
+/// interactive prompt so its repaint can never garble it, then delegates.
+struct BarChooser<'a>(&'a EquipHud);
 
 impl ProfileChooser for BarChooser<'_> {
     fn choose(&self, ctx: &Context, candidates: &[LoadoutConfig]) -> crate::Result<Choice> {
-        self.0.borrow_mut().abandon();
+        self.0.abandon();
         StdinChooser.choose(ctx, candidates)
     }
 }
@@ -168,23 +167,30 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     let agent = args.agent.as_str();
     let p = Painter::auto();
 
-    // The equipping bar: drawn first, above the step lines, advanced once per
-    // startup phase (6 ticks), finished right before the launch. Every step
-    // line below it must go through `bar.println` (it counts lines for the
-    // in-place redraw), and every path that prompts must `abandon` it first.
-    // Disabled (plain prints, no escapes) on non-TTY / NO_COLOR / dry runs.
-    let bar = RefCell::new(EquipBar::start(6, rt.dry_run));
+    // The equipping HUD: a game-style grid drawn above the command output, one
+    // box per startup phase, each cycling its real sub-steps then landing on
+    // the outcome. A background thread animates while this thread does the
+    // work; every path that prompts must `abandon` it first. Disabled (plain
+    // step lines, byte-identical to before) on non-TTY / NO_COLOR / dry runs /
+    // narrow terminals. Methods take `&self` (interior mutability), so it's
+    // shared by plain reference — no RefCell.
+    let hud = EquipHud::start(rt.dry_run);
 
     // Pull the latest config first — best-effort, throttled, timeout-bounded;
     // it never blocks the launch. Done before `prepare_with` so the render below
-    // composes freshly-pulled fragments/profiles. Print the line right away.
+    // composes freshly-pulled fragments/profiles.
+    hud.begin(Phase::Sync);
     let sync_status = sync_before_render(rt);
-    if let Some(line) = sync_step_line(&p, &sync_status) {
-        bar.borrow_mut().println(&line);
-    }
-    bar.borrow_mut().tick(); // 1/6 sync
+    let (sync_glyph, sync_detail) = sync_grid(&sync_status);
+    hud.settle(
+        Phase::Sync,
+        sync_glyph,
+        sync_detail,
+        sync_step_line(&p, &sync_status),
+    );
 
-    let prep = match prepare_with_live(rt, &BarChooser(&bar), MissingPolicy::Defer, true) {
+    hud.begin(Phase::Loadout);
+    let prep = match prepare_with_live(rt, &BarChooser(&hud), MissingPolicy::Defer, true) {
         Ok(prep) => prep,
         // The user cancelled the profile chooser — exit cleanly, launch nothing.
         Err(e) if e.downcast_ref::<Aborted>().is_some() => {
@@ -197,20 +203,28 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         }
         Err(e) => return Err(e),
     };
-    bar.borrow_mut().tick(); // 2/6 loadout selected
+    let loadout_name = {
+        let label = prep.profile_label();
+        if label.is_empty() {
+            "no loadout".to_string()
+        } else {
+            label.to_string()
+        }
+    };
+    hud.settle(Phase::Loadout, Glyph::Ok, Some(loadout_name), None);
 
     // Passive hook bootstrap (see `bootstrap_hook_registrations`): launching
     // any agent also wires the IDE freshness hooks of installed ones.
+    hud.begin(Phase::Gear);
     for note in crate::adapters::bootstrap_hook_registrations(&prep.config, rt.dry_run) {
-        let line = format!("  {} {}", p.green("✓"), p.dim(&note));
-        bar.borrow_mut().println(&line);
+        hud.note(format!("  {} {}", p.green("✓"), p.dim(&note)));
     }
 
     // A profile that references a fragment id not in the library would silently
     // drop it from the overlay. Interrupt here — before any render/launch work —
     // and let the user decide: ignore once, open studio to fix it, or quit.
     if !prep.composition.missing.is_empty() {
-        bar.borrow_mut().abandon(); // resolve_missing prompts
+        hud.abandon(); // resolve_missing prompts
         match resolve_missing(&prep, &p)? {
             MissingChoice::Continue => {}
             MissingChoice::OpenStudio => return open_studio_handoff(rt, agent),
@@ -231,9 +245,9 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     // TTY-gated, only while the user looks pre-migration — offer the migrate
     // skill. Best-effort: a skill hiccup must never block the launch.
     if !rt.dry_run {
-        skill_preflight(&prep, &p, &bar);
+        skill_preflight(&prep, &p, &hud);
     }
-    bar.borrow_mut().tick(); // 3/6 gear checked (hooks, fragments, skills)
+    hud.settle(Phase::Gear, Glyph::Ok, Some("hooks · skills".into()), None);
 
     // Accept the agent's launch program as an alias for its id — people type
     // the binary they know (`load cursor-agent`) for the `cursor` agent.
@@ -262,6 +276,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
     }
 
     // Preflight render (quiet — `run` prints its own concise summary).
+    hud.begin(Phase::Render);
     let rendered = !args.skip_render;
     let result = if rendered {
         let opts = ApplyOptions {
@@ -278,19 +293,28 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         vlog!("skipping pre-launch render (--skip-render)");
         None
     };
-    bar.borrow_mut()
-        .println(&render_step_line(&p, &prep, agent, result.as_ref()));
-    bar.borrow_mut().tick(); // 4/6 render
+    hud.settle(
+        Phase::Render,
+        Glyph::Ok,
+        Some(format!("→ {agent}")),
+        Some(render_step_line(&p, &prep, agent, result.as_ref())),
+    );
 
     // The workflow active for this run (override wins, else the profile binding),
     // resolved the same way the render did. Drives the launch-env wiring + notice.
+    hud.begin(Phase::Flow);
     let workflow = prep
         .config
         .resolve_active_workflow(args.workflow.as_deref(), prep.composition.primary_profile());
-    if let Some(line) = workflow_step_line(&p, workflow.as_ref()) {
-        bar.borrow_mut().println(&line);
+    match workflow.as_ref() {
+        Some(wf) => hud.settle(
+            Phase::Flow,
+            Glyph::Ok,
+            Some(wf.title().to_string()),
+            workflow_step_line(&p, workflow.as_ref()),
+        ),
+        None => hud.settle(Phase::Flow, Glyph::Ok, None, None),
     }
-    bar.borrow_mut().tick(); // 5/6 flow
 
     let rendered_at = now_rfc3339();
     let launch_args = build_launch_args(
@@ -322,20 +346,38 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
         std::fs::create_dir_all(crate::workflow::artifacts_dir(&prep.repo_base)).ok();
     }
 
-    // Best-effort, time-bounded "update available" hint, capped per the
-    // `[update] check` mode — skipped on dry-run, non-TTY, and via
-    // `LOADOUT_NO_UPDATE_CHECK`. Printed here rather than by main's ambient
-    // nudge because the launch `exec`s away on Unix — nothing after it runs.
+    // Best-effort "update available" hint, read from the cached verdict —
+    // skipped on dry-run, non-TTY, and via `LOADOUT_NO_UPDATE_CHECK`. Shown as
+    // a note below the HUD (before the launch `exec`s away on Unix).
     if let Some(detail) = crate::update::nudge_detail(prep.config.update.check) {
-        let line = step(&p, p.cyan("↑"), "update", detail);
-        bar.borrow_mut().println(&line);
+        hud.note(step(&p, p.cyan("↑"), "update", detail));
     }
-    bar.borrow_mut().tick(); // 6/6 update
-    bar.borrow_mut().finish(); // ▓▓▓ EQUIPPED
-    let launch_line = launch_step_line(&p, &program, &args.args);
-    bar.borrow_mut().println(&launch_line);
+
+    // Land the launch box, wait for the settle cascade, flush notes/warnings.
+    hud.begin(Phase::Launch);
+    hud.settle(
+        Phase::Launch,
+        Glyph::Go,
+        Some(program.clone()),
+        Some(launch_step_line(&p, &program, &args.args)),
+    );
+    hud.finish();
 
     launch(&program, &launch_args, &rendered_at, &rt.cwd, &extra_env)
+}
+
+/// The equipping HUD's compact sync box: a glyph and a short plain detail
+/// (`None` = a muted box when sync isn't configured here). The rich classic
+/// step line still comes from [`sync_step_line`].
+fn sync_grid(status: &crate::sync::SyncStatus) -> (Glyph, Option<String>) {
+    use crate::sync::SyncStatus;
+    match status {
+        SyncStatus::Disabled => (Glyph::Ok, None),
+        SyncStatus::Skipped { .. } | SyncStatus::UpToDate => (Glyph::Ok, Some("up to date".into())),
+        SyncStatus::Pulled { commits, .. } => (Glyph::Ok, Some(format!("pulled {commits}"))),
+        SyncStatus::Offline { .. } => (Glyph::Warn, Some("offline".into())),
+        SyncStatus::Diverged => (Glyph::Warn, Some("diverged".into())),
+    }
 }
 
 // --- embedded-skill preflight --------------------------------------------------
@@ -344,7 +386,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
 /// best-effort: errors are logged verbosely and never abort the run. Undecided,
 /// not-yet-installed skills are collected into ONE bundled offer — a fresh user
 /// gets a single question no matter how many skills loadout ships.
-fn skill_preflight(prep: &super::Prepared, p: &Painter, bar: &RefCell<EquipBar>) {
+fn skill_preflight(prep: &super::Prepared, p: &Painter, hud: &EquipHud) {
     let Some(home) = crate::config::home_dir() else {
         return;
     };
@@ -352,7 +394,7 @@ fn skill_preflight(prep: &super::Prepared, p: &Painter, bar: &RefCell<EquipBar>)
     for skill in skills::all() {
         let outcome = match crate::binding::read_skill_decision(skill.id) {
             Some(SkillDecision::Declined) => Ok(()),
-            Some(SkillDecision::Accepted) => maintain_skill(&home, skill, p, bar),
+            Some(SkillDecision::Accepted) => maintain_skill(&home, skill, p, hud),
             None => match skills::status(&home, skill).state {
                 // Already present with our marker (installed elsewhere or on
                 // another loadout version): adopt silently instead of asking.
@@ -371,7 +413,7 @@ fn skill_preflight(prep: &super::Prepared, p: &Painter, bar: &RefCell<EquipBar>)
         }
     }
     if !offerable.is_empty() {
-        if let Err(e) = offer_skills(&home, &offerable, prep, p, bar) {
+        if let Err(e) = offer_skills(&home, &offerable, prep, p, hud) {
             vlog!("skill offer failed: {e:#}");
         }
     }
@@ -385,14 +427,14 @@ fn maintain_skill(
     home: &std::path::Path,
     skill: &skills::Skill,
     p: &Painter,
-    bar: &RefCell<EquipBar>,
+    hud: &EquipHud,
 ) -> crate::Result<()> {
     let st = skills::status(home, skill);
     match st.state {
         SkillState::NotInstalled => {
             // The user deleted it; don't resurrect. Remember the opt-out.
             crate::binding::write_skill_decision(skill.id, SkillDecision::Declined)?;
-            let line = step(
+            hud.note(step(
                 p,
                 p.dim("·"),
                 "skill",
@@ -400,8 +442,7 @@ fn maintain_skill(
                     "'{}' was removed — leaving it; `load skill install` restores it",
                     skill.id
                 )),
-            );
-            bar.borrow_mut().println(&line);
+            ));
         }
         SkillState::Unmanaged
         | SkillState::Managed {
@@ -422,8 +463,12 @@ fn maintain_skill(
                 } else {
                     "repaired agent links"
                 };
-                let line = step(p, p.green("✓"), "skill", format!("'{}' {what}", skill.id));
-                bar.borrow_mut().println(&line);
+                hud.note(step(
+                    p,
+                    p.green("✓"),
+                    "skill",
+                    format!("'{}' {what}", skill.id),
+                ));
             }
         }
     }
@@ -440,7 +485,7 @@ fn offer_skills(
     offerable: &[&skills::Skill],
     prep: &super::Prepared,
     p: &Painter,
-    bar: &RefCell<EquipBar>,
+    hud: &EquipHud,
 ) -> crate::Result<()> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Ok(());
@@ -448,8 +493,8 @@ fn offer_skills(
     if !prep.config.profiles.is_empty() {
         return Ok(());
     }
-    // Interactive from here on — freeze the bar before the prompt.
-    bar.borrow_mut().abandon();
+    // Interactive from here on — tear the HUD down before the prompt.
+    hud.abandon();
 
     let ids = offerable
         .iter()
