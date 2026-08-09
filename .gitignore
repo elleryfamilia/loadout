@@ -15,3 +15,5 @@ AGENTS.override.md
 .claude/commands/loadout/
 .loadout/workflow/artifacts/plan.json
 .loadout/workflow/artifacts/plan-feedback.json
+.cursor/rules/loadout.mdc
+.cursor/skills/loadout/
