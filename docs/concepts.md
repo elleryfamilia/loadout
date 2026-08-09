@@ -240,15 +240,22 @@ described by an `AgentDescriptor` along four axes:
 The decisive rule: **auto-wire through local/gitignored paths only** — Claude →
 `CLAUDE.local.md` (`@import`), Codex → `AGENTS.override.md` (which Codex reads
 before the committed `AGENTS.md`),
-Copilot → the gitignored overlay via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` set by
-`load run` (no persistent local hook exists). loadout **never edits a committed,
-shared instruction file** (`AGENTS.md`, `.github/copilot-instructions.md`);
-agents with no wiring path are **emit-only** — a gitignored overlay plus a hint on
-how to wire it, not content in a shared file.
+Copilot → two channels for the same render: VS Code's Copilot Chat reads the
+owned, gitignored `.github/instructions/loadout.instructions.md` directly
+(`applyTo: '**'` frontmatter, persistent, no `load run` needed — VS Code
+doesn't gitignore-filter that folder); the Copilot CLI's own instructions
+discovery *does* filter it, so `load run` points the CLI at the gitignored
+overlay instead, via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`. loadout **never edits
+a committed, shared instruction file** (`AGENTS.md`,
+`.github/copilot-instructions.md`); agents with no wiring path are
+**emit-only** — a gitignored overlay plus a hint on how to wire it, not
+content in a shared file.
 
 Built-ins: `claude` (import), `codex` (auto `AGENTS.override.md` merge,
-`--no-override` to skip), `copilot` (`load run` sets
-`COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → the gitignored overlay), `cursor` (owned
+`--no-override` to skip), `copilot` (owned, gitignored
+`.github/instructions/loadout.instructions.md` wires VS Code's Copilot Chat;
+`load run` also sets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → the gitignored
+overlay for the CLI, which can't see that owned file), `cursor` (owned
 `.cursor/rules/loadout.mdc` rule — one file read by the IDE agent *and* the
 `cursor-agent` CLI — plus a user-level `sessionStart` hook in `~/.cursor/hooks.json`
 that keeps repos fresh — and auto-adopts a git repo some loadout applies to on

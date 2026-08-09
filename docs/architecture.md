@@ -78,11 +78,14 @@ cwd → repo_base → Config::load → detect_context → select (one loadout by
   (`@import`), Codex's `AGENTS.override.md` (read before the committed `AGENTS.md`),
   Cursor's `.cursor/rules/loadout.mdc`
   (a fully loadout-owned always-on rule, gitignored — Cursor doesn't filter rules
-  by gitignore), and Copilot's gitignored overlay
-  (pointed at via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` by `load run`) are wired
-  automatically; loadout never edits a committed shared file. Agents with no wiring
-  path (only `generic`, plus any custom agent) are emit-only. (opencode registers
-  the overlay path in `~/.config/opencode/opencode.json` `instructions`.)
+  by gitignore), and Copilot's owned, gitignored
+  `.github/instructions/loadout.instructions.md` (wires VS Code's Copilot Chat
+  directly — VS Code doesn't filter that folder by gitignore — plus
+  `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` set by `load run` for the CLI, which can't
+  see that owned file) are wired automatically; loadout never edits a committed
+  shared file. Agents with no wiring path (only `generic`, plus any custom
+  agent) are emit-only. (opencode registers the overlay path in
+  `~/.config/opencode/opencode.json` `instructions`.)
 - **Derived artifacts are gitignored, never committed** — `.loadout/generated/`,
   `.loadout/logs/`, `AGENTS.override.md`, and `CLAUDE.local.md` (when loadout
   created it). gitignore management is skipped entirely outside a repo.

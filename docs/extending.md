@@ -31,11 +31,14 @@ for any descriptor. The wiring it picks:
   print `wire_hint`.
 
 Orthogonally, `launch_context_dir_env` + `launch_context_dir` make `load run`
-set an env var to a generated subdir at launch — for agents with no persistent
-local hook that accept a custom-instructions dir (e.g. Copilot's
-`COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → `.loadout/generated/copilot`). Write the
-`generated_filename` inside that dir in the shape the agent scans for — copilot
-uses `copilot/.github/instructions/loadout.instructions.md` (no `applyTo`, so
+set an env var to a generated subdir at launch — for a channel that has no
+persistent local hook of its own but accepts a custom-instructions dir (e.g.
+the Copilot CLI: unlike VS Code, its own instructions discovery gitignore-
+filters `.github/instructions/`, so it can't see Copilot's owned target file
+there — `load run` points it at `.loadout/generated/copilot` instead, via
+`COPILOT_CUSTOM_INSTRUCTIONS_DIRS`). Write the `generated_filename` inside
+that dir in the shape the agent scans for — copilot uses
+`copilot/.github/instructions/loadout.instructions.md` (no `applyTo`, so
 Copilot *inlines* it rather than emitting a "view this file" pointer).
 
 To add a genuinely new *delivery mechanism* (beyond import / override / emit),
