@@ -285,20 +285,37 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             ..d("opencode", "opencode.md")
         },
         AgentDescriptor {
-            display_name: Some("GitHub Copilot CLI".into()),
+            display_name: Some("GitHub Copilot (CLI + VS Code)".into()),
             launch: Some("copilot".into()),
-            // The Copilot CLI has no gitignored persistent hook (its repo
-            // .github/instructions discovery is gitignore-filtered, and
-            // copilot-instructions.md / AGENTS.md are committed). So `load run`
-            // points it at the gitignored overlay dir via an env var. The overlay
-            // is written as a `.instructions.md` (with no `applyTo`, so Copilot
-            // *inlines* it — a nested AGENTS.md would only become a "view this
-            // file" pointer). Additive; never touches committed files.
+            // Two delivery channels for the same render.
+            //
+            // VS Code (Copilot Chat): `.github/instructions/*.instructions.md`
+            // is a default-on discovery location and is NOT gitignore-filtered
+            // (VS Code source + live sentinel test, 2026-08-09), so a
+            // gitignored, loadout-owned target file wires the IDE. It needs
+            // `applyTo: '**'` frontmatter to attach unconditionally, and the
+            // frontmatter must be the file's first bytes — hence `preamble` +
+            // the raw `target_file` write (no marker-block wrap), exactly like
+            // Cursor's MDC rule below.
+            //
+            // Copilot CLI: the opposite — its `.github/instructions` discovery
+            // IS gitignore-filtered, so the repo target is invisible to it and
+            // `load run` keeps pointing it at the gitignored overlay dir via an
+            // env var. That generated copy has no frontmatter (no `applyTo`),
+            // so the CLI *inlines* it — a nested AGENTS.md would only become a
+            // "view this file" pointer. Each surface sees the content exactly
+            // once. Never touches committed files.
+            target_file: Some(".github/instructions/loadout.instructions.md".into()),
+            preamble: Some(
+                "---\ndescription: loadout — the user's personal cross-project context\n\
+                 applyTo: '**'\n---\n\n"
+                    .into(),
+            ),
             launch_context_dir_env: Some("COPILOT_CUSTOM_INSTRUCTIONS_DIRS".into()),
             launch_context_dir: Some("copilot".into()),
             wire_hint: Some(
-                "`load run copilot` wires this via COPILOT_CUSTOM_INSTRUCTIONS_DIRS. \
-                 For other entry points, point that env at .loadout/generated/copilot."
+                "VS Code reads the gitignored .github/instructions/loadout.instructions.md; \
+                 `load run copilot` wires the CLI via COPILOT_CUSTOM_INSTRUCTIONS_DIRS."
                     .into(),
             ),
             ..d(

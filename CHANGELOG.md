@@ -8,6 +8,20 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Added
+
+- **VS Code support.** The `copilot` agent now also writes a gitignored
+  `.github/instructions/loadout.instructions.md` with `applyTo: '**'`
+  frontmatter — Copilot Chat in VS Code (ask, edit, and agent modes) picks it
+  up on every request, per repo, with the repo's selected profile. VS Code's
+  instructions discovery doesn't filter gitignored files (verified against the
+  VS Code source and live), so nothing is committed and no settings change is
+  needed. The Copilot CLI keeps its existing `COPILOT_CUSTOM_INSTRUCTIONS_DIRS`
+  wiring — the CLI *does* gitignore-filter that folder, so each surface sees
+  the content exactly once.
+
 ## 0.23.0 — 2026-08-09
 
 ### Removed
