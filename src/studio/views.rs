@@ -647,7 +647,7 @@ pub fn skill_card(ids: &[&str], rows: &[SkillRow], state: &SkillCardState) -> St
                     span class="muted small" {
                         "loadout ships agent skills (" strong { (id_list) } "): import an existing "
                         "CLAUDE.md/AGENTS.md, and save preferences you state mid-session as global guidance "
-                        "(work in Claude Code, Codex, Gemini CLI, opencode)."
+                        "(work in Claude Code, Codex, opencode, Cursor)."
                     }
                     button class="btn btn-ghost"
                         hx-post="/skills/install" hx-target="#skill-card"

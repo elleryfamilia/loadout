@@ -505,7 +505,7 @@ fn offer_skills(
     println!(
         "  {} loadout ships agent skills {}",
         p.cyan("✦"),
-        p.dim("(work in Claude Code, Codex, Gemini CLI, opencode)")
+        p.dim("(work in Claude Code, Codex, opencode, Cursor)")
     );
     for skill in offerable {
         println!("    {} — {}", p.bold(skill.id), skill_blurb(skill.id));

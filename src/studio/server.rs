@@ -2153,7 +2153,7 @@ fn print_next_steps() {
     println!();
     println!("Your loadout is saved. Launch an agent with it from any project:");
     println!();
-    println!("  load claude    (also: load cursor, load codex, load gemini, load opencode)");
+    println!("  load claude    (also: load cursor, load codex, load opencode, load copilot)");
     println!();
     println!("Reopen the studio anytime: load studio");
 }

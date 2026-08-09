@@ -3,7 +3,7 @@
 //! loadout ships agent skills (SKILL.md directories per the cross-agent Agent
 //! Skills format) embedded in the binary, so installer-based users get them
 //! without a repo checkout. The canonical install location is
-//! `~/.agents/skills/<id>/` — read natively by Gemini CLI, opencode, and
+//! `~/.agents/skills/<id>/` — read natively by opencode and
 //! Cursor (`~/.agents/skills/` is one of Cursor's documented user-level skill
 //! locations, alongside `~/.cursor/skills/`; see `LINKED_AGENT_DIRS`) — with
 //! symlinks from `~/.claude/skills/<id>` and `~/.codex/skills/<id>` for agents
@@ -198,7 +198,7 @@ fn on_disk_hash(dir: &Path, skill: &Skill) -> Option<String> {
 // --- layout -------------------------------------------------------------------
 
 /// Agent dotdirs that need their own `skills/` entry (symlinked to canonical).
-/// Gemini CLI and opencode read `~/.agents/skills/` natively and need nothing.
+/// opencode reads `~/.agents/skills/` natively and needs nothing.
 ///
 /// Cursor also needs nothing: `cursor-agent` (confirmed 2026.07.01-41b2de7,
 /// both by decompiling its bundled source and per cursor.com/docs/skills)

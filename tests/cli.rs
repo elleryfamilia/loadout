@@ -60,8 +60,8 @@ impl Fixture {
         let mut c = Command::cargo_bin("load").unwrap();
         // Point the global config dir at an empty location → no global layer.
         c.env("LOADOUT_CONFIG_DIR", self.global.path().join("empty"));
-        // Isolate $HOME so agent dotfile writes (e.g. Gemini's
-        // ~/.gemini/settings.json registration) never touch the real home.
+        // Isolate $HOME so agent dotfile writes (e.g. opencode's
+        // ~/.config/opencode/opencode.json registration) never touch the real home.
         c.env("HOME", self.global.path().join("home"));
         // Isolate the per-machine trust store (the HOME override already
         // covers the fallback path; the explicit var makes asserts addressable).
@@ -70,7 +70,7 @@ impl Fixture {
         c
     }
 
-    /// Read a file from the isolated `$HOME` (e.g. `.gemini/settings.json`).
+    /// Read a file from the isolated `$HOME` (e.g. `.config/opencode/opencode.json`).
     fn read_home(&self, rel: &str) -> String {
         fs::read_to_string(self.global.path().join("home").join(rel)).unwrap()
     }
@@ -1115,7 +1115,7 @@ fn doctor_does_not_flag_stderr_only_failures() {
 }
 
 #[test]
-fn refresh_all_six_agents_emit_gitignored_overlays() {
+fn refresh_all_agents_emit_gitignored_overlays() {
     let fx = Fixture::new();
     fx.rust_project();
 
@@ -1127,7 +1127,6 @@ fn refresh_all_six_agents_emit_gitignored_overlays() {
     for f in [
         "claude.md",
         "agents.md",
-        "gemini.md",
         "opencode.md",
         "copilot/.github/instructions/loadout.instructions.md",
         "generic.md",
@@ -1136,71 +1135,10 @@ fn refresh_all_six_agents_emit_gitignored_overlays() {
     }
     // Committed instruction files are never touched.
     assert!(!fx.exists("AGENTS.md"));
-    assert!(!fx.exists("GEMINI.md"));
     assert!(!fx.exists(".github/copilot-instructions.md"));
-    // Auto-wired agents: Claude (local @import), Codex (gitignored override), and
-    // Gemini (gitignored GEMINI.local.md @import + global settings registration).
+    // Auto-wired agents: Claude (local @import) and Codex (gitignored override).
     assert!(fx.exists("CLAUDE.local.md"));
     assert!(fx.exists("AGENTS.override.md"));
-    assert!(fx.exists("GEMINI.local.md"));
-    assert!(fx.home_exists(".gemini/settings.json"));
-}
-
-#[test]
-fn gemini_auto_wires_local_import_and_registers_settings() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    fx.git_init();
-    // A committed GEMINI.md must be left untouched (wiring is additive).
-    fx.write("GEMINI.md", "# Team GEMINI\n\nKeep me.\n");
-
-    fx.cmd()
-        .args(["refresh", "--agent", "gemini"])
-        .assert()
-        .success();
-
-    // Local @import file created (gitignored), pointing at the overlay.
-    assert!(fx.exists("GEMINI.local.md"));
-    let local = fx.read("GEMINI.local.md");
-    assert!(local.contains("@.loadout/generated/gemini.md"));
-    assert!(local.contains("BEGIN loadout (managed)"));
-    assert!(fx.read(".gitignore").contains("GEMINI.local.md"));
-    // Committed GEMINI.md untouched.
-    assert_eq!(fx.read("GEMINI.md"), "# Team GEMINI\n\nKeep me.\n");
-
-    // Global ~/.gemini/settings.json registers GEMINI.local.md in context.fileName
-    // (alongside the default GEMINI.md) so Gemini actually loads it.
-    let settings: serde_json::Value =
-        serde_json::from_str(&fx.read_home(".gemini/settings.json")).unwrap();
-    let names = settings["context"]["fileName"].as_array().unwrap();
-    assert!(names.iter().any(|v| v == "GEMINI.local.md"));
-    assert!(names.iter().any(|v| v == "GEMINI.md"));
-
-    // Idempotent: a second render leaves settings byte-identical.
-    let before = fx.read_home(".gemini/settings.json");
-    fx.cmd()
-        .args(["refresh", "--agent", "gemini"])
-        .assert()
-        .success();
-    assert_eq!(fx.read_home(".gemini/settings.json"), before);
-}
-
-#[test]
-fn gemini_warns_when_workspace_settings_would_mask_registration() {
-    let fx = Fixture::new();
-    fx.rust_project();
-    // A project-level .gemini/settings.json that sets context.fileName *replaces*
-    // (doesn't merge with) the home one, so the home registration is masked.
-    fx.write(
-        ".gemini/settings.json",
-        "{\"context\":{\"fileName\":[\"GEMINI.md\"]}}",
-    );
-
-    fx.cmd()
-        .args(["refresh", "--agent", "gemini"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("overrides the home registration"));
 }
 
 #[test]

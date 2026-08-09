@@ -150,13 +150,13 @@ fragments = [
   "work-strict",
 ]
 
-# Agents are built in (claude, codex, gemini, opencode, copilot, generic).
+# Agents are built in (claude, codex, opencode, copilot, cursor, generic).
 # Override one by id, or add your own — no code change needed. Fields:
 #   id, generated_filename (required); display_name, template, launch,
 #   importer (auto-wire @import into a LOCAL file), override_target/override_base
 #   (opt-in merge), wire_hint, append_prompt_flag.
 # loadout auto-wires only agents with a LOCAL importer; everything else is
-# emit-only (a gitignored overlay + a hint), so committed AGENTS.md/GEMINI.md
+# emit-only (a gitignored overlay + a hint), so committed AGENTS.md
 # are never touched by default.
 #
 # [[agents]]

@@ -2,7 +2,7 @@
 //!
 //! Removes only what loadout created (gitignored overlays, override files, and
 //! our managed marker block in importer files). Hand-authored, committed
-//! instruction files (`AGENTS.md`, `GEMINI.md`, `copilot-instructions.md`) are
+//! instruction files (`AGENTS.md`, `copilot-instructions.md`) are
 //! never touched.
 
 use anyhow::anyhow;

@@ -15,7 +15,7 @@ A *loadout* is the kit you equip before a job — your conventions, your tooling
 - Your project's `AGENTS.md` describes **the repo.**
 - Loadout carries **what you bring to it** — across every project, machine, and agent.
 
-Works with **Claude, Codex, Gemini, Cursor, opencode, and Copilot**. Your context arrives as a local, gitignored file each agent reads — committed project instruction files are never touched.
+Works with **Claude, Codex, Cursor, opencode, and Copilot**. Your context arrives as a local, gitignored file each agent reads — committed project instruction files are never touched.
 
 ---
 
@@ -169,13 +169,12 @@ Loadout produces one overlay and delivers it the way each agent expects.
 | ---------- | ------------------------------------------------------------------------ | -------------------------------------------------------------- |
 | `claude`   | `.loadout/generated/claude.md`                                            | Adds a managed import block to `CLAUDE.local.md`               |
 | `codex`    | `.loadout/generated/agents.md`                                            | Merges into gitignored `AGENTS.override.md`                    |
-| `gemini`   | `.loadout/generated/gemini.md`                                            | Wires through gitignored `GEMINI.local.md` and Gemini settings |
 | `opencode` | `.loadout/generated/opencode.md`                                          | Registers the overlay in global opencode instructions          |
 | `copilot`  | `.loadout/generated/copilot/.github/instructions/loadout.instructions.md` | Launches Copilot CLI with the custom instructions directory    |
 | `cursor`   | `.cursor/rules/loadout.mdc` (always-on rule)                              | Read by the Cursor IDE **and** `cursor-agent` CLI; a user-level `sessionStart` hook keeps it fresh — and wires a matching repo automatically the first time you open it |
 | `generic`  | `.loadout/generated/generic.md`                                           | Emit-only; you wire it yourself                                 |
 
-It never edits committed shared files like `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, or `.github/copilot-instructions.md` — only local, gitignored paths.
+It never edits committed shared files like `AGENTS.md`, `CLAUDE.md`, or `.github/copilot-instructions.md` — only local, gitignored paths.
 
 ---
 
@@ -224,7 +223,7 @@ load skill install
 
 Then, in an agent session, run `/loadout-migrate` or just ask *"Import my CLAUDE.md into Loadout."*
 
-Three more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session (instead of leaving it stranded in one agent's memory), [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows), and [`loadout-plan-preview`](skills/loadout-plan-preview/SKILL.md) drives the [plan preview](#plan-previews) loop above. The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, Gemini, opencode, and Cursor.
+Three more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session (instead of leaving it stranded in one agent's memory), [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows), and [`loadout-plan-preview`](skills/loadout-plan-preview/SKILL.md) drives the [plan preview](#plan-previews) loop above. The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, opencode, and Cursor.
 
 ---
 
