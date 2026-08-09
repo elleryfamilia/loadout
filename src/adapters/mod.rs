@@ -1146,11 +1146,6 @@ fn register_if_installed(
     let _ = apply_hook_registry_at(writer, home, hr, &mut files, notes, warnings);
 }
 
-/// Ensure loadout's hook is registered in the agent's user-level hooks file.
-/// Resolves `$HOME`, then delegates to [`apply_hook_registry_at`]. A pre-existing
-/// file gets a one-time `.loadout-bak` backup before its first modification.
-/// Degrades to a warning (never corrupts) on any read/parse failure, exactly
-/// like the importer registries.
 /// Absolute path a hook registration should invoke. Normally the running
 /// executable — but when that is a cargo build product (a dogfood run from a
 /// source checkout, `target/debug/load`), prefer the installed `load` on
@@ -1205,6 +1200,11 @@ fn is_executable(p: &Path) -> bool {
     p.is_file()
 }
 
+/// Ensure loadout's hook is registered in the agent's user-level hooks file.
+/// Resolves `$HOME`, then delegates to [`apply_hook_registry_at`]. A pre-existing
+/// file gets a one-time `.loadout-bak` backup before its first modification.
+/// Degrades to a warning (never corrupts) on any read/parse failure, exactly
+/// like the importer registries.
 fn apply_hook_registry(
     writer: &dyn Writer,
     hr: &HookRegistry,
