@@ -17,3 +17,4 @@ AGENTS.override.md
 .loadout/workflow/artifacts/plan-feedback.json
 .cursor/rules/loadout.mdc
 .cursor/skills/loadout/
+.github/instructions/loadout.instructions.md
