@@ -15,7 +15,7 @@ A *loadout* is the kit you equip before a job — your conventions, your tooling
 - Your project's `AGENTS.md` describes **the repo.**
 - Loadout carries **what you bring to it** — across every project, machine, and agent.
 
-Works with **Claude, Codex, Cursor, opencode, and Copilot**. Your context arrives as a local, gitignored file each agent reads — committed project instruction files are never touched.
+Works with **Claude, Codex, Cursor, opencode, and Copilot — in the CLI and in VS Code**. Your context arrives as a local, gitignored file each agent reads — committed project instruction files are never touched.
 
 ---
 
@@ -170,7 +170,7 @@ Loadout produces one overlay and delivers it the way each agent expects.
 | `claude`   | `.loadout/generated/claude.md`                                            | Adds a managed import block to `CLAUDE.local.md`               |
 | `codex`    | `.loadout/generated/agents.md`                                            | Merges into gitignored `AGENTS.override.md`                    |
 | `opencode` | `.loadout/generated/opencode.md`                                          | Registers the overlay in global opencode instructions          |
-| `copilot`  | `.loadout/generated/copilot/.github/instructions/loadout.instructions.md` | Launches Copilot CLI with the custom instructions directory    |
+| `copilot`  | `.github/instructions/loadout.instructions.md` (VS Code) + `.loadout/generated/copilot/…` (CLI) | Copilot Chat in VS Code reads the gitignored instructions file on every request; `load run copilot` wires the CLI via its custom-instructions env var |
 | `cursor`   | `.cursor/rules/loadout.mdc` (always-on rule)                              | Read by the Cursor IDE **and** `cursor-agent` CLI; a user-level `sessionStart` hook keeps it fresh — and wires a matching repo automatically the first time you open it |
 | `generic`  | `.loadout/generated/generic.md`                                           | Emit-only; you wire it yourself                                 |
 
