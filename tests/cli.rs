@@ -1203,17 +1203,18 @@ fn copilot_render_writes_nested_overlay_without_touching_committed_files() {
     fx.cmd()
         .args(["refresh", "--agent", "copilot"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("COPILOT_CUSTOM_INSTRUCTIONS_DIRS"));
+        .success();
 
-    // Overlay is a `.instructions.md` (no applyTo → Copilot inlines it) under the
-    // gitignored generated dir's .github/instructions.
+    // CLI channel: the generated-dir overlay keeps NO frontmatter (no
+    // `applyTo` → the Copilot CLI inlines it rather than pointer-izing).
     let rel = ".loadout/generated/copilot/.github/instructions/loadout.instructions.md";
     assert!(fx.exists(rel));
     let overlay = fx.read(rel);
     assert!(overlay.contains("loadout:generated"));
-    // No frontmatter delimiter at the top → no `applyTo` → inlined, not a pointer.
     assert!(!overlay.starts_with("---"));
+    // VS Code channel: loadout-owned repo target, frontmatter first.
+    let target = fx.read(".github/instructions/loadout.instructions.md");
+    assert!(target.starts_with("---\n"));
     // Committed instruction files are never touched.
     assert!(!fx.exists(".github/copilot-instructions.md"));
     assert!(!fx.exists("AGENTS.md"));
