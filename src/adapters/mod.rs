@@ -823,7 +823,7 @@ pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult
         }
     }
 
-    notes.push("committed instruction files (AGENTS.md, GEMINI.md, …) were not touched".into());
+    notes.push("committed instruction files (AGENTS.md, …) were not touched".into());
     if app.in_repo() {
         notes.push("left .gitignore entries in place (remove them by hand if desired)".into());
     }
