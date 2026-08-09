@@ -1151,6 +1151,60 @@ fn register_if_installed(
 /// file gets a one-time `.loadout-bak` backup before its first modification.
 /// Degrades to a warning (never corrupts) on any read/parse failure, exactly
 /// like the importer registries.
+/// Absolute path a hook registration should invoke. Normally the running
+/// executable — but when that is a cargo build product (a dogfood run from a
+/// source checkout, `target/debug/load`), prefer the installed `load` on
+/// `PATH`: a build dir vanishes on `cargo clean` or a checkout move, and the
+/// hook it was registered in fails silently forever after. Falls back to the
+/// running executable when nothing is installed (a source-only user still gets
+/// a working hook).
+fn hook_binary() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok();
+    if let Some(e) = &exe {
+        if is_cargo_build_path(e) {
+            let name = if cfg!(windows) { "load.exe" } else { "load" };
+            if let Some(installed) = std::env::var_os("PATH")
+                .and_then(|path| resolve_on_path(&path, name))
+                .filter(|installed| !is_cargo_build_path(installed))
+            {
+                return Some(installed);
+            }
+        }
+    }
+    exe
+}
+
+/// Whether `p` sits in a cargo output dir — its parent is `debug` or `release`
+/// (the profile dir names survive a custom `CARGO_TARGET_DIR`, whose path need
+/// not contain `target`). An installed copy (`~/.cargo/bin`, `/usr/local/bin`)
+/// never matches.
+fn is_cargo_build_path(p: &Path) -> bool {
+    p.parent()
+        .and_then(|d| d.file_name())
+        .is_some_and(|d| d == "debug" || d == "release")
+}
+
+/// First executable named `name` in the `PATH`-style value `path`.
+fn resolve_on_path(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
+    std::env::split_paths(path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(name))
+        .find(|p| is_executable(p))
+}
+
+#[cfg(unix)]
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    p.metadata()
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(p: &Path) -> bool {
+    p.is_file()
+}
+
 fn apply_hook_registry(
     writer: &dyn Writer,
     hr: &HookRegistry,
@@ -1194,7 +1248,7 @@ fn apply_hook_registry_at(
         }
     };
 
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(exe) = hook_binary() else {
         warnings.push("could not resolve the load binary path for hook registration".into());
         return Ok(());
     };
@@ -1432,6 +1486,55 @@ fn register_context_name(
     );
 
     Ok(Some(format!("{}\n", serde_json::to_string_pretty(&root)?)))
+}
+
+#[cfg(test)]
+mod hook_binary_tests {
+    use super::{is_cargo_build_path, resolve_on_path};
+    use std::path::Path;
+
+    #[test]
+    fn cargo_build_paths_detected() {
+        assert!(is_cargo_build_path(Path::new(
+            "/Users/x/_git/rosita/target/debug/load"
+        )));
+        assert!(is_cargo_build_path(Path::new("/tmp/rt/release/load")));
+        // A custom CARGO_TARGET_DIR keeps the profile dir names.
+        assert!(is_cargo_build_path(Path::new(
+            "/Volumes/External/cargo-target/rosita/debug/load"
+        )));
+    }
+
+    #[test]
+    fn installed_paths_not_detected() {
+        assert!(!is_cargo_build_path(Path::new("/Users/x/.cargo/bin/load")));
+        assert!(!is_cargo_build_path(Path::new("/usr/local/bin/load")));
+        assert!(!is_cargo_build_path(Path::new("load")));
+    }
+
+    #[test]
+    fn resolve_finds_executable_on_path() {
+        let d = tempfile::tempdir().unwrap();
+        let bin = d.path().join("load");
+        std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = std::env::join_paths([d.path().to_path_buf()]).unwrap();
+        assert_eq!(resolve_on_path(&path, "load"), Some(bin));
+        assert_eq!(resolve_on_path(&path, "other"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_skips_non_executable() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("load"), "not a binary").unwrap();
+        let path = std::env::join_paths([d.path().to_path_buf()]).unwrap();
+        assert_eq!(resolve_on_path(&path, "load"), None);
+    }
 }
 
 #[cfg(test)]
