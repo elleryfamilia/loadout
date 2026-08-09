@@ -51,8 +51,6 @@ The `loadout-plan-preview` skill carries the full authoring guidance when availa
 pub enum CommandFormat {
     /// Markdown with YAML frontmatter (Claude Code, opencode).
     Markdown,
-    /// TOML with `description` + `prompt` (Gemini CLI).
-    Toml,
     /// Cursor Skills: a folder per command holding a `SKILL.md` (the leaf
     /// folder names the skill, so commands land as
     /// `<commands_dir>/loadout/loadout-<stage>/SKILL.md` → `/loadout-<stage>`).
@@ -64,7 +62,6 @@ impl CommandFormat {
     pub fn ext(self) -> &'static str {
         match self {
             CommandFormat::Markdown | CommandFormat::Skill => "md",
-            CommandFormat::Toml => "toml",
         }
     }
 
@@ -74,7 +71,6 @@ impl CommandFormat {
     fn arg_placeholder(self) -> &'static str {
         match self {
             CommandFormat::Markdown => "$ARGUMENTS",
-            CommandFormat::Toml => "{{args}}",
             CommandFormat::Skill => "the request that accompanied this skill invocation",
         }
     }
@@ -151,21 +147,8 @@ fn render_stage_command(
                 yaml_dq(&description)
             )
         }
-        // Build via the toml crate so escaping is always correct.
-        CommandFormat::Toml => toml::to_string(&GeminiCommandFile {
-            description: &description,
-            prompt: &body,
-        })
-        .unwrap_or_default(),
     };
     StageCommand { filename, content }
-}
-
-/// Serializable shape of a Gemini CLI command file (`description` + `prompt`).
-#[derive(Serialize)]
-struct GeminiCommandFile<'a> {
-    description: &'a str,
-    prompt: &'a str,
 }
 
 /// The stage's prompt body — the contract the agent follows when the command
@@ -440,23 +423,6 @@ mod tests {
         let cmds = stage_commands(&wf, CommandFormat::Markdown, &[]);
         let plan = cmds.iter().find(|c| c.filename == "plan.md").unwrap();
         assert!(plan.content.contains(PLAN_PREVIEW_EPILOGUE));
-    }
-
-    #[test]
-    fn toml_command_is_valid_and_uses_gemini_args() {
-        let cmds = stage_commands(&builtin("spec-driven"), CommandFormat::Toml, &[]);
-        let plan = cmds.iter().find(|c| c.filename == "plan.toml").unwrap();
-        // Parses as TOML with description + prompt.
-        let v: toml::Value = toml::from_str(&plan.content).expect("valid TOML");
-        assert!(v.get("description").and_then(|d| d.as_str()).is_some());
-        let prompt = v.get("prompt").and_then(|p| p.as_str()).unwrap();
-        // loadout's own arg placeholder is Gemini's `{{args}}`, not `$ARGUMENTS`.
-        // (Vendored upstream content may itself contain `$ARGUMENTS` — that's the
-        // source's text, not loadout's placeholder, so we don't assert its absence.)
-        assert!(prompt.contains("{{args}}"), "gemini arg placeholder");
-        // spec's plan reads spec.md and writes plan.md.
-        assert!(prompt.contains("spec.md"));
-        assert!(prompt.contains("plan.md"));
     }
 
     #[test]

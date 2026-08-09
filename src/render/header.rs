@@ -14,7 +14,7 @@ pub struct HeaderMeta<'a> {
     pub generated_at: &'a str,
     /// Host the snapshot was generated on.
     pub host: &'a str,
-    /// Agent id (`claude`/`codex`/`gemini`/…).
+    /// Agent id (`claude`/`codex`/`opencode`/…).
     pub agent: &'a str,
     /// Selected profile name.
     pub profile: &'a str,

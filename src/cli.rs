@@ -49,7 +49,7 @@ pub struct GlobalArgs {
     pub dry_run: bool,
 }
 
-// Agents are selected by id string (claude/codex/gemini/opencode/copilot/generic,
+// Agents are selected by id string (claude/codex/opencode/copilot/cursor/generic,
 // or "all"), validated at runtime against the loaded config so new agents added
 // via `[[agents]]` work without code changes.
 

@@ -238,18 +238,18 @@ binary — update that machine's `load` first. Built-ins are unaffected.
 
 ```toml
 [[agents]]
-id = "gemini"
-generated_filename = "gemini.md"
-launch = "gemini"                  # program for `load run gemini` (omit → render-only)
+id = "opencode"
+generated_filename = "opencode.md"
+launch = "opencode"              # program for `load run opencode` (omit → render-only)
 # aliases = ["agent"]              # extra tokens that resolve to this agent (cursor: `agent`)
 template = "overlay"              # body template name (repo/global override → embedded)
-# importer = "GEMINI.local.md"             # auto-wire @import into a LOCAL file
+# importer = "CLAUDE.local.md"             # auto-wire @import into a LOCAL file
 # override_target = "AGENTS.override.md"   # auto-merge target, gitignored (default-on)
 # override_base   = "AGENTS.md"            # file whose content seeds the override
 # target_file = ".cursor/rules/loadout.mdc" # loadout-owned wired file, written raw (no marker block)
 # preamble = "---\nalwaysApply: true\n---\n" # raw first bytes of target_file (e.g. MDC frontmatter)
 # append_prompt_flag = "--append-system-prompt"   # run injects a freshness note via this flag
-wire_hint = "include .loadout/generated/gemini.md from your agent config"
+wire_hint = "include .loadout/generated/opencode.md from your agent config"
 ```
 
 Built-in defaults:
@@ -258,7 +258,6 @@ Built-in defaults:
 | --- | --- | --- | --- |
 | `claude` | `claude.md` | import → `CLAUDE.local.md` | `claude` |
 | `codex` | `agents.md` | auto → gitignored `AGENTS.override.md` (Codex prefers it); `--no-override` = emit-only | `codex` |
-| `gemini` | `gemini.md` | auto → gitignored `GEMINI.local.md` (`@import`) + registers it in `~/.gemini/settings.json` `context.fileName` | `gemini` |
 | `opencode` | `opencode.md` | registers overlay path in `~/.config/opencode/opencode.json` `instructions` | `opencode` |
 | `copilot` | `copilot/.github/instructions/loadout.instructions.md` | `load run` sets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → `.loadout/generated/copilot` | `copilot` |
 | `cursor` | `cursor.md` | owned file → gitignored `.cursor/rules/loadout.mdc` (`alwaysApply` rule, IDE + CLI) + `sessionStart` hook in `~/.cursor/hooks.json` for IDE freshness | `cursor-agent` |

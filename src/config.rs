@@ -790,7 +790,7 @@ pub fn state_dir() -> Option<PathBuf> {
 }
 
 /// The user's home directory (`$HOME`), if set. Used to resolve other tools'
-/// dotfiles (e.g. Gemini's `~/.gemini/settings.json`). Honors a `$HOME` override
+/// dotfiles (e.g. opencode's `~/.config/opencode/opencode.json`). Honors a `$HOME` override
 /// so tests stay isolated from the real home.
 pub fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")

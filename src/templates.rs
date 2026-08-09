@@ -74,7 +74,7 @@ mod tests {
         assert_eq!(t.source, "embedded");
         assert!(t.content.contains("agent context"));
         // Any agent id falls back to the same shared overlay.
-        let t2 = resolve(d.path(), "gemini").unwrap();
+        let t2 = resolve(d.path(), "opencode").unwrap();
         assert_eq!(t2.source, "embedded");
         assert_eq!(t.content, t2.content);
     }

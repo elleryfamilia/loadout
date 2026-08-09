@@ -8,6 +8,21 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Removed
+
+- **Dropped the Gemini CLI agent.** Google retired the standalone `gemini`
+  binary on 2026-06-18 in favour of the Antigravity CLI (`agy`), so it's gone
+  as a loadout agent — `load gemini`, the `gemini` overlay, its
+  `GEMINI.local.md` / `~/.gemini/settings.json` wiring, and the docs/studio
+  references all go with it. Antigravity itself isn't a drop-in replacement:
+  `agy` reads a committed `AGENTS.md` and only falls back to
+  `AGENTS.override.md` when there's no `AGENTS.md`, which is the opposite of
+  Codex and doesn't fit loadout's gitignored-overlay model, so no `agy` agent
+  is added for now. (A stray `~/.gemini/` config dir on your machine is
+  Antigravity's, not the old Gemini CLI's.)
+
 ## 0.22.1 — 2026-08-08
 
 ### Fixed

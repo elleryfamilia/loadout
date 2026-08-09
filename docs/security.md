@@ -43,7 +43,7 @@ literals ("looks private — move it to local.toml").
 Anything loadout generates is machine-specific and local: `.loadout/generated/`,
 `.loadout/logs/`, `AGENTS.override.md`, and `CLAUDE.local.md` (only when loadout
 created it — if you already track it, your gitignore is left alone). Hand-authored
-`AGENTS.md` / `GEMINI.md` / `.github/copilot-instructions.md` are committed and
+`AGENTS.md` / `.github/copilot-instructions.md` are committed and
 never auto-edited. Committing a derived file would either churn, leak host-
 specific content, or (for `AGENTS.override.md`, which Codex *prefers* over
 `AGENTS.md`) force your machine's snapshot onto teammates.

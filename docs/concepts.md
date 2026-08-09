@@ -239,17 +239,15 @@ described by an `AgentDescriptor` along four axes:
 
 The decisive rule: **auto-wire through local/gitignored paths only** — Claude →
 `CLAUDE.local.md` (`@import`), Codex → `AGENTS.override.md` (which Codex reads
-before the committed `AGENTS.md`), Gemini → a gitignored `GEMINI.local.md`
-(`@import`) registered once in `~/.gemini/settings.json` `context.fileName`,
+before the committed `AGENTS.md`),
 Copilot → the gitignored overlay via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` set by
 `load run` (no persistent local hook exists). loadout **never edits a committed,
-shared instruction file** (`AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`);
+shared instruction file** (`AGENTS.md`, `.github/copilot-instructions.md`);
 agents with no wiring path are **emit-only** — a gitignored overlay plus a hint on
 how to wire it, not content in a shared file.
 
 Built-ins: `claude` (import), `codex` (auto `AGENTS.override.md` merge,
-`--no-override` to skip), `gemini` (auto `GEMINI.local.md` @import + registers it
-in `~/.gemini/settings.json`), `copilot` (`load run` sets
+`--no-override` to skip), `copilot` (`load run` sets
 `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → the gitignored overlay), `cursor` (owned
 `.cursor/rules/loadout.mdc` rule — one file read by the IDE agent *and* the
 `cursor-agent` CLI — plus a user-level `sessionStart` hook in `~/.cursor/hooks.json`

@@ -323,11 +323,12 @@ mod tests {
             resolve_agents(None, &cfg).unwrap(),
             vec!["claude".to_string()]
         );
-        // `all` expands to every built-in agent (now six).
+        // `all` expands to every built-in agent.
         let all = resolve_agents(Some("all"), &cfg).unwrap();
-        assert!(all.contains(&"gemini".to_string()));
+        assert!(all.contains(&"claude".to_string()));
         assert!(all.contains(&"copilot".to_string()));
         assert!(all.contains(&"opencode".to_string()));
+        assert!(!all.contains(&"gemini".to_string()), "gemini was removed");
         // A specific id resolves to itself; unknown ids error.
         assert_eq!(resolve_agents(Some("codex"), &cfg).unwrap(), vec!["codex"]);
         assert!(resolve_agents(Some("nope"), &cfg).is_err());

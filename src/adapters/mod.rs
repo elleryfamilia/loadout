@@ -9,8 +9,8 @@
 //!   overlay into a *local* file (e.g. Claude's `CLAUDE.local.md`). Safe to
 //!   auto-wire because the importer is itself local/gitignored. With
 //!   **`importer_registry`** also set, the importer's name is registered in the
-//!   agent's own settings so it's actually loaded (e.g. Gemini's
-//!   `~/.gemini/settings.json` `context.fileName`).
+//!   agent's own settings so it's actually loaded (e.g. opencode's
+//!   `~/.config/opencode/opencode.json` `instructions`).
 //! - **`override_target`** set → auto-wire (default-on): merge the overlay
 //!   (inlined) into a gitignored override file the agent *prefers* over its
 //!   committed instruction file (e.g. Codex reads `AGENTS.override.md` before
@@ -44,7 +44,7 @@ pub(crate) mod hooks_claude;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentDescriptor {
-    /// Stable agent id (`claude`, `codex`, `gemini`, …).
+    /// Stable agent id (`claude`, `codex`, `opencode`, …).
     pub id: String,
     /// Human-friendly name (defaults to the id).
     #[serde(default)]
@@ -68,7 +68,7 @@ pub struct AgentDescriptor {
     pub importer: Option<String>,
     /// Some agents only load the `importer` file once its name is registered in
     /// an external settings file. This declares that registration so the import
-    /// is actually read (e.g. Gemini's `~/.gemini/settings.json` `context.fileName`).
+    /// is actually read (e.g. opencode's `~/.config/opencode/opencode.json`).
     #[serde(default)]
     pub importer_registry: Option<ImporterRegistry>,
     /// Opt-in override file to merge the overlay into (e.g. `AGENTS.override.md`).
@@ -119,7 +119,7 @@ pub struct AgentDescriptor {
     /// `None` → the agent gets the workflow context section only.
     #[serde(default)]
     pub commands_dir: Option<String>,
-    /// On-disk format for this agent's command files (markdown vs Gemini TOML).
+    /// On-disk format for this agent's command files (markdown vs Cursor skill).
     /// Ignored unless `commands_dir` is set; defaults to markdown.
     #[serde(default)]
     pub command_format: Option<commands::CommandFormat>,
@@ -144,19 +144,18 @@ fn default_template() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImporterRegistry {
-    /// Settings file relative to `$HOME` (e.g. `.gemini/settings.json`).
+    /// Settings file relative to `$HOME` (e.g. `.config/opencode/opencode.json`).
     pub settings_file: String,
     /// JSON object-key path to the registered string array (e.g.
-    /// `["context", "fileName"]` for Gemini, `["instructions"]` for opencode).
+    /// `["instructions"]` for opencode).
     pub key_path: Vec<String>,
     /// The agent's built-in default, preserved when we first create the array
-    /// (e.g. `GEMINI.md`). `None` for keys with no implicit default (opencode's
-    /// `instructions`).
+    /// `None` for keys with no implicit default (opencode's `instructions`).
     #[serde(default)]
     pub default_name: Option<String>,
-    /// The literal value to register. When `None`, the [`AgentDescriptor::importer`]
-    /// basename is registered instead (Gemini registers `GEMINI.local.md`; opencode
-    /// has no importer and registers the overlay path `.loadout/generated/opencode.md`).
+    /// The literal value to register (e.g. opencode registers the overlay path
+    /// `.loadout/generated/opencode.md`). When `None`, the
+    /// [`AgentDescriptor::importer`] basename is registered instead.
     #[serde(default)]
     pub value: Option<String>,
 }
@@ -260,31 +259,10 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             ),
             ..d("codex", "agents.md")
         },
-        AgentDescriptor {
-            display_name: Some("Gemini CLI".into()),
-            launch: Some("gemini".into()),
-            // Gemini has no built-in local-context filename, so auto-wire a
-            // gitignored `GEMINI.local.md` (@import) and register that name in
-            // `~/.gemini/settings.json` `context.fileName` so Gemini loads it
-            // alongside the committed `GEMINI.md` (additive, never shadowing).
-            importer: Some("GEMINI.local.md".into()),
-            importer_registry: Some(ImporterRegistry {
-                settings_file: ".gemini/settings.json".into(),
-                key_path: vec!["context".into(), "fileName".into()],
-                default_name: Some("GEMINI.md".into()),
-                value: None, // registers the importer basename (GEMINI.local.md)
-            }),
-            wire_hint: Some(
-                "Gemini reads GEMINI.md (and resolves @imports). To wire this overlay \
-                 manually instead, add `@.loadout/generated/gemini.md` to a GEMINI.md."
-                    .into(),
-            ),
-            // Gemini reads project commands from `.gemini/commands/` as TOML; a
-            // `loadout/` subdir namespaces them as `/loadout:<stage>`.
-            commands_dir: Some(".gemini/commands".into()),
-            command_format: Some(commands::CommandFormat::Toml),
-            ..d("gemini", "gemini.md")
-        },
+        // Gemini CLI was removed: Google retired the standalone `gemini` binary
+        // on 2026-06-18 in favor of the Antigravity CLI (`agy`), which resolves
+        // context differently (prefers a committed AGENTS.md over any gitignored
+        // override), so loadout's overlay approach doesn't cleanly apply.
         AgentDescriptor {
             display_name: Some("opencode".into()),
             launch: Some("opencode".into()),
@@ -555,7 +533,7 @@ pub fn apply(
             gitignore_extra.push(importer.clone());
         }
         // Register the importer's name in the agent's own settings so it actually
-        // loads (e.g. Gemini's global `~/.gemini/settings.json` `context.fileName`).
+        // loads (e.g. opencode's global `~/.config/opencode/opencode.json`).
         if let Some(reg) = &d.importer_registry {
             apply_importer_registry(
                 app,
@@ -1032,8 +1010,8 @@ fn generated_path(app: &AppContext, filename: &str) -> PathBuf {
 /// Register a value in the agent's own settings file (resolved under `$HOME`) so
 /// the agent actually loads the overlay, and warn if a workspace settings file
 /// would mask that registration. The registered value is `reg.value` when set
-/// (e.g. opencode's overlay path), else the `importer` basename (e.g. Gemini's
-/// `GEMINI.local.md`). Appends to `files`/`notes`/`warnings`; degrades to a
+/// (e.g. opencode's overlay path), else the `importer` basename (a local
+/// `@`-import file). Appends to `files`/`notes`/`warnings`; degrades to a
 /// warning (never corrupts) on any read/parse failure.
 fn apply_importer_registry(
     app: &AppContext,

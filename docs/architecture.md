@@ -76,8 +76,7 @@ cwd → repo_base → Config::load → detect_context → select (one loadout by
   file, import vs embed, owned vs managed-block).
 - **Auto-wire only through local/gitignored paths.** Claude's `CLAUDE.local.md`
   (`@import`), Codex's `AGENTS.override.md` (read before the committed `AGENTS.md`),
-  Gemini's `GEMINI.local.md` (`@import`, registered once in
-  `~/.gemini/settings.json` `context.fileName`), Cursor's `.cursor/rules/loadout.mdc`
+  Cursor's `.cursor/rules/loadout.mdc`
   (a fully loadout-owned always-on rule, gitignored — Cursor doesn't filter rules
   by gitignore), and Copilot's gitignored overlay
   (pointed at via `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` by `load run`) are wired
