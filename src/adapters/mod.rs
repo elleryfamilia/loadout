@@ -115,12 +115,15 @@ pub struct AgentDescriptor {
     pub launch_context_dir: Option<String>,
     /// Project-relative directory this agent reads slash commands from (e.g.
     /// `.claude/commands`). When set **and** a workflow is bound, loadout writes
-    /// one command file per stage under `<commands_dir>/loadout/` (a dir it owns).
+    /// one command file per stage — under `<commands_dir>/loadout/` when the
+    /// format owns that dir, else flat in `<commands_dir>` with a `loadout-`
+    /// prefix (see [`commands::CommandFormat::owns_namespace_dir`]).
     /// `None` → the agent gets the workflow context section only.
     #[serde(default)]
     pub commands_dir: Option<String>,
-    /// On-disk format for this agent's command files (markdown vs Cursor skill).
-    /// Ignored unless `commands_dir` is set; defaults to markdown.
+    /// On-disk format for this agent's command files: plain markdown, a Cursor
+    /// skill folder, or a VS Code prompt file. Ignored unless `commands_dir` is
+    /// set; defaults to markdown.
     #[serde(default)]
     pub command_format: Option<commands::CommandFormat>,
     /// Native review commands to run during the verify stage (e.g. Claude
@@ -313,6 +316,17 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             ),
             launch_context_dir_env: Some("COPILOT_CUSTOM_INSTRUCTIONS_DIRS".into()),
             launch_context_dir: Some("copilot".into()),
+            // Workflow stages as VS Code prompt files: `.github/prompts` is a
+            // default discovery location, and a `<name>.prompt.md` there is
+            // invocable as `/<name>` in Copilot Chat. Unlike the instructions
+            // above, prompt discovery does NOT recurse into subdirectories
+            // (verified live), so these land flat in a dir the user also owns
+            // — hence `CommandFormat::Prompt`'s `loadout-` prefix ownership,
+            // which keeps pruning and `clean` off the user's own prompts.
+            // Gitignore-filtering doesn't apply either way, so ours stay
+            // gitignored by prefix.
+            commands_dir: Some(".github/prompts".into()),
+            command_format: Some(commands::CommandFormat::Prompt),
             wire_hint: Some(
                 "VS Code reads the gitignored .github/instructions/loadout.instructions.md; \
                  `load run copilot` wires the CLI via COPILOT_CUSTOM_INSTRUCTIONS_DIRS."
@@ -657,11 +671,18 @@ pub fn apply(
     // 2b. Per-stage slash commands (the command channel), for agents that read
     // project commands. Only inside a repo and never at $HOME — a global command
     // dir (`~/.claude/commands/`) would bleed into every repo, exactly like an
-    // importer. One file per stage under `<commands_dir>/loadout/`, a dir we own.
+    // importer. One file per stage, in the owned `<commands_dir>/loadout/` dir
+    // or flat with a `loadout-` prefix when the dir is shared with the user.
     if let (Some(commands_dir), Some(wf)) = (&d.commands_dir, workflow.as_ref()) {
         if app.in_repo() && !bleeds && is_repo_relative(commands_dir) {
             write_stage_commands(app, d, commands_dir, wf, &mut files)?;
-            gitignore_extra.push(format!("{commands_dir}/{}/", commands::COMMAND_NAMESPACE));
+            let fmt = command_format(d);
+            gitignore_extra.push(if fmt.owns_namespace_dir() {
+                format!("{commands_dir}/{}/", commands::COMMAND_NAMESPACE)
+            } else {
+                // Shared dir: ignore only our own files, by prefix.
+                format!("{commands_dir}/{}*.{}", fmt.shared_dir_prefix(), fmt.ext())
+            });
         }
     }
 
@@ -743,11 +764,21 @@ pub fn artifacts(d: &AgentDescriptor, repo_base: &Path) -> Vec<PathBuf> {
             out.push(p);
         }
     }
-    // Generated slash-command dir (loadout-owned).
+    // Generated slash commands: the owned dir, or — in a shared dir — each of
+    // our own prefixed files.
     if let Some(commands_dir) = &d.commands_dir {
-        let ns = command_namespace_dir(repo_base, commands_dir);
-        if ns.exists() {
-            out.push(ns);
+        let fmt = command_format(d);
+        let ns = command_namespace_dir(repo_base, commands_dir, fmt);
+        if fmt.owns_namespace_dir() {
+            if ns.exists() {
+                out.push(ns);
+            }
+        } else if let Ok(entries) = std::fs::read_dir(&ns) {
+            for entry in entries.flatten() {
+                if is_generated_shared_command(&entry.file_name().to_string_lossy(), fmt) {
+                    out.push(entry.path());
+                }
+            }
         }
     }
     out
@@ -807,15 +838,30 @@ pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult
         }
     }
 
-    // Generated slash-command dir (loadout-owned entirely) → remove it whole.
-    // The agent's own `<commands_dir>` (e.g. `.claude/commands/`) is left alone.
+    // Generated slash commands. An owned `loadout/` dir goes whole; a shared
+    // dir (VS Code's `.github/prompts/`) gives up only our prefixed files —
+    // the dir itself and the user's own prompts stay. The agent's own
+    // `<commands_dir>` (e.g. `.claude/commands/`) is left alone either way.
     if let Some(commands_dir) = &d.commands_dir {
-        let ns = command_namespace_dir(app.repo_base(), commands_dir);
-        if ns.exists() {
-            if !dry {
-                std::fs::remove_dir_all(&ns).ok();
+        let fmt = command_format(d);
+        let ns = command_namespace_dir(app.repo_base(), commands_dir, fmt);
+        if fmt.owns_namespace_dir() {
+            if ns.exists() {
+                if !dry {
+                    std::fs::remove_dir_all(&ns).ok();
+                }
+                removed.push(ns);
             }
-            removed.push(ns);
+        } else if let Ok(entries) = std::fs::read_dir(&ns) {
+            for entry in entries.flatten() {
+                if is_generated_shared_command(&entry.file_name().to_string_lossy(), fmt) {
+                    let p = entry.path();
+                    if !dry {
+                        std::fs::remove_file(&p).ok();
+                    }
+                    removed.push(p);
+                }
+            }
         }
     }
 
@@ -908,11 +954,33 @@ fn redact_artifact(content: String, what: &str) -> String {
     clean
 }
 
-/// The directory loadout owns under an agent's command dir, for `wf`'s stages.
-fn command_namespace_dir(repo_base: &Path, commands_dir: &str) -> PathBuf {
-    repo_base
-        .join(commands_dir)
-        .join(commands::COMMAND_NAMESPACE)
+/// Where an agent's generated stage commands live: a `loadout/` subdirectory
+/// loadout owns outright, or — for formats whose discovery doesn't recurse
+/// (VS Code prompt files) — the agent's command dir itself, shared with the
+/// user's own files and owned only by filename prefix.
+fn command_namespace_dir(
+    repo_base: &Path,
+    commands_dir: &str,
+    format: commands::CommandFormat,
+) -> PathBuf {
+    let base = repo_base.join(commands_dir);
+    if format.owns_namespace_dir() {
+        base.join(commands::COMMAND_NAMESPACE)
+    } else {
+        base
+    }
+}
+
+/// Format an agent's descriptor selects, defaulting like `write_stage_commands`.
+fn command_format(d: &AgentDescriptor) -> commands::CommandFormat {
+    d.command_format
+        .unwrap_or(commands::CommandFormat::Markdown)
+}
+
+/// Whether `name` is a generated command file in a *shared* command dir — the
+/// only entries loadout may prune or remove there.
+fn is_generated_shared_command(name: &str, format: commands::CommandFormat) -> bool {
+    name.starts_with(&format.shared_dir_prefix()) && name.ends_with(&format!(".{}", format.ext()))
 }
 
 /// Whether a configured `commands_dir` is safely inside the repo (relative, no
@@ -926,9 +994,11 @@ fn is_repo_relative(dir: &str) -> bool {
             .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
-/// Write one slash-command file per workflow stage under the owned namespace
-/// dir, pruning any stale files left by removed/renamed stages first (we own the
-/// whole dir, so anything not in the current set is ours to clean up).
+/// Write one slash-command file per workflow stage, pruning stale files left by
+/// removed/renamed stages first. What "stale" means depends on the format's
+/// ownership model: in an owned `loadout/` dir anything not in the current set
+/// is ours to clean up, while in a shared dir (VS Code's `.github/prompts/`)
+/// only our own `loadout-`prefixed files are ever candidates.
 fn write_stage_commands(
     app: &AppContext,
     d: &AgentDescriptor,
@@ -939,7 +1009,7 @@ fn write_stage_commands(
     let format = d
         .command_format
         .unwrap_or(commands::CommandFormat::Markdown);
-    let ns_dir = command_namespace_dir(app.repo_base(), commands_dir);
+    let ns_dir = command_namespace_dir(app.repo_base(), commands_dir, format);
     let generated = commands::stage_commands(wf, format, &d.review_commands);
     // A command's top-level entry in the namespace dir: the file itself, or —
     // for folder-shaped formats (Cursor skills' `loadout-plan/SKILL.md`) — the
@@ -949,11 +1019,17 @@ fn write_stage_commands(
         .filter_map(|c| c.filename.split('/').next())
         .collect();
 
-    // Prune stale command entries (a removed/renamed stage's leftover).
+    // Prune stale command entries (a removed/renamed stage's leftover). In a
+    // shared dir only our own prefixed files are candidates — a user's hand-
+    // written prompt sitting alongside them is never touched.
     if let Ok(entries) = std::fs::read_dir(&ns_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if !keep.contains(name.to_string_lossy().as_ref()) && !app.writer.is_dry_run() {
+            let name_str = name.to_string_lossy();
+            if !format.owns_namespace_dir() && !is_generated_shared_command(&name_str, format) {
+                continue;
+            }
+            if !keep.contains(name_str.as_ref()) && !app.writer.is_dry_run() {
                 let p = entry.path();
                 if p.is_dir() {
                     std::fs::remove_dir_all(&p).ok();

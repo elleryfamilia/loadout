@@ -8,6 +8,22 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Added
+
+- **Workflow commands in VS Code.** The `copilot` agent now writes each
+  workflow stage as a VS Code prompt file in
+  `.github/prompts/`, so the spine is invocable in Copilot Chat as
+  `/loadout-brainstorm`, `/loadout-plan`, `/loadout-implement`,
+  `/loadout-verify`, `/loadout-ship` — the same commands Claude Code and
+  Cursor already get. Files carry `mode: agent` (stages do work, not just
+  answer) and use VS Code's own `${input:…}` syntax for the per-run focus.
+  VS Code's prompt discovery doesn't recurse into subdirectories, so unlike
+  the other agents these land *flat* in `.github/prompts/` — a directory you
+  may also keep your own prompts in. loadout owns only the `loadout-` prefix
+  there: your own prompt files are never pruned, cleaned, or gitignored.
+
 ## 0.24.0 — 2026-08-09
 
 ### Added

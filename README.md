@@ -144,7 +144,7 @@ name = "machine"      # the default (no-targets) loadout → applies everywhere
 workflow = "superpowers"
 ```
 
-Workflows are global-only and never enforced — guidance rendered into each agent, not a runtime. (One naming nuance: Cursor delivers the spine as Skills, so there the commands are invoked `/loadout-explore` — dash, not colon — since Cursor names a skill after its folder.) Full detail in [docs/concepts.md](docs/concepts.md#workflows-implemented).
+Workflows are global-only and never enforced — guidance rendered into each agent, not a runtime. (Two naming nuances: Cursor delivers the spine as Skills and VS Code as prompt files, so in both the commands are invoked `/loadout-plan` — dash, not colon — because each names the command after its file or folder.) Full detail in [docs/concepts.md](docs/concepts.md#workflows-implemented).
 
 ---
 

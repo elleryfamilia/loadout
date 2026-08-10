@@ -7,16 +7,26 @@
 //! read/write, the gate, the exit checklist, and an argument slot for the
 //! specific task).
 //!
-//! Files land in a dedicated [`COMMAND_NAMESPACE`] subdirectory of the agent's
-//! command dir (e.g. `.claude/commands/loadout/plan.md`) — a dir loadout owns
-//! entirely, so the commands invoke as `/loadout:<stage>` and cleanup can remove
-//! the whole dir without touching the user's own commands.
+//! Two ownership models, picked per [`CommandFormat`]:
+//!
+//! - **Owned directory** (Claude Code, Cursor): files land in a dedicated
+//!   [`COMMAND_NAMESPACE`] subdirectory of the agent's command dir (e.g.
+//!   `.claude/commands/loadout/plan.md`), which loadout owns entirely — so the
+//!   commands invoke as `/loadout:<stage>` and cleanup removes the whole dir
+//!   without touching the user's own commands.
+//! - **Shared directory** (VS Code prompt files): the agent's discovery doesn't
+//!   recurse, so files must sit flat in a dir the user also uses (e.g.
+//!   `.github/prompts/loadout-plan.prompt.md`). Ownership is then by the
+//!   `loadout-` filename prefix — see [`CommandFormat::owns_namespace_dir`] —
+//!   and pruning, `clean`, and the gitignore entry all scope to it so a user's
+//!   own files there are never touched.
 
 use serde::{Deserialize, Serialize};
 
 use crate::workflow::{self, Workflow, WorkflowStage, ARTIFACT_SUBDIR};
 
-/// The namespace subdir loadout owns under an agent's command directory.
+/// The namespace loadout claims in an agent's command directory: a subdir it
+/// owns outright, or — in a shared dir — the filename prefix marking its files.
 pub const COMMAND_NAMESPACE: &str = "loadout";
 
 /// Fixed intro for the native-review branch of the verify stage (tests key on it).
@@ -55,6 +65,11 @@ pub enum CommandFormat {
     /// folder names the skill, so commands land as
     /// `<commands_dir>/loadout/loadout-<stage>/SKILL.md` → `/loadout-<stage>`).
     Skill,
+    /// VS Code prompt files: `<name>.prompt.md`, invoked as `/<name>` in
+    /// Copilot Chat. The command name is the filename stem alone — prompt
+    /// files carry no namespace — so the stem is prefixed (`loadout-plan`
+    /// → `/loadout-plan`) to avoid colliding with a user's own prompts.
+    Prompt,
 }
 
 impl CommandFormat {
@@ -62,23 +77,50 @@ impl CommandFormat {
     pub fn ext(self) -> &'static str {
         match self {
             CommandFormat::Markdown | CommandFormat::Skill => "md",
+            CommandFormat::Prompt => "prompt.md",
         }
+    }
+
+    /// Whether loadout gets a `loadout/` subdirectory of its own under the
+    /// agent's command dir, or writes prefixed files straight into a directory
+    /// the user also keeps their own files in.
+    ///
+    /// VS Code's prompt-file discovery does **not** recurse into
+    /// subdirectories (verified live: a `.github/prompts/loadout/x.prompt.md`
+    /// never appears in the slash-command list, while the same file one level
+    /// up does). So prompt files sit flat in `.github/prompts/`, and ownership
+    /// is by the `loadout-` filename prefix instead of by directory — nothing
+    /// outside that prefix is ever pruned or removed.
+    pub fn owns_namespace_dir(self) -> bool {
+        match self {
+            CommandFormat::Markdown | CommandFormat::Skill => true,
+            CommandFormat::Prompt => false,
+        }
+    }
+
+    /// Filename prefix marking a generated command in a shared directory.
+    pub fn shared_dir_prefix(self) -> String {
+        format!("{COMMAND_NAMESPACE}-")
     }
 
     /// The placeholder this agent substitutes the user's command text into.
     /// Cursor skills have no substitution syntax — the invoking message rides
-    /// along as-is, so the body just points the agent at it.
+    /// along as-is, so the body just points the agent at it. VS Code prompt
+    /// files expand `${input:…}` variables, with the prompt's description as
+    /// the placeholder text.
     fn arg_placeholder(self) -> &'static str {
         match self {
             CommandFormat::Markdown => "$ARGUMENTS",
             CommandFormat::Skill => "the request that accompanied this skill invocation",
+            CommandFormat::Prompt => "${input:focus:this run's focus (optional)}",
         }
     }
 }
 
 /// A generated command file: its name within the namespace dir + its content.
 pub struct StageCommand {
-    /// Filename (e.g. `plan.md`), written under `<commands_dir>/loadout/`.
+    /// Filename relative to wherever this format's commands live — the owned
+    /// `<commands_dir>/loadout/` dir, or `<commands_dir>` itself when shared.
     pub filename: String,
     /// Full file content (frontmatter/TOML header + prompt body).
     pub content: String,
@@ -119,6 +161,8 @@ fn render_stage_command(
     let filename = match format {
         // A skill is a folder named after the skill, holding a SKILL.md.
         CommandFormat::Skill => format!("loadout-{stem}/SKILL.md"),
+        // A prompt file's stem IS the slash command, so it carries the prefix.
+        CommandFormat::Prompt => format!("loadout-{stem}.{}", format.ext()),
         _ => format!("{stem}.{}", format.ext()),
     };
     let description = stage
@@ -144,6 +188,14 @@ fn render_stage_command(
         CommandFormat::Skill => {
             format!(
                 "---\nname: loadout-{stem}\ndescription: {}\n---\n\n{body}\n",
+                yaml_dq(&description)
+            )
+        }
+        // `mode: agent` lets the stage actually do work (read/write files, run
+        // tasks) rather than only answer, which is what every stage needs.
+        CommandFormat::Prompt => {
+            format!(
+                "---\nmode: agent\ndescription: {}\n---\n\n{body}\n",
                 yaml_dq(&description)
             )
         }
@@ -296,6 +348,38 @@ mod tests {
             .into_iter()
             .find(|w| w.id == id)
             .unwrap()
+    }
+
+    /// VS Code derives the slash command from a prompt file's stem alone —
+    /// there is no namespace — so every stem carries the `loadout-` prefix and
+    /// the `.prompt.md` double extension that makes it discoverable.
+    #[test]
+    fn prompt_commands_are_prefixed_and_agent_mode() {
+        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Prompt, &[]);
+        let names: Vec<&str> = cmds.iter().map(|c| c.filename.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "loadout-brainstorm.prompt.md",
+                "loadout-plan.prompt.md",
+                "loadout-implement.prompt.md",
+                "loadout-verify.prompt.md",
+                "loadout-ship.prompt.md"
+            ]
+        );
+
+        let plan = cmds
+            .iter()
+            .find(|c| c.filename == "loadout-plan.prompt.md")
+            .unwrap();
+        // `mode: agent` — stages do work, not just answer.
+        assert!(plan.content.starts_with("---\nmode: agent\ndescription: "));
+        // VS Code's own input-variable syntax, not Claude's $ARGUMENTS.
+        assert!(plan.content.contains("${input:focus:"));
+        assert!(!plan.content.contains("$ARGUMENTS"));
+        // The handoff contract survives the format.
+        assert!(plan.content.contains(".loadout/workflow/artifacts/plan.md"));
+        assert!(plan.content.contains("$LOADOUT_PLAN_PATH"));
     }
 
     #[test]
