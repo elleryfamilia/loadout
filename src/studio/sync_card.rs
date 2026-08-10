@@ -302,6 +302,37 @@ pub fn init(req: &Req) -> Resp {
     }
 }
 
+/// Clone an existing config repo onto this machine. `sync::clone` does the
+/// real work, including tolerating the installer's machine-local files and
+/// refusing a dir that already holds real config.
+pub(crate) fn clone_at(dir: &Path, url: &str, gh: bool, timeout: Duration) -> (bool, String) {
+    let url = url.trim();
+    if url.is_empty() {
+        return (true, "paste the URL of your config repo".to_string());
+    }
+    match crate::sync::clone(url, dir, timeout) {
+        Ok(()) => (
+            false,
+            format!("cloned your config from {url} ✓ — reopen studio to see it"),
+        ),
+        Err(e) => (true, auth_hint(&format!("cloning failed: {e:#}"), gh)),
+    }
+}
+
+/// `POST /sync/clone` — body is the form-encoded `url` field.
+pub fn clone_repo(req: &Req) -> Resp {
+    let url = crate::studio::server::field(&req.body, "url");
+    match crate::sync::config_dir() {
+        Ok(dir) => {
+            let notice = clone_at(&dir, &url, crate::sync::gh_available(), MANUAL_TIMEOUT);
+            render(Some(notice))
+        }
+        Err(e) => Resp::html(views::error_fragment(&format!(
+            "cannot resolve the global config dir: {e:#}"
+        ))),
+    }
+}
+
 /// Shared tail of every handler: rebuild the view from disk and re-render.
 pub(crate) fn render(notice: Option<(bool, String)>) -> Resp {
     match crate::sync::config_dir() {
@@ -565,6 +596,65 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(a.join("config.toml")).unwrap(),
             "x = 99\n"
+        );
+    }
+
+    #[test]
+    fn clone_brings_an_existing_config_onto_a_fresh_machine() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), "x = 7\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        crate::sync::init(&a, Some(url), Duration::from_secs(30)).unwrap();
+
+        // Fresh machine: config dir holds only the installer's receipt.
+        let b = tmp.path().join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(b.join("loadout-receipt.json"), r#"{"version":"0.25.0"}"#).unwrap();
+
+        let (is_error, msg) = clone_at(&b, url, false, Duration::from_secs(30));
+        assert!(!is_error, "got: {msg}");
+        assert_eq!(
+            std::fs::read_to_string(b.join("config.toml")).unwrap(),
+            "x = 7\n"
+        );
+        assert!(
+            b.join("loadout-receipt.json").exists(),
+            "machine-local file survives"
+        );
+    }
+
+    #[test]
+    fn clone_rejects_a_blank_url() {
+        let d = tempfile::tempdir().unwrap();
+        let (is_error, msg) = clone_at(d.path(), "   ", false, Duration::from_secs(5));
+        assert!(is_error);
+        assert!(msg.contains("URL"));
+    }
+
+    #[test]
+    fn clone_refuses_when_the_config_dir_already_has_content() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("config.toml"), "x = 1\n").unwrap();
+        let (is_error, msg) = clone_at(
+            d.path(),
+            "https://example.test/x.git",
+            false,
+            Duration::from_secs(5),
+        );
+        assert!(is_error);
+        assert!(
+            msg.to_lowercase().contains("already has content"),
+            "got: {msg}"
         );
     }
 }
