@@ -110,7 +110,14 @@ mod tests {
         v.notice = Some((true, "pulling from the remote failed".into()));
         let html = card_fragment(&v);
         assert!(html.contains("pulling from the remote failed"));
-        assert!(html.contains("is-error"));
+        // Same banner markup Settings already uses (`banner error`), so it
+        // picks up the existing CSS rather than inventing a class.
+        assert!(html.contains("banner error"));
+
+        v.notice = Some((false, "synced ✓".into()));
+        let ok = card_fragment(&v);
+        assert!(ok.contains("synced ✓"));
+        assert!(!ok.contains("banner error"));
     }
 
     #[test]
@@ -267,10 +274,12 @@ fn ago(t: SystemTime) -> String {
 pub(crate) fn card_fragment(v: &SyncView) -> String {
     let body = html! {
         div class="cmd-block" {
+            // Banner markup copied from `settings::page_fragment` so it reuses
+            // the existing CSS — `banner error`, and a `banner-body` div.
             @if let Some((is_error, msg)) = &v.notice {
-                div class=(if *is_error { "banner is-error" } else { "banner" }) {
+                div class=(if *is_error { "banner error" } else { "banner" }) {
                     span class="banner-icon" { (views::icon(if *is_error { "alert" } else { "check" })) }
-                    span { (msg) }
+                    div class="banner-body" { (msg) }
                 }
             }
             @if v.synced {
@@ -280,14 +289,14 @@ pub(crate) fn card_fragment(v: &SyncView) -> String {
                 }
                 button class="btn btn-ghost"
                     hx-post="/sync/now" hx-target="#sync-card" {
-                    (views::icon("bolt")) "Sync now"
+                    (views::icon("refresh")) "Sync now"
                 }
             } @else {
                 span class="muted small" {
                     "Sync keeps your global config in a git repo so every machine you work on \
                      equips the same context. Nothing leaves this machine until you set it up."
                 }
-                form hx-post="/sync/init" hx-target="#sync-card" class="sync-form" {
+                form hx-post="/sync/init" hx-target="#sync-card" {
                     input type="url" name="remote" placeholder="git remote URL (optional)" {}
                     button class="btn btn-ghost" type="submit" {
                         (views::icon("plus"))
@@ -295,10 +304,10 @@ pub(crate) fn card_fragment(v: &SyncView) -> String {
                     }
                 }
                 @if v.dir_empty {
-                    form hx-post="/sync/clone" hx-target="#sync-card" class="sync-form" {
+                    form hx-post="/sync/clone" hx-target="#sync-card" {
                         input type="url" name="url" placeholder="https://github.com/you/loadout-config" required {}
                         button class="btn btn-ghost" type="submit" {
-                            (views::icon("bolt")) "Clone an existing config"
+                            (views::icon("git-branch")) "Clone an existing config"
                         }
                     }
                 }
