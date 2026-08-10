@@ -460,6 +460,25 @@ fn is_machine_local(name: &std::ffi::OsStr) -> bool {
     MACHINE_LOCAL.iter().any(|(n, _)| name == *n)
 }
 
+/// Whether `clone` would accept `dir` as a target — the same two preconditions
+/// `clone` itself checks: no `.git`, and nothing but machine-local entries.
+///
+/// Exposed so studio can hide a Clone button that is guaranteed to fail. It
+/// deliberately reuses `MACHINE_LOCAL` rather than letting a caller keep its own
+/// copy, which would drift the moment an entry is added here.
+pub(crate) fn clone_target_is_clear(dir: &Path) -> bool {
+    if dir.join(".git").exists() {
+        return false;
+    }
+    match dir.read_dir() {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .all(|e| is_machine_local(&e.file_name())),
+        // Absent or unreadable — `clone` creates it, and surfaces any real error.
+        Err(_) => true,
+    }
+}
+
 /// Drop any machine-local entries from the git index (working copies stay put).
 /// Belt-and-suspenders on every `init` and push: versions before 0.16 didn't
 /// gitignore `loadout-receipt.json` or `run/`, and `commit_push` stages with
@@ -1264,6 +1283,34 @@ mod tests {
             porcelain.stdout.trim().is_empty(),
             "tree not clean after abort"
         );
+    }
+
+    #[test]
+    fn clone_target_is_clear_matches_what_clone_accepts() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(clone_target_is_clear(d.path()), "empty dir");
+
+        // Every machine-local entry is tolerated by `clone`.
+        fs::write(d.path().join("loadout-receipt.json"), "{}").unwrap();
+        fs::write(d.path().join("update-check"), "123").unwrap();
+        fs::write(d.path().join("local.toml"), "secret = 1\n").unwrap();
+        assert!(clone_target_is_clear(d.path()), "machine-local only");
+
+        // Real config is not.
+        fs::write(d.path().join("config.toml"), "x = 1\n").unwrap();
+        assert!(!clone_target_is_clear(d.path()));
+    }
+
+    #[test]
+    fn clone_target_is_not_clear_for_an_existing_git_repo() {
+        // `clone` bails on `.git` before it looks at anything else.
+        let d = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(d.path())
+            .status()
+            .unwrap();
+        assert!(!clone_target_is_clear(d.path()));
     }
 
     #[test]

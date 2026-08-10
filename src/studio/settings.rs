@@ -5,8 +5,8 @@
 //! immediately when nothing else is staged: a settings toggle should just
 //! take effect, not sit "staged" (see [`apply_or_stage`]).
 //!
-//! Not here (TOML-only, by design): `[env]`, `[sync]`, `[codex]`, and the
-//! trust store (a future tenant).
+//! Not here (TOML-only, by design): `[env]`, `[codex]`, and the trust store
+//! (a future tenant). `[sync]` is surfaced by [`crate::studio::sync_card`].
 
 use std::sync::{Arc, Mutex};
 
@@ -72,6 +72,8 @@ fn page_fragment(v: &SettingsView, notice: Option<(bool, String)>) -> String {
                 }
             }
             (agent_section(&v.default_agent, &v.agents))
+            // Loads lazily so the settings render never blocks on git.
+            div id="sync-card" hx-get="/sync/card" hx-trigger="load" hx-target="#sync-card" {}
         }
     }
     .into_string()

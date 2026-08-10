@@ -21,6 +21,7 @@ pub mod edit;
 pub mod server;
 pub mod settings;
 pub mod state;
+pub mod sync_card;
 pub mod views;
 
 pub use edit::{FileDiff, Session, StagedOp};

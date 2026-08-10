@@ -32,6 +32,7 @@ use crate::studio::assets;
 use crate::studio::edit::{Session, StagedOp};
 use crate::studio::settings;
 use crate::studio::state::{self, LibraryView, PreviewOutcome, StudioState};
+use crate::studio::sync_card;
 use crate::studio::views;
 
 /// The sole route reachable without the session cookie (carries the token).
@@ -161,6 +162,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("POST", "/workflows") => handle_workflow_save(state, req),
         ("GET", "/packs") => handle_packs(state),
         ("GET", "/skills/card") => handle_skill_card(),
+        ("GET", "/sync/card") => sync_card::card(),
         ("POST", "/skills/install") => handle_skill_install(),
         ("GET", "/drawer/recents") => handle_recents_drawer(state),
         ("POST", "/recents/clear") => handle_recents_clear(state),
@@ -417,7 +419,7 @@ fn finish_slot_edit(state: &Arc<Mutex<StudioState>>, name: &str, r: crate::Resul
 }
 
 /// Read a single decoded form field from a urlencoded body.
-fn field(body: &str, key: &str) -> String {
+pub(crate) fn field(body: &str, key: &str) -> String {
     state::parse_pairs(body)
         .into_iter()
         .find(|(k, _)| k == key)
@@ -4567,6 +4569,30 @@ mod tests {
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
         assert!(body.contains("loadout-migrate"));
+    }
+
+    #[test]
+    fn sync_card_route_serves_a_card() {
+        // Read-only against the real config dir, so the synced state varies by
+        // machine — assert only on what every state renders.
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("GET", "/sync/card", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 200);
+        let body = String::from_utf8(r.body).unwrap();
+        assert!(body.contains("cmd-block"));
+    }
+
+    #[test]
+    fn settings_embeds_the_lazy_sync_card_loader() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let body = body_of(route(
+            &st,
+            &req("GET", "/settings", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(body.contains("id=\"sync-card\""));
+        assert!(body.contains("hx-get=\"/sync/card\""));
     }
 
     #[test]
