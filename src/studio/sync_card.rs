@@ -213,8 +213,13 @@ pub fn sync_now() -> Resp {
 }
 
 /// Set sync up. With an explicit `remote`, wires it and pushes. Without one,
-/// falls back to `gh` creating a private repo named `loadout-config` — the same
-/// flow `src/commands/sync.rs:123` runs for the CLI.
+/// falls back to `gh` creating a private repo named `loadout-config`.
+///
+/// The `gh` path runs the same preemptive GH007 mitigation the CLI's `offer_gh`
+/// (`src/commands/sync.rs`) runs before it creates a repo — see the comment on
+/// those three calls below. It does *not* prompt for a repo name or visibility
+/// the way the CLI does: studio always creates a private `loadout-config`, and
+/// surfaces a name collision as a notice instead of a prompt.
 pub(crate) fn init_at(
     dir: &Path,
     remote: Option<&str>,
@@ -247,8 +252,24 @@ pub(crate) fn init_at(
     }
 
     // gh path: local repo first, then create + push.
+    //
+    // No `auth_hint` on this arm (the only error branch here without one):
+    // `sync::init(dir, None, ..)` wires no remote and performs no network I/O,
+    // so an auth failure is not reachable from it.
     if let Err(e) = crate::sync::init(dir, None, timeout) {
         return (true, format!("preparing the local repo failed: {e:#}"));
+    }
+    // GitHub rejects a push that would publish a private commit email (GH007).
+    // `gh repo create --push` pushes *outside* `sync::commit_push`, so it never
+    // reaches that function's reactive GH007 recovery — without these three
+    // calls this is the one push route in the codebase with neither preemptive
+    // nor reactive protection. Same three calls, same order, as the CLI's
+    // `offer_gh` makes immediately before `gh repo create`. Best-effort: if gh
+    // isn't authenticated `gh_noreply_email` returns None and `gh_create_repo`
+    // below surfaces that as the real error.
+    if let Some(noreply) = crate::sync::gh_noreply_email() {
+        let _ = crate::sync::set_commit_email(dir, &noreply);
+        let _ = crate::sync::amend_reset_author(dir);
     }
     match crate::sync::gh_create_repo("loadout-config", false, dir, timeout) {
         Ok(crate::sync::GhCreate::Created { url }) => {
