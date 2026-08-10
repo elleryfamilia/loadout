@@ -121,8 +121,9 @@ pub struct AgentDescriptor {
     /// `None` → the agent gets the workflow context section only.
     #[serde(default)]
     pub commands_dir: Option<String>,
-    /// On-disk format for this agent's command files (markdown vs Cursor skill).
-    /// Ignored unless `commands_dir` is set; defaults to markdown.
+    /// On-disk format for this agent's command files: plain markdown, a Cursor
+    /// skill folder, or a VS Code prompt file. Ignored unless `commands_dir` is
+    /// set; defaults to markdown.
     #[serde(default)]
     pub command_format: Option<commands::CommandFormat>,
     /// Native review commands to run during the verify stage (e.g. Claude
