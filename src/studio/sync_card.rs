@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime};
 
 use maud::html;
 
-use crate::studio::server::Resp;
+use crate::studio::server::{Req, Resp};
 use crate::studio::views;
 
 /// Everything the card renders, prepared by the handler — no filesystem access
@@ -212,6 +212,96 @@ pub fn sync_now() -> Resp {
     }
 }
 
+/// Set sync up. With an explicit `remote`, wires it and pushes. Without one,
+/// falls back to `gh` creating a private repo named `loadout-config` — the same
+/// flow `src/commands/sync.rs:123` runs for the CLI.
+pub(crate) fn init_at(
+    dir: &Path,
+    remote: Option<&str>,
+    gh: bool,
+    timeout: Duration,
+) -> (bool, String) {
+    if crate::sync::is_synced(dir) {
+        return (true, "sync is already set up on this machine".to_string());
+    }
+    let remote = remote.map(str::trim).filter(|r| !r.is_empty());
+
+    if let Some(url) = remote {
+        return match crate::sync::init(dir, Some(url), timeout) {
+            Ok(()) => (false, format!("sync set up against {url} ✓")),
+            Err(e) => (
+                true,
+                auth_hint(&format!("setting up sync failed: {e:#}"), gh),
+            ),
+        };
+    }
+
+    if !gh {
+        return (
+            true,
+            "paste a git remote URL to sync against — create an empty private repo on your \
+             host first. (With the GitHub CLI installed and `gh auth login` done, loadout can \
+             create one for you.)"
+                .to_string(),
+        );
+    }
+
+    // gh path: local repo first, then create + push.
+    if let Err(e) = crate::sync::init(dir, None, timeout) {
+        return (true, format!("preparing the local repo failed: {e:#}"));
+    }
+    match crate::sync::gh_create_repo("loadout-config", false, dir, timeout) {
+        Ok(crate::sync::GhCreate::Created { url }) => {
+            (false, format!("created and pushed to {url} ✓"))
+        }
+        Ok(crate::sync::GhCreate::NameExists) => match crate::sync::gh_repo_url(
+            "loadout-config",
+            dir,
+        ) {
+            Some(url) => match crate::sync::wire_remote_and_push(dir, &url, timeout) {
+                Ok(()) => (false, format!("adopted your existing {url} ✓")),
+                Err(e) => (
+                    true,
+                    auth_hint(
+                        &format!(
+                            "a repo named loadout-config exists but adopting it failed: {e:#}"
+                        ),
+                        gh,
+                    ),
+                ),
+            },
+            None => (
+                true,
+                "a repo named loadout-config already exists on your account — paste its URL above \
+                 to use it"
+                    .to_string(),
+            ),
+        },
+        Ok(crate::sync::GhCreate::Failed(m)) => (true, auth_hint(&format!("gh failed: {m}"), gh)),
+        Err(e) => (true, auth_hint(&format!("gh failed: {e:#}"), gh)),
+    }
+}
+
+/// `POST /sync/init` — body is the form-encoded `remote` field (may be empty;
+/// `init_at` trims and treats empty as "no remote given").
+pub fn init(req: &Req) -> Resp {
+    let remote = crate::studio::server::field(&req.body, "remote");
+    match crate::sync::config_dir() {
+        Ok(dir) => {
+            let notice = init_at(
+                &dir,
+                Some(remote.as_str()),
+                crate::sync::gh_available(),
+                MANUAL_TIMEOUT,
+            );
+            render(Some(notice))
+        }
+        Err(e) => Resp::html(views::error_fragment(&format!(
+            "cannot resolve the global config dir: {e:#}"
+        ))),
+    }
+}
+
 /// Shared tail of every handler: rebuild the view from disk and re-render.
 pub(crate) fn render(notice: Option<(bool, String)>) -> Resp {
     match crate::sync::config_dir() {
@@ -383,6 +473,65 @@ mod tests {
             std::fs::read_to_string(b.join("config.toml")).unwrap(),
             "x = 2\n"
         );
+    }
+
+    #[test]
+    fn init_with_an_explicit_remote_publishes_the_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), "x = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+
+        let (is_error, msg) = init_at(&a, Some(url), false, Duration::from_secs(30));
+        assert!(!is_error, "got: {msg}");
+        assert!(crate::sync::is_synced(&a));
+
+        let b = tmp.path().join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        crate::sync::clone(url, &b, Duration::from_secs(30)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(b.join("config.toml")).unwrap(),
+            "x = 1\n"
+        );
+    }
+
+    #[test]
+    fn init_without_a_remote_and_without_gh_explains_what_is_needed() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("config.toml"), "x = 1\n").unwrap();
+        let (is_error, msg) = init_at(d.path(), None, false, Duration::from_secs(30));
+        assert!(is_error);
+        assert!(msg.contains("remote"), "names what's missing: {msg}");
+    }
+
+    #[test]
+    fn init_is_idempotent_on_an_already_synced_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), "x = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        crate::sync::init(&a, Some(url), Duration::from_secs(30)).unwrap();
+
+        let (is_error, msg) = init_at(&a, Some(url), false, Duration::from_secs(30));
+        assert!(is_error);
+        assert!(msg.contains("already"), "got: {msg}");
     }
 
     #[test]

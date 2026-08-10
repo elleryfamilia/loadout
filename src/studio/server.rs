@@ -164,6 +164,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/skills/card") => handle_skill_card(),
         ("GET", "/sync/card") => sync_card::card(),
         ("POST", "/sync/now") => sync_card::sync_now(),
+        ("POST", "/sync/init") => sync_card::init(req),
         ("POST", "/skills/install") => handle_skill_install(),
         ("GET", "/drawer/recents") => handle_recents_drawer(state),
         ("POST", "/recents/clear") => handle_recents_clear(state),
@@ -4601,6 +4602,14 @@ mod tests {
         let d = rust_repo();
         let st = state_for(d.path(), None);
         let r = route(&st, &req("POST", "/sync/now", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 403);
+    }
+
+    #[test]
+    fn sync_init_requires_origin_like_all_mutations() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("POST", "/sync/init", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 403);
     }
 
