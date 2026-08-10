@@ -4587,7 +4587,11 @@ mod tests {
         let r = route(&st, &req("GET", "/sync/card", "", &[HOST, COOKIE], ""));
         assert_eq!(r.status, 200);
         let body = String::from_utf8(r.body).unwrap();
-        assert!(body.contains("cmd-block"));
+        // The card wears Settings' own chrome (a titled `settings-section`),
+        // not the welcome screen's `cmd-block`, whichever state it renders in.
+        assert!(body.contains("settings-section"), "{body}");
+        assert!(body.contains("<h3>Sync</h3>"), "{body}");
+        assert!(!body.contains("cmd-block"), "{body}");
     }
 
     #[test]

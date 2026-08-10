@@ -803,6 +803,27 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
   background: currentColor; border-radius: 2px; opacity: .85;
   animation: hx-progress .9s linear infinite;
 }
+/* Sync card actions. Every one of them blocks the whole studio while it runs
+   (`serve_loop` is single-threaded, and a "Sync now" chains several 30s network
+   operations), so the in-flight state has to be visible or the user sees a
+   button that did nothing on a page where nothing else responds either.
+
+   The shim puts `htmx-request` on the element carrying `hx-post` — the button
+   for "Sync now", the <form> for the set-up/clone forms — hence both shapes
+   below. `pointer-events: none` on the form also stops a second submit while
+   the first is still running. */
+button.sync-action.htmx-request, form.sync-action.htmx-request .btn {
+  position: relative; overflow: hidden; pointer-events: none;
+}
+button.sync-action.htmx-request::after, form.sync-action.htmx-request .btn::after {
+  content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 35%;
+  background: currentColor; border-radius: 2px; opacity: .85;
+  animation: hx-progress .9s linear infinite;
+}
+form.sync-action.htmx-request { pointer-events: none; opacity: .75; }
+/* The section is a flex column, so a bare button would stretch edge to edge. */
+button.sync-action { align-self: flex-start; }
+
 .script-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .exec-check { align-self: flex-start; }
 

@@ -10,6 +10,15 @@
 //! Every handler is a thin wrapper over [`crate::sync`]; no sync logic lives
 //! here. Each has a `*_at` core taking an explicit dir so tests drive it
 //! against a temp repo instead of the developer's real config.
+//!
+//! **These handlers block the whole studio while they run.** `serve_loop` is
+//! single-threaded and synchronous — one request at a time, no thread pool — so
+//! a sync handler holds up every other request, assets included, for its full
+//! duration. One "Sync now" chains several network operations at
+//! [`MANUAL_TIMEOUT`] each, so that can be a minute or more. Two consequences
+//! for anything added here: every button must show its in-flight state (the
+//! `.sync-action` rule in `studio.css`), and no action may be added that can
+//! block for longer than a user will wait.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -101,8 +110,23 @@ fn ago(t: SystemTime) -> String {
 }
 
 pub(crate) fn card_fragment(v: &SyncView) -> String {
+    // `section.settings-section` + an `h3`, the chrome the rest of Settings
+    // uses — the card sits inside that page, not on the welcome screen the
+    // `.cmd-block` styling belongs to.
+    //
+    // `.sync-action` marks what the htmx shim puts `htmx-request` on while a
+    // request is in flight: the button for a bare `hx-post`, the *form* for a
+    // submit. `studio.css` styles both shapes; without it these long, studio-
+    // blocking actions would look like they did nothing.
+    //
+    // The URL inputs are `type="text"` with `inputmode="url"`, not
+    // `type="url"`: HTML constraint validation demands a scheme, which would
+    // reject `git@github.com:you/loadout-config.git` — the standard SSH remote,
+    // and the form `auth_hint` below tells users to use — before the submit
+    // event fires, so no request would ever be sent.
     let body = html! {
-        div class="cmd-block" {
+        section class="settings-section" {
+            h3 { "Sync" }
             // Banner markup copied from `settings::page_fragment` so it reuses
             // the existing CSS — `banner error`, and a `banner-body` div.
             @if let Some((is_error, msg)) = &v.notice {
@@ -112,29 +136,31 @@ pub(crate) fn card_fragment(v: &SyncView) -> String {
                 }
             }
             @if v.synced {
-                span class="muted small" {
+                p class="muted" {
                     "Your global config syncs with " strong { (v.remote) } "."
                     @if let Some(t) = v.last_synced { " Last synced " (ago(t)) "." }
                 }
-                button class="btn btn-ghost"
+                button class="btn btn-ghost sync-action"
                     hx-post="/sync/now" hx-target="#sync-card" {
                     (views::icon("refresh")) "Sync now"
                 }
             } @else {
-                span class="muted small" {
+                p class="muted" {
                     "Sync keeps your global config in a git repo so every machine you work on \
                      equips the same context. Nothing leaves this machine until you set it up."
                 }
-                form hx-post="/sync/init" hx-target="#sync-card" {
-                    input type="url" name="remote" placeholder="git remote URL (optional)" {}
+                form class="sync-action" hx-post="/sync/init" hx-target="#sync-card" {
+                    input type="text" inputmode="url" name="remote"
+                        placeholder="git remote URL (optional)" {}
                     button class="btn btn-ghost" type="submit" {
                         (views::icon("plus"))
                         @if v.gh { "Set up sync (creates a private GitHub repo)" } @else { "Set up sync" }
                     }
                 }
                 @if v.dir_empty {
-                    form hx-post="/sync/clone" hx-target="#sync-card" {
-                        input type="url" name="url" placeholder="https://github.com/you/loadout-config" required {}
+                    form class="sync-action" hx-post="/sync/clone" hx-target="#sync-card" {
+                        input type="text" inputmode="url" name="url" required
+                            placeholder="https://github.com/you/loadout-config" {}
                         button class="btn btn-ghost" type="submit" {
                             (views::icon("git-branch")) "Clone an existing config"
                         }
@@ -189,9 +215,8 @@ pub(crate) fn auth_hint(msg: &str, gh: bool) -> String {
     } else {
         format!(
             "{msg} — git has no credentials for this remote. Use an SSH URL with a loaded key, \
-             or configure a git credential helper for your host (`git config --global \
-             credential.helper …` — macOS: `osxkeychain`, Windows: `manager`). On GitHub, the \
-             GitHub CLI's `gh auth login` sets one up for you"
+             or set a git credential helper (`credential.helper` — macOS: `osxkeychain`, \
+             Windows: `manager`). On GitHub, `gh auth login` sets one up for you"
         )
     }
 }
@@ -496,6 +521,60 @@ mod tests {
         let ok = card_fragment(&v);
         assert!(ok.contains("synced ✓"));
         assert!(!ok.contains("banner error"));
+    }
+
+    #[test]
+    fn remote_inputs_accept_an_ssh_url() {
+        // `type="url"` fails HTML constraint validation on
+        // `git@github.com:you/loadout-config.git` — the standard SSH remote,
+        // and what `auth_hint` tells users to use. The browser then blocks the
+        // submit event the htmx shim listens for, so no request is ever sent.
+        let html = card_fragment(&view(false, true));
+        assert!(
+            !html.contains("type=\"url\""),
+            "an SSH remote must be typeable: {html}"
+        );
+        assert_eq!(html.matches("inputmode=\"url\"").count(), 2, "{html}");
+        // The clone URL is still required (the blank case is also guarded
+        // server-side by `clone_at`).
+        assert!(html.contains("required"), "{html}");
+    }
+
+    #[test]
+    fn every_action_is_marked_for_the_in_flight_style() {
+        // These actions block the entire (single-threaded) studio for as long
+        // as the network takes, so each one must carry the class the stylesheet
+        // gives an in-flight progress bar. The shim sets `htmx-request` on the
+        // element carrying `hx-post`: the button for "Sync now", the form for a
+        // submit — so the class goes on those same elements.
+        let unsynced = card_fragment(&view(false, true));
+        assert_eq!(
+            unsynced.matches("class=\"sync-action\"").count(),
+            2,
+            "both forms: {unsynced}"
+        );
+        let synced = card_fragment(&view(true, false));
+        assert!(synced.contains("btn-ghost sync-action"), "{synced}");
+
+        // …and the stylesheet actually styles that class. (What the rule looks
+        // like is not asserted — only that markup and CSS still agree.)
+        let (css, _) = crate::studio::assets::get("/assets/studio.css").unwrap();
+        let css = String::from_utf8(css).unwrap();
+        assert!(css.contains("button.sync-action.htmx-request"), "no style");
+        assert!(css.contains("form.sync-action.htmx-request"), "no style");
+    }
+
+    #[test]
+    fn the_card_wears_settings_chrome() {
+        // It renders inside the Settings page, next to `agent_section` — not on
+        // the welcome screen, where the `cmd-block` styling it used to borrow
+        // belongs.
+        let html = card_fragment(&view(true, false));
+        assert!(
+            html.starts_with("<section class=\"settings-section\">"),
+            "{html}"
+        );
+        assert!(html.contains("<h3>Sync</h3>"), "{html}");
     }
 
     #[test]
