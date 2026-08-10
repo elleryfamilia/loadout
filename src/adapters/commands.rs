@@ -7,10 +7,19 @@
 //! read/write, the gate, the exit checklist, and an argument slot for the
 //! specific task).
 //!
-//! Files land in a dedicated [`COMMAND_NAMESPACE`] subdirectory of the agent's
-//! command dir (e.g. `.claude/commands/loadout/plan.md`) — a dir loadout owns
-//! entirely, so the commands invoke as `/loadout:<stage>` and cleanup can remove
-//! the whole dir without touching the user's own commands.
+//! Two ownership models, picked per [`CommandFormat`]:
+//!
+//! - **Owned directory** (Claude Code, Cursor): files land in a dedicated
+//!   [`COMMAND_NAMESPACE`] subdirectory of the agent's command dir (e.g.
+//!   `.claude/commands/loadout/plan.md`), which loadout owns entirely — so the
+//!   commands invoke as `/loadout:<stage>` and cleanup removes the whole dir
+//!   without touching the user's own commands.
+//! - **Shared directory** (VS Code prompt files): the agent's discovery doesn't
+//!   recurse, so files must sit flat in a dir the user also uses (e.g.
+//!   `.github/prompts/loadout-plan.prompt.md`). Ownership is then by the
+//!   `loadout-` filename prefix — see [`CommandFormat::owns_namespace_dir`] —
+//!   and pruning, `clean`, and the gitignore entry all scope to it so a user's
+//!   own files there are never touched.
 
 use serde::{Deserialize, Serialize};
 
