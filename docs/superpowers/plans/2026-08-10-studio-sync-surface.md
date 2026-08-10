@@ -405,7 +405,7 @@ Expected: all pass, no warnings.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/studio/sync_card.rs src/studio/mod.rs src/studio/server.rs src/studio/settings.rs
+git add src/studio/sync_card.rs src/studio/mod.rs src/studio/server.rs src/studio/settings.rs src/sync.rs
 git commit -m "feat(studio): sync status card in Settings
 
 Studio already pushed the config on every apply but never showed sync
