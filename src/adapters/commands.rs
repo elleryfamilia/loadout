@@ -25,7 +25,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::workflow::{self, Workflow, WorkflowStage, ARTIFACT_SUBDIR};
 
-/// The namespace subdir loadout owns under an agent's command directory.
+/// The namespace loadout claims in an agent's command directory: a subdir it
+/// owns outright, or — in a shared dir — the filename prefix marking its files.
 pub const COMMAND_NAMESPACE: &str = "loadout";
 
 /// Fixed intro for the native-review branch of the verify stage (tests key on it).
@@ -118,7 +119,8 @@ impl CommandFormat {
 
 /// A generated command file: its name within the namespace dir + its content.
 pub struct StageCommand {
-    /// Filename (e.g. `plan.md`), written under `<commands_dir>/loadout/`.
+    /// Filename relative to wherever this format's commands live — the owned
+    /// `<commands_dir>/loadout/` dir, or `<commands_dir>` itself when shared.
     pub filename: String,
     /// Full file content (frontmatter/TOML header + prompt body).
     pub content: String,

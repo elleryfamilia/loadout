@@ -115,7 +115,9 @@ pub struct AgentDescriptor {
     pub launch_context_dir: Option<String>,
     /// Project-relative directory this agent reads slash commands from (e.g.
     /// `.claude/commands`). When set **and** a workflow is bound, loadout writes
-    /// one command file per stage under `<commands_dir>/loadout/` (a dir it owns).
+    /// one command file per stage — under `<commands_dir>/loadout/` when the
+    /// format owns that dir, else flat in `<commands_dir>` with a `loadout-`
+    /// prefix (see [`commands::CommandFormat::owns_namespace_dir`]).
     /// `None` → the agent gets the workflow context section only.
     #[serde(default)]
     pub commands_dir: Option<String>,
@@ -668,7 +670,8 @@ pub fn apply(
     // 2b. Per-stage slash commands (the command channel), for agents that read
     // project commands. Only inside a repo and never at $HOME — a global command
     // dir (`~/.claude/commands/`) would bleed into every repo, exactly like an
-    // importer. One file per stage under `<commands_dir>/loadout/`, a dir we own.
+    // importer. One file per stage, in the owned `<commands_dir>/loadout/` dir
+    // or flat with a `loadout-` prefix when the dir is shared with the user.
     if let (Some(commands_dir), Some(wf)) = (&d.commands_dir, workflow.as_ref()) {
         if app.in_repo() && !bleeds && is_repo_relative(commands_dir) {
             write_stage_commands(app, d, commands_dir, wf, &mut files)?;
