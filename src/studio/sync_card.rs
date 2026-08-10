@@ -12,7 +12,7 @@
 //! against a temp repo instead of the developer's real config.
 
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use maud::html;
 
@@ -117,6 +117,101 @@ pub fn card() -> Resp {
     render(None)
 }
 
+/// Manual actions (Sync now) wait on the network while the user watches, so
+/// they get a longer budget than the throttled auto-pull/auto-push hooks —
+/// matching the CLI's own `load sync` (`src/commands/sync.rs`).
+pub(crate) const MANUAL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Substrings that mean "git wanted credentials it did not have". Matched
+/// case-insensitively against the whole error chain.
+const AUTH_MARKERS: &[&str] = &[
+    "authentication failed",
+    "could not read username",
+    "could not read password",
+    "permission denied",
+    "terminal prompts disabled",
+    "403",
+];
+
+/// Append the one-command fix when a git failure looks like an auth failure.
+///
+/// This is the spec's whole credential story: an auth failure is an error
+/// message, not a mechanism. `gh auth login` installs a git credential helper,
+/// which is the single command that unblocks the common (GitHub, HTTPS) case.
+pub(crate) fn auth_hint(msg: &str, gh: bool) -> String {
+    let lower = msg.to_lowercase();
+    if !AUTH_MARKERS.iter().any(|m| lower.contains(m)) {
+        return msg.to_string();
+    }
+    if gh {
+        format!("{msg} — run `gh auth login` once to give git credentials, then try again")
+    } else {
+        format!(
+            "{msg} — git has no credentials for this remote. Use an SSH URL with a loaded key, \
+             or install the GitHub CLI and run `gh auth login`"
+        )
+    }
+}
+
+/// Pull, then commit + push. Returns `(is_error, message)` for the card notice.
+///
+/// A `Diverged` pull is reconciled with `sync::reconcile_rebase` — the same
+/// call the CLI makes — so studio resolves divergence in place instead of
+/// telling the user to open a terminal.
+pub(crate) fn sync_now_at(dir: &Path, timeout: Duration) -> (bool, String) {
+    if !crate::sync::is_synced(dir) {
+        return (true, "sync isn't set up on this machine yet".to_string());
+    }
+    let gh = crate::sync::gh_available();
+
+    let pulled = match crate::sync::pull(dir, timeout) {
+        Ok(crate::sync::PullOutcome::Pulled(n)) => n,
+        Ok(crate::sync::PullOutcome::Diverged) => match crate::sync::reconcile_rebase(dir, timeout)
+        {
+            Ok(crate::sync::ReconcileOutcome::Rebased(n)) => n,
+            Ok(crate::sync::ReconcileOutcome::Conflicted) => {
+                return (
+                    true,
+                    "your config and the remote both changed the same lines — the rebase was \
+                     aborted and nothing was lost. Reconcile by hand in the config dir."
+                        .to_string(),
+                )
+            }
+            Err(e) => return (true, auth_hint(&format!("reconciling failed: {e:#}"), gh)),
+        },
+        Err(e) => return (true, auth_hint(&format!("pulling failed: {e:#}"), gh)),
+    };
+
+    match crate::sync::commit_push(dir, "load studio: sync now", timeout) {
+        Ok(crate::sync::PushOutcome::Pushed) => (
+            false,
+            format!("synced ✓ — pulled {pulled}, pushed your changes"),
+        ),
+        Ok(crate::sync::PushOutcome::NothingToPush) => (
+            false,
+            format!("synced ✓ — pulled {pulled}, nothing to push"),
+        ),
+        Ok(crate::sync::PushOutcome::Diverged) => (
+            true,
+            "the remote moved ahead again mid-sync — press Sync now once more".to_string(),
+        ),
+        Err(e) => (true, auth_hint(&format!("pushing failed: {e:#}"), gh)),
+    }
+}
+
+/// `POST /sync/now`
+pub fn sync_now() -> Resp {
+    match crate::sync::config_dir() {
+        Ok(dir) => {
+            let notice = sync_now_at(&dir, MANUAL_TIMEOUT);
+            render(Some(notice))
+        }
+        Err(e) => Resp::html(views::error_fragment(&format!(
+            "cannot resolve the global config dir: {e:#}"
+        ))),
+    }
+}
+
 /// Shared tail of every handler: rebuild the view from disk and re-render.
 pub(crate) fn render(notice: Option<(bool, String)>) -> Resp {
     match crate::sync::config_dir() {
@@ -205,5 +300,122 @@ mod tests {
 
         std::fs::write(d.path().join("config.toml"), "x = 1\n").unwrap();
         assert!(!view_for(d.path(), None).dir_empty);
+    }
+
+    use std::process::Command;
+
+    /// A bare repo on `main`, matching `sync.rs`'s own test helper.
+    fn bare(parent: &Path) -> std::path::PathBuf {
+        let r = parent.join("remote.git");
+        Command::new("git")
+            .args(["init", "--bare", "-b", "main", "-q"])
+            .arg(&r)
+            .status()
+            .unwrap();
+        r
+    }
+
+    fn identify(dir: &Path) {
+        for (k, v) in [
+            ("user.email", "t@example.test"),
+            ("user.name", "loadout test"),
+        ] {
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["config", k, v])
+                .status()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn auth_hint_names_gh_login_when_gh_is_installed() {
+        let msg = "pushing failed: fatal: Authentication failed for 'https://github.com/x'";
+        let with = auth_hint(msg, true);
+        assert!(with.contains("gh auth login"));
+        let without = auth_hint(msg, false);
+        assert!(without.contains("SSH URL"), "still actionable without gh");
+    }
+
+    #[test]
+    fn auth_hint_leaves_unrelated_errors_alone() {
+        let msg = "pushing failed: could not resolve host github.com";
+        assert_eq!(auth_hint(msg, true), msg);
+    }
+
+    #[test]
+    fn sync_now_on_an_unsynced_dir_is_an_error_not_a_panic() {
+        let d = tempfile::tempdir().unwrap();
+        let (is_error, msg) = sync_now_at(d.path(), Duration::from_secs(5));
+        assert!(is_error);
+        assert!(msg.contains("isn't set up"));
+    }
+
+    #[test]
+    fn sync_now_pushes_local_edits_to_the_remote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), "x = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        crate::sync::init(&a, Some(url), Duration::from_secs(30)).unwrap();
+
+        // Edit, then Sync now.
+        std::fs::write(a.join("config.toml"), "x = 2\n").unwrap();
+        let (is_error, msg) = sync_now_at(&a, Duration::from_secs(30));
+        assert!(!is_error, "expected success, got: {msg}");
+        assert!(msg.contains("synced"), "got: {msg}");
+
+        // A fresh clone sees the edit.
+        let b = tmp.path().join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        crate::sync::clone(url, &b, Duration::from_secs(30)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(b.join("config.toml")).unwrap(),
+            "x = 2\n"
+        );
+    }
+
+    #[test]
+    fn sync_now_pulls_a_remote_edit_made_elsewhere() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), "x = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        crate::sync::init(&a, Some(url), Duration::from_secs(30)).unwrap();
+
+        // Machine B clones, edits, pushes.
+        let b = tmp.path().join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        crate::sync::clone(url, &b, Duration::from_secs(30)).unwrap();
+        identify(&b);
+        std::fs::write(b.join("config.toml"), "x = 99\n").unwrap();
+        crate::sync::commit_push(&b, "b edit", Duration::from_secs(30)).unwrap();
+
+        // Machine A presses Sync now and receives it.
+        let (is_error, msg) = sync_now_at(&a, Duration::from_secs(30));
+        assert!(!is_error, "got: {msg}");
+        assert_eq!(
+            std::fs::read_to_string(a.join("config.toml")).unwrap(),
+            "x = 99\n"
+        );
     }
 }

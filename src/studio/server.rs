@@ -163,6 +163,7 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/packs") => handle_packs(state),
         ("GET", "/skills/card") => handle_skill_card(),
         ("GET", "/sync/card") => sync_card::card(),
+        ("POST", "/sync/now") => sync_card::sync_now(),
         ("POST", "/skills/install") => handle_skill_install(),
         ("GET", "/drawer/recents") => handle_recents_drawer(state),
         ("POST", "/recents/clear") => handle_recents_clear(state),
@@ -2000,7 +2001,7 @@ pub(crate) fn auto_push_after_apply(state: &Arc<Mutex<StudioState>>) -> Option<S
         Ok(crate::sync::PushOutcome::Pushed) => Some("synced ✓".to_string()),
         Ok(crate::sync::PushOutcome::NothingToPush) => None,
         Ok(crate::sync::PushOutcome::Diverged) => {
-            Some("remote moved ahead — run `load sync`".to_string())
+            Some("remote moved ahead — press Sync now in Settings".to_string())
         }
         Err(_) => Some("saved locally, push pending".to_string()),
     }
@@ -4593,6 +4594,14 @@ mod tests {
         ));
         assert!(body.contains("id=\"sync-card\""));
         assert!(body.contains("hx-get=\"/sync/card\""));
+    }
+
+    #[test]
+    fn sync_now_requires_origin_like_all_mutations() {
+        let d = rust_repo();
+        let st = state_for(d.path(), None);
+        let r = route(&st, &req("POST", "/sync/now", "", &[HOST, COOKIE], ""));
+        assert_eq!(r.status, 403);
     }
 
     #[test]
