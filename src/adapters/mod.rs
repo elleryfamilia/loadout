@@ -990,9 +990,11 @@ fn is_repo_relative(dir: &str) -> bool {
             .any(|c| matches!(c, std::path::Component::ParentDir))
 }
 
-/// Write one slash-command file per workflow stage under the owned namespace
-/// dir, pruning any stale files left by removed/renamed stages first (we own the
-/// whole dir, so anything not in the current set is ours to clean up).
+/// Write one slash-command file per workflow stage, pruning stale files left by
+/// removed/renamed stages first. What "stale" means depends on the format's
+/// ownership model: in an owned `loadout/` dir anything not in the current set
+/// is ours to clean up, while in a shared dir (VS Code's `.github/prompts/`)
+/// only our own `loadout-`prefixed files are ever candidates.
 fn write_stage_commands(
     app: &AppContext,
     d: &AgentDescriptor,
