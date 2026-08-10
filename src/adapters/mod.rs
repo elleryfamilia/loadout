@@ -315,10 +315,13 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             launch_context_dir: Some("copilot".into()),
             // Workflow stages as VS Code prompt files: `.github/prompts` is a
             // default discovery location, and a `<name>.prompt.md` there is
-            // invocable as `/<name>` in Copilot Chat. Discovery is recursive
-            // and not gitignore-filtered (same locator as the instructions
-            // above), so loadout's owned `loadout/` subdir works and stays
-            // gitignored.
+            // invocable as `/<name>` in Copilot Chat. Unlike the instructions
+            // above, prompt discovery does NOT recurse into subdirectories
+            // (verified live), so these land flat in a dir the user also owns
+            // — hence `CommandFormat::Prompt`'s `loadout-` prefix ownership,
+            // which keeps pruning and `clean` off the user's own prompts.
+            // Gitignore-filtering doesn't apply either way, so ours stay
+            // gitignored by prefix.
             commands_dir: Some(".github/prompts".into()),
             command_format: Some(commands::CommandFormat::Prompt),
             wire_hint: Some(
