@@ -163,9 +163,13 @@ pub fn route(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
         ("GET", "/packs") => handle_packs(state),
         ("GET", "/skills/card") => handle_skill_card(),
         ("GET", "/sync/card") => sync_card::card(),
-        ("POST", "/sync/now") => sync_card::sync_now(),
-        ("POST", "/sync/init") => sync_card::init(req),
-        ("POST", "/sync/clone") => sync_card::clone_repo(req),
+        // These three take `state` because a pull or clone rewrites config.toml
+        // on disk, and the session that studio renders from was read into
+        // memory at startup — it has to be reloaded, or the page shows a config
+        // that is no longer there.
+        ("POST", "/sync/now") => sync_card::sync_now(state),
+        ("POST", "/sync/init") => sync_card::init(state, req),
+        ("POST", "/sync/clone") => sync_card::clone_repo(state, req),
         ("POST", "/skills/install") => handle_skill_install(),
         ("GET", "/drawer/recents") => handle_recents_drawer(state),
         ("POST", "/recents/clear") => handle_recents_clear(state),

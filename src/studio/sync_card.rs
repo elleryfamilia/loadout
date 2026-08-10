@@ -12,12 +12,46 @@
 //! against a temp repo instead of the developer's real config.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use maud::html;
 
 use crate::studio::server::{Req, Resp};
+use crate::studio::state::StudioState;
 use crate::studio::views;
+
+/// What an action reports back to the card.
+pub(crate) struct Outcome {
+    /// `(is_error, message)` for the card notice.
+    pub notice: (bool, String),
+    /// The action rewrote the config files on disk. Studio read them into
+    /// memory once, at `serve()` time, so the session must be reloaded — see
+    /// [`act_at`].
+    pub config_changed: bool,
+}
+
+impl Outcome {
+    fn ok(msg: impl Into<String>) -> Self {
+        Outcome {
+            notice: (false, msg.into()),
+            config_changed: false,
+        }
+    }
+
+    fn err(msg: impl Into<String>) -> Self {
+        Outcome {
+            notice: (true, msg.into()),
+            config_changed: false,
+        }
+    }
+
+    /// Mark this outcome as having rewritten config on disk.
+    fn changed(mut self) -> Self {
+        self.config_changed = true;
+        self
+    }
+}
 
 /// Everything the card renders, prepared by the handler — no filesystem access
 /// inside the view (the rule `settings.rs` follows).
@@ -114,7 +148,7 @@ pub(crate) fn card_fragment(v: &SyncView) -> String {
 
 /// `GET /sync/card` — render the card against the real config dir.
 pub fn card() -> Resp {
-    render(None)
+    with_dir(|dir| Resp::html(card_fragment(&view_for(dir, None))))
 }
 
 /// Manual actions (Sync now) wait on the network while the user watches, so
@@ -133,83 +167,94 @@ const AUTH_MARKERS: &[&str] = &[
     "403",
 ];
 
-/// Append the one-command fix when a git failure looks like an auth failure.
+/// Append the fix when a git failure looks like an auth failure.
 ///
 /// This is the spec's whole credential story: an auth failure is an error
-/// message, not a mechanism. `gh auth login` installs a git credential helper,
-/// which is the single command that unblocks the common (GitHub, HTTPS) case.
+/// message, not a mechanism — studio never collects a token. Every sync
+/// operation shells out to plain `git`, so anything git already trusts works:
+/// a loaded SSH key, or any configured credential helper (macOS Keychain,
+/// Windows Credential Manager, GCM). `gh auth login` is named only as the
+/// GitHub-specific shortcut for installing one, not as the general answer —
+/// the remote may be GitLab, Gitea, or self-hosted.
 pub(crate) fn auth_hint(msg: &str, gh: bool) -> String {
     let lower = msg.to_lowercase();
     if !AUTH_MARKERS.iter().any(|m| lower.contains(m)) {
         return msg.to_string();
     }
     if gh {
-        format!("{msg} — run `gh auth login` once to give git credentials, then try again")
+        format!(
+            "{msg} — on a GitHub remote, run `gh auth login` once to give git credentials; on \
+             another host, use an SSH URL with a loaded key or configure a git credential helper"
+        )
     } else {
         format!(
             "{msg} — git has no credentials for this remote. Use an SSH URL with a loaded key, \
-             or install the GitHub CLI and run `gh auth login`"
+             or configure a git credential helper for your host (`git config --global \
+             credential.helper …` — macOS: `osxkeychain`, Windows: `manager`). On GitHub, the \
+             GitHub CLI's `gh auth login` sets one up for you"
         )
     }
 }
 
-/// Pull, then commit + push. Returns `(is_error, message)` for the card notice.
+/// Pull, then commit + push.
 ///
 /// A `Diverged` pull is reconciled with `sync::reconcile_rebase` — the same
 /// call the CLI makes — so studio resolves divergence in place instead of
 /// telling the user to open a terminal.
-pub(crate) fn sync_now_at(dir: &Path, timeout: Duration) -> (bool, String) {
+///
+/// `gh` is a parameter rather than a `gh_available()` probe so tests can pin
+/// both [`auth_hint`] branches (the convention `init_at`/`clone_at` follow).
+pub(crate) fn sync_now_at(dir: &Path, gh: bool, timeout: Duration) -> Outcome {
     if !crate::sync::is_synced(dir) {
-        return (true, "sync isn't set up on this machine yet".to_string());
+        return Outcome::err("sync isn't set up on this machine yet");
     }
-    let gh = crate::sync::gh_available();
 
-    let pulled = match crate::sync::pull(dir, timeout) {
-        Ok(crate::sync::PullOutcome::Pulled(n)) => n,
+    // What the pull did, as (notice phrase, did the working tree move).
+    let (pulled, moved) = match crate::sync::pull(dir, timeout) {
+        Ok(crate::sync::PullOutcome::Pulled(n)) => (format!("pulled {n}"), n > 0),
         Ok(crate::sync::PullOutcome::Diverged) => match crate::sync::reconcile_rebase(dir, timeout)
         {
-            Ok(crate::sync::ReconcileOutcome::Rebased(n)) => n,
+            // `Rebased(n)` counts the *local* commits replayed, not commits
+            // received, so it can't be phrased as "pulled n". A rebase only
+            // happens after a `Diverged` pull — the remote had commits this
+            // machine lacked — so the working tree always moved.
+            Ok(crate::sync::ReconcileOutcome::Rebased(_)) => {
+                ("rebased onto the remote".to_string(), true)
+            }
             Ok(crate::sync::ReconcileOutcome::Conflicted) => {
-                return (
-                    true,
+                return Outcome::err(
                     "your config and the remote both changed the same lines — the rebase was \
-                     aborted and nothing was lost. Reconcile by hand in the config dir."
-                        .to_string(),
+                     aborted and nothing was lost. Reconcile by hand in the config dir.",
                 )
             }
-            Err(e) => return (true, auth_hint(&format!("reconciling failed: {e:#}"), gh)),
+            Err(e) => return Outcome::err(auth_hint(&format!("reconciling failed: {e:#}"), gh)),
         },
-        Err(e) => return (true, auth_hint(&format!("pulling failed: {e:#}"), gh)),
+        Err(e) => return Outcome::err(auth_hint(&format!("pulling failed: {e:#}"), gh)),
     };
 
-    match crate::sync::commit_push(dir, "load studio: sync now", timeout) {
-        Ok(crate::sync::PushOutcome::Pushed) => (
-            false,
-            format!("synced ✓ — pulled {pulled}, pushed your changes"),
-        ),
-        Ok(crate::sync::PushOutcome::NothingToPush) => (
-            false,
-            format!("synced ✓ — pulled {pulled}, nothing to push"),
-        ),
-        Ok(crate::sync::PushOutcome::Diverged) => (
-            true,
-            "the remote moved ahead again mid-sync — press Sync now once more".to_string(),
-        ),
-        Err(e) => (true, auth_hint(&format!("pushing failed: {e:#}"), gh)),
-    }
+    let mut out = match crate::sync::commit_push(dir, "load studio: sync now", timeout) {
+        Ok(crate::sync::PushOutcome::Pushed) => {
+            Outcome::ok(format!("synced ✓ — {pulled}, pushed your changes"))
+        }
+        Ok(crate::sync::PushOutcome::NothingToPush) => {
+            Outcome::ok(format!("synced ✓ — {pulled}, nothing to push"))
+        }
+        Ok(crate::sync::PushOutcome::Diverged) => {
+            Outcome::err("the remote moved ahead again mid-sync — press Sync now once more")
+        }
+        Err(e) => Outcome::err(auth_hint(&format!("pushing failed: {e:#}"), gh)),
+    };
+    // Set after the push: a pull that moved the tree still needs the reload
+    // even when the push that followed it failed.
+    out.config_changed = moved;
+    out
 }
 
 /// `POST /sync/now`
-pub fn sync_now() -> Resp {
-    match crate::sync::config_dir() {
-        Ok(dir) => {
-            let notice = sync_now_at(&dir, MANUAL_TIMEOUT);
-            render(Some(notice))
-        }
-        Err(e) => Resp::html(views::error_fragment(&format!(
-            "cannot resolve the global config dir: {e:#}"
-        ))),
-    }
+pub fn sync_now(state: &Arc<Mutex<StudioState>>) -> Resp {
+    act(state, |dir| {
+        sync_now_at(dir, crate::sync::gh_available(), MANUAL_TIMEOUT)
+    })
 }
 
 /// Set sync up. With an explicit `remote`, wires it and pushes. Without one,
@@ -220,34 +265,31 @@ pub fn sync_now() -> Resp {
 /// those three calls below. It does *not* prompt for a repo name or visibility
 /// the way the CLI does: studio always creates a private `loadout-config`, and
 /// surfaces a name collision as a notice instead of a prompt.
-pub(crate) fn init_at(
-    dir: &Path,
-    remote: Option<&str>,
-    gh: bool,
-    timeout: Duration,
-) -> (bool, String) {
+pub(crate) fn init_at(dir: &Path, remote: Option<&str>, gh: bool, timeout: Duration) -> Outcome {
     if crate::sync::is_synced(dir) {
-        return (true, "sync is already set up on this machine".to_string());
+        return Outcome::err("sync is already set up on this machine");
     }
     let remote = remote.map(str::trim).filter(|r| !r.is_empty());
 
     if let Some(url) = remote {
         return match crate::sync::init(dir, Some(url), timeout) {
-            Ok(()) => (false, format!("sync set up against {url} ✓")),
-            Err(e) => (
-                true,
-                auth_hint(&format!("setting up sync failed: {e:#}"), gh),
-            ),
+            // The notice names the remote, never the URL the user pasted: an
+            // HTTPS URL can carry a token (`https://user:TOKEN@host/…`), and
+            // this string is rendered into the page. Matches what the CLI
+            // prints on the same path.
+            Ok(()) => Outcome::ok(format!(
+                "sync set up against remote {} ✓",
+                crate::sync::remote_name(dir)
+            )),
+            Err(e) => Outcome::err(auth_hint(&format!("setting up sync failed: {e:#}"), gh)),
         };
     }
 
     if !gh {
-        return (
-            true,
+        return Outcome::err(
             "paste a git remote URL to sync against — create an empty private repo on your \
              host first. (With the GitHub CLI installed and `gh auth login` done, loadout can \
-             create one for you.)"
-                .to_string(),
+             create one for you.)",
         );
     }
 
@@ -257,7 +299,7 @@ pub(crate) fn init_at(
     // `sync::init(dir, None, ..)` wires no remote and performs no network I/O,
     // so an auth failure is not reachable from it.
     if let Err(e) = crate::sync::init(dir, None, timeout) {
-        return (true, format!("preparing the local repo failed: {e:#}"));
+        return Outcome::err(format!("preparing the local repo failed: {e:#}"));
     }
     // GitHub rejects a push that would publish a private commit email (GH007).
     // `gh repo create --push` pushes *outside* `sync::commit_push`, so it never
@@ -271,97 +313,129 @@ pub(crate) fn init_at(
         let _ = crate::sync::set_commit_email(dir, &noreply);
         let _ = crate::sync::amend_reset_author(dir);
     }
+    // These URLs come from `gh` (the created/looked-up repo's web URL), not
+    // from the user, so they carry no credentials and are safe to show.
     match crate::sync::gh_create_repo("loadout-config", false, dir, timeout) {
         Ok(crate::sync::GhCreate::Created { url }) => {
-            (false, format!("created and pushed to {url} ✓"))
+            Outcome::ok(format!("created and pushed to {url} ✓"))
         }
-        Ok(crate::sync::GhCreate::NameExists) => match crate::sync::gh_repo_url(
-            "loadout-config",
-            dir,
-        ) {
-            Some(url) => match crate::sync::wire_remote_and_push(dir, &url, timeout) {
-                Ok(()) => (false, format!("adopted your existing {url} ✓")),
-                Err(e) => (
-                    true,
-                    auth_hint(
+        Ok(crate::sync::GhCreate::NameExists) => {
+            match crate::sync::gh_repo_url("loadout-config", dir) {
+                Some(url) => match crate::sync::wire_remote_and_push(dir, &url, timeout) {
+                    Ok(()) => Outcome::ok(format!("adopted your existing {url} ✓")),
+                    Err(e) => Outcome::err(auth_hint(
                         &format!(
                             "a repo named loadout-config exists but adopting it failed: {e:#}"
                         ),
                         gh,
-                    ),
+                    )),
+                },
+                None => Outcome::err(
+                    "a repo named loadout-config already exists on your account — paste its URL \
+                     above to use it",
                 ),
-            },
-            None => (
-                true,
-                "a repo named loadout-config already exists on your account — paste its URL above \
-                 to use it"
-                    .to_string(),
-            ),
-        },
-        Ok(crate::sync::GhCreate::Failed(m)) => (true, auth_hint(&format!("gh failed: {m}"), gh)),
-        Err(e) => (true, auth_hint(&format!("gh failed: {e:#}"), gh)),
+            }
+        }
+        Ok(crate::sync::GhCreate::Failed(m)) => {
+            Outcome::err(auth_hint(&format!("gh failed: {m}"), gh))
+        }
+        Err(e) => Outcome::err(auth_hint(&format!("gh failed: {e:#}"), gh)),
     }
 }
 
 /// `POST /sync/init` — body is the form-encoded `remote` field (may be empty;
 /// `init_at` trims and treats empty as "no remote given").
-pub fn init(req: &Req) -> Resp {
+pub fn init(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let remote = crate::studio::server::field(&req.body, "remote");
-    match crate::sync::config_dir() {
-        Ok(dir) => {
-            let notice = init_at(
-                &dir,
-                Some(remote.as_str()),
-                crate::sync::gh_available(),
-                MANUAL_TIMEOUT,
-            );
-            render(Some(notice))
-        }
-        Err(e) => Resp::html(views::error_fragment(&format!(
-            "cannot resolve the global config dir: {e:#}"
-        ))),
-    }
+    act(state, |dir| {
+        init_at(
+            dir,
+            Some(remote.as_str()),
+            crate::sync::gh_available(),
+            MANUAL_TIMEOUT,
+        )
+    })
 }
 
 /// Clone an existing config repo onto this machine. `sync::clone` does the
 /// real work, including tolerating the installer's machine-local files and
 /// refusing a dir that already holds real config.
-pub(crate) fn clone_at(dir: &Path, url: &str, gh: bool, timeout: Duration) -> (bool, String) {
+pub(crate) fn clone_at(dir: &Path, url: &str, gh: bool, timeout: Duration) -> Outcome {
     let url = url.trim();
     if url.is_empty() {
-        return (true, "paste the URL of your config repo".to_string());
+        return Outcome::err("paste the URL of your config repo");
     }
     match crate::sync::clone(url, dir, timeout) {
-        Ok(()) => (
-            false,
-            format!("cloned your config from {url} ✓ — reopen studio to see it"),
-        ),
-        Err(e) => (true, auth_hint(&format!("cloning failed: {e:#}"), gh)),
+        // Named by remote, not by the pasted URL (which can carry a token),
+        // and with no "reopen studio" advice: `act_at` reloads the session, so
+        // the cloned config is live in this studio already.
+        Ok(()) => Outcome::ok(format!(
+            "cloned your config from remote {} ✓",
+            crate::sync::remote_name(dir)
+        ))
+        .changed(),
+        Err(e) => Outcome::err(auth_hint(&format!("cloning failed: {e:#}"), gh)),
     }
 }
 
 /// `POST /sync/clone` — body is the form-encoded `url` field.
-pub fn clone_repo(req: &Req) -> Resp {
+pub fn clone_repo(state: &Arc<Mutex<StudioState>>, req: &Req) -> Resp {
     let url = crate::studio::server::field(&req.body, "url");
+    act(state, |dir| {
+        clone_at(dir, &url, crate::sync::gh_available(), MANUAL_TIMEOUT)
+    })
+}
+
+/// Resolve the global config dir once per request, or render the one error
+/// fragment every route shares. Every handler goes through here, so the dir is
+/// resolved once rather than once to act on and again to re-render.
+fn with_dir(f: impl FnOnce(&Path) -> Resp) -> Resp {
     match crate::sync::config_dir() {
-        Ok(dir) => {
-            let notice = clone_at(&dir, &url, crate::sync::gh_available(), MANUAL_TIMEOUT);
-            render(Some(notice))
-        }
+        Ok(dir) => f(&dir),
         Err(e) => Resp::html(views::error_fragment(&format!(
             "cannot resolve the global config dir: {e:#}"
         ))),
     }
 }
 
-/// Shared tail of every handler: rebuild the view from disk and re-render.
-pub(crate) fn render(notice: Option<(bool, String)>) -> Resp {
-    match crate::sync::config_dir() {
-        Ok(dir) => Resp::html(card_fragment(&view_for(&dir, notice))),
-        Err(e) => Resp::html(views::error_fragment(&format!(
-            "cannot resolve the global config dir: {e:#}"
-        ))),
+/// Shared body of every state-changing handler: run `f` against the config dir,
+/// reload studio's config session when `f` rewrote config on disk, then
+/// re-render the card from that same dir.
+fn act(state: &Arc<Mutex<StudioState>>, f: impl FnOnce(&Path) -> Outcome) -> Resp {
+    with_dir(|dir| act_at(state, dir, f))
+}
+
+/// [`act`] against an explicit dir, so tests drive the reload against a temp
+/// repo instead of the developer's real config dir.
+///
+/// The reload is what keeps a pull or clone from stranding studio: `Session`
+/// reads every config layer into memory once, at `serve()` time, and gates
+/// Apply on the on-disk bytes still matching. Without this, a successful sync
+/// leaves the page rendering a config that is no longer on disk and every later
+/// Apply failing — with no in-studio way back, since `load studio` re-attaches
+/// to the running instance rather than restarting it.
+pub(crate) fn act_at(
+    state: &Arc<Mutex<StudioState>>,
+    dir: &Path,
+    f: impl FnOnce(&Path) -> Outcome,
+) -> Resp {
+    let mut out = f(dir);
+    if out.config_changed {
+        // Taken in its own `let` so the guard is dropped before rendering
+        // (the studio rule: never hold the session mutex across rendering).
+        let reloaded = state.lock().unwrap().session.reload();
+        if let Err(e) = reloaded {
+            out.notice = (
+                true,
+                format!(
+                    "{} · but studio could not load the new config ({e:#}) — press Discard in \
+                     the top bar to drop your staged edits and pick it up",
+                    out.notice.1
+                ),
+            );
+        }
     }
+    Resp::html(card_fragment(&view_for(dir, Some(out.notice))))
 }
 
 #[cfg(test)]
@@ -489,7 +563,7 @@ mod tests {
     #[test]
     fn sync_now_on_an_unsynced_dir_is_an_error_not_a_panic() {
         let d = tempfile::tempdir().unwrap();
-        let (is_error, msg) = sync_now_at(d.path(), Duration::from_secs(5));
+        let (is_error, msg) = sync_now_at(d.path(), false, Duration::from_secs(5)).notice;
         assert!(is_error);
         assert!(msg.contains("isn't set up"));
     }
@@ -513,7 +587,7 @@ mod tests {
 
         // Edit, then Sync now.
         std::fs::write(a.join("config.toml"), "x = 2\n").unwrap();
-        let (is_error, msg) = sync_now_at(&a, Duration::from_secs(30));
+        let (is_error, msg) = sync_now_at(&a, false, Duration::from_secs(30)).notice;
         assert!(!is_error, "expected success, got: {msg}");
         assert!(msg.contains("synced"), "got: {msg}");
 
@@ -543,7 +617,7 @@ mod tests {
             .unwrap();
         identify(&a);
 
-        let (is_error, msg) = init_at(&a, Some(url), false, Duration::from_secs(30));
+        let (is_error, msg) = init_at(&a, Some(url), false, Duration::from_secs(30)).notice;
         assert!(!is_error, "got: {msg}");
         assert!(crate::sync::is_synced(&a));
 
@@ -560,7 +634,7 @@ mod tests {
     fn init_without_a_remote_and_without_gh_explains_what_is_needed() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("config.toml"), "x = 1\n").unwrap();
-        let (is_error, msg) = init_at(d.path(), None, false, Duration::from_secs(30));
+        let (is_error, msg) = init_at(d.path(), None, false, Duration::from_secs(30)).notice;
         assert!(is_error);
         assert!(msg.contains("remote"), "names what's missing: {msg}");
     }
@@ -581,7 +655,7 @@ mod tests {
         identify(&a);
         crate::sync::init(&a, Some(url), Duration::from_secs(30)).unwrap();
 
-        let (is_error, msg) = init_at(&a, Some(url), false, Duration::from_secs(30));
+        let (is_error, msg) = init_at(&a, Some(url), false, Duration::from_secs(30)).notice;
         assert!(is_error);
         assert!(msg.contains("already"), "got: {msg}");
     }
@@ -612,7 +686,7 @@ mod tests {
         crate::sync::commit_push(&b, "b edit", Duration::from_secs(30)).unwrap();
 
         // Machine A presses Sync now and receives it.
-        let (is_error, msg) = sync_now_at(&a, Duration::from_secs(30));
+        let (is_error, msg) = sync_now_at(&a, false, Duration::from_secs(30)).notice;
         assert!(!is_error, "got: {msg}");
         assert_eq!(
             std::fs::read_to_string(a.join("config.toml")).unwrap(),
@@ -642,7 +716,7 @@ mod tests {
         std::fs::create_dir_all(&b).unwrap();
         std::fs::write(b.join("loadout-receipt.json"), r#"{"version":"0.25.0"}"#).unwrap();
 
-        let (is_error, msg) = clone_at(&b, url, false, Duration::from_secs(30));
+        let (is_error, msg) = clone_at(&b, url, false, Duration::from_secs(30)).notice;
         assert!(!is_error, "got: {msg}");
         assert_eq!(
             std::fs::read_to_string(b.join("config.toml")).unwrap(),
@@ -654,10 +728,268 @@ mod tests {
         );
     }
 
+    /// A studio state whose config session is open over `gdir` — the shape
+    /// `serve()` builds, minus the socket. Used to prove that an action which
+    /// rewrites `config.toml` on disk also refreshes studio's in-memory copy.
+    fn studio_over(repo: &Path, gdir: &Path) -> Arc<Mutex<StudioState>> {
+        let config = crate::config::Config::load_from(Some(&gdir.join("config.toml")), repo)
+            .expect("fixture config parses");
+        let base_context = crate::context::detect_context(repo, &config).unwrap();
+        let session = crate::studio::edit::Session::open(repo, Some(gdir)).unwrap();
+        Arc::new(Mutex::new(StudioState {
+            session,
+            base_context,
+            repo_base: repo.to_path_buf(),
+            token: "testtoken".into(),
+            port: 7777,
+            onboarding_active: false,
+            active_tab: "settings".into(),
+            recents_path: None,
+        }))
+    }
+
+    /// What studio currently believes the global `config.toml` says.
+    fn session_sees(state: &Arc<Mutex<StudioState>>, gdir: &Path) -> String {
+        let want = gdir.join("config.toml");
+        state
+            .lock()
+            .unwrap()
+            .session
+            .staged_layer_texts()
+            .into_iter()
+            .find(|(_, p, _)| *p == want)
+            .map(|(_, _, t)| t)
+            .expect("the global layer is open in this session")
+    }
+
+    #[test]
+    fn a_pull_refreshes_the_studio_session_not_just_the_disk() {
+        // The regression: `Session::open` reads every layer once at serve()
+        // time, so a pull that rewrites config.toml behind studio leaves the
+        // page showing a config that is no longer on disk — and every later
+        // Apply fails the external-edit gate naming a "reload" studio didn't
+        // offer. The handler must reload the session after a pull that moved.
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+        let old = "[[fragments]]\nid = \"rc\"\nguidance = \"old\"\n";
+        let new = "[[fragments]]\nid = \"rc\"\nguidance = \"new\"\n";
+
+        // Machine A: a synced config dir, with studio open over it.
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), old).unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        crate::sync::init(&a, Some(url), Duration::from_secs(30)).unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let state = studio_over(&repo, &a);
+        assert!(session_sees(&state, &a).contains("old"));
+
+        // Machine B publishes a change.
+        let b = tmp.path().join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        crate::sync::clone(url, &b, Duration::from_secs(30)).unwrap();
+        identify(&b);
+        std::fs::write(b.join("config.toml"), new).unwrap();
+        crate::sync::commit_push(&b, "b edit", Duration::from_secs(30)).unwrap();
+
+        // A presses Sync now, through the same helper the route uses.
+        let resp = act_at(&state, &a, |dir| {
+            sync_now_at(dir, false, Duration::from_secs(30))
+        });
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(!body.contains("banner error"), "expected success: {body}");
+
+        assert_eq!(std::fs::read_to_string(a.join("config.toml")).unwrap(), new);
+        assert!(
+            session_sees(&state, &a).contains("new"),
+            "studio must show the pulled config, not the one it loaded at startup"
+        );
+        // The Apply gate agrees: nothing looks externally edited any more.
+        assert!(state.lock().unwrap().session.external_edits().is_empty());
+    }
+
+    #[test]
+    fn a_clone_refreshes_the_studio_session() {
+        // The headline journey: a fresh machine clones from studio and must
+        // then see the cloned config without restarting studio (which a user
+        // with no terminal cannot do).
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+        let published = "[[fragments]]\nid = \"rc\"\nguidance = \"published\"\n";
+
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), published).unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        crate::sync::init(&a, Some(url), Duration::from_secs(30)).unwrap();
+
+        // Fresh machine: empty config dir, studio already open over it.
+        let fresh = tmp.path().join("fresh");
+        std::fs::create_dir_all(&fresh).unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let state = studio_over(&repo, &fresh);
+        assert_eq!(session_sees(&state, &fresh), "");
+
+        let resp = act_at(&state, &fresh, |dir| {
+            clone_at(dir, url, false, Duration::from_secs(30))
+        });
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(!body.contains("banner error"), "expected success: {body}");
+        assert!(
+            session_sees(&state, &fresh).contains("published"),
+            "studio must show the cloned config without a restart"
+        );
+    }
+
+    #[test]
+    fn a_clone_notice_names_the_remote_not_the_url_the_user_pasted() {
+        // A credential-bearing HTTPS URL must not be echoed into the page.
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), "x = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        crate::sync::init(&a, Some(url), Duration::from_secs(30)).unwrap();
+
+        let b = tmp.path().join("b");
+        std::fs::create_dir_all(&b).unwrap();
+        let (is_error, msg) = clone_at(&b, url, false, Duration::from_secs(30)).notice;
+        assert!(!is_error, "got: {msg}");
+        assert!(!msg.contains(url), "the pasted URL is echoed back: {msg}");
+        assert!(msg.contains("remote"), "names the remote instead: {msg}");
+    }
+
+    #[test]
+    fn init_notice_names_the_remote_not_the_url_the_user_pasted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let remote = bare(tmp.path());
+        let url = remote.to_str().unwrap();
+
+        let a = tmp.path().join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), "x = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+
+        let (is_error, msg) = init_at(&a, Some(url), false, Duration::from_secs(30)).notice;
+        assert!(!is_error, "got: {msg}");
+        assert!(!msg.contains(url), "the pasted URL is echoed back: {msg}");
+        assert!(msg.contains("remote"), "names the remote instead: {msg}");
+    }
+
+    /// A synced repo whose remote always fails the way an unauthenticated
+    /// HTTPS remote does — offline and deterministically.
+    ///
+    /// Git's `ext::` transport runs a command instead of talking to a server,
+    /// so the helper below prints a real auth rejection to stderr and exits
+    /// non-zero. That is the only way to exercise the auth branches without a
+    /// live server that answers 401. Unix-only (the helper is a shell script);
+    /// CI runs ubuntu + macos.
+    #[cfg(unix)]
+    fn repo_with_a_rejecting_remote(tmp: &Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let helper = tmp.join("reject.sh");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\necho 'fatal: Authentication failed for this remote' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let a = tmp.join("a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::write(a.join("config.toml"), "x = 1\n").unwrap();
+        Command::new("git")
+            .args(["init", "-q"])
+            .arg(&a)
+            .status()
+            .unwrap();
+        identify(&a);
+        // `ext::` is refused by default; allowing it is repo-local config, so
+        // it never leaks past this fixture.
+        Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["config", "protocol.ext.allow", "always"])
+            .status()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["add", "-A"])
+            .status()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["commit", "-qm", "seed"])
+            .status()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["remote", "add", "origin"])
+            .arg(format!("ext::{}", helper.display()))
+            .status()
+            .unwrap();
+        a
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_now_appends_the_auth_hint_and_honours_the_gh_flag() {
+        // `sync_now_at` used to probe `gh_available()` itself, so its advice
+        // varied by machine and neither branch could be pinned. With `gh` as a
+        // parameter both are testable — which is the point of taking it.
+        let tmp = tempfile::tempdir().unwrap();
+        let a = repo_with_a_rejecting_remote(tmp.path());
+
+        let (is_error, with_gh) = sync_now_at(&a, true, Duration::from_secs(10)).notice;
+        assert!(is_error, "a rejected push is an error: {with_gh}");
+        assert!(
+            with_gh.contains("gh auth login"),
+            "with gh installed, name the one-command fix: {with_gh}"
+        );
+
+        let (is_error, without) = sync_now_at(&a, false, Duration::from_secs(10)).notice;
+        assert!(is_error);
+        assert!(
+            without.contains("credential helper") && without.contains("SSH URL"),
+            "without gh, the advice must be host-agnostic: {without}"
+        );
+    }
+
     #[test]
     fn clone_rejects_a_blank_url() {
         let d = tempfile::tempdir().unwrap();
-        let (is_error, msg) = clone_at(d.path(), "   ", false, Duration::from_secs(5));
+        let (is_error, msg) = clone_at(d.path(), "   ", false, Duration::from_secs(5)).notice;
         assert!(is_error);
         assert!(msg.contains("URL"));
     }
@@ -671,7 +1003,8 @@ mod tests {
             "https://example.test/x.git",
             false,
             Duration::from_secs(5),
-        );
+        )
+        .notice;
         assert!(is_error);
         assert!(
             msg.to_lowercase().contains("already has content"),
