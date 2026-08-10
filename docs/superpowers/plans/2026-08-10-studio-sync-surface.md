@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **No new sync logic.** Every action wraps an existing `src/sync.rs` function: `is_synced`, `last_synced`, `remote_name`, `pull`, `reconcile_rebase`, `commit_push`, `init`, `clone`, `gh_available`, `gh_create_repo`, `gh_repo_url`, `wire_remote_and_push`.
+- **No new sync behaviour.** Every action wraps an existing `src/sync.rs` function: `is_synced`, `last_synced`, `remote_name`, `pull`, `reconcile_rebase`, `commit_push`, `init`, `clone`, `gh_available`, `gh_create_repo`, `gh_repo_url`, `wire_remote_and_push`. Never reimplement or inline what one of those does. The single permitted addition to `src/sync.rs` is `clone_target_is_clear` (Task 1) — a read-only accessor that exposes `clone`'s *existing* preconditions so the UI can hide a doomed button. It performs no git operation and changes no behaviour.
 - **Immediate side effects, not staged.** Sync actions follow the agent-skill card pattern (`POST` → act → re-render the card), *not* the Settings staging pipeline. Nothing sync does is undone by Discard.
 - **No terminal handoff, no credential form.** An authentication failure is an error message. Never collect a token in a form or write one into git config.
 - **Manual timeout is 30s**, matching `src/commands/sync.rs:18` `MANUAL_TIMEOUT`.
