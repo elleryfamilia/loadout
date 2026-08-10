@@ -19,3 +19,4 @@ AGENTS.override.md
 .cursor/skills/loadout/
 .github/instructions/loadout.instructions.md
 .github/prompts/loadout/
+.github/prompts/loadout-*.prompt.md

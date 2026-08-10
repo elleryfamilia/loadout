@@ -13,14 +13,16 @@ version and date (see [RELEASING.md](RELEASING.md)).
 ### Added
 
 - **Workflow commands in VS Code.** The `copilot` agent now writes each
-  workflow stage as a VS Code prompt file under a gitignored
-  `.github/prompts/loadout/`, so the spine is invocable in Copilot Chat as
+  workflow stage as a VS Code prompt file in
+  `.github/prompts/`, so the spine is invocable in Copilot Chat as
   `/loadout-brainstorm`, `/loadout-plan`, `/loadout-implement`,
   `/loadout-verify`, `/loadout-ship` — the same commands Claude Code and
   Cursor already get. Files carry `mode: agent` (stages do work, not just
   answer) and use VS Code's own `${input:…}` syntax for the per-run focus.
-  Prompt-file discovery is recursive and not gitignore-filtered, so loadout's
-  owned subdirectory stays out of your commits.
+  VS Code's prompt discovery doesn't recurse into subdirectories, so unlike
+  the other agents these land *flat* in `.github/prompts/` — a directory you
+  may also keep your own prompts in. loadout owns only the `loadout-` prefix
+  there: your own prompt files are never pruned, cleaned, or gitignored.
 
 ## 0.24.0 — 2026-08-09
 

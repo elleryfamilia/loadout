@@ -71,6 +71,28 @@ impl CommandFormat {
         }
     }
 
+    /// Whether loadout gets a `loadout/` subdirectory of its own under the
+    /// agent's command dir, or writes prefixed files straight into a directory
+    /// the user also keeps their own files in.
+    ///
+    /// VS Code's prompt-file discovery does **not** recurse into
+    /// subdirectories (verified live: a `.github/prompts/loadout/x.prompt.md`
+    /// never appears in the slash-command list, while the same file one level
+    /// up does). So prompt files sit flat in `.github/prompts/`, and ownership
+    /// is by the `loadout-` filename prefix instead of by directory — nothing
+    /// outside that prefix is ever pruned or removed.
+    pub fn owns_namespace_dir(self) -> bool {
+        match self {
+            CommandFormat::Markdown | CommandFormat::Skill => true,
+            CommandFormat::Prompt => false,
+        }
+    }
+
+    /// Filename prefix marking a generated command in a shared directory.
+    pub fn shared_dir_prefix(self) -> String {
+        format!("{COMMAND_NAMESPACE}-")
+    }
+
     /// The placeholder this agent substitutes the user's command text into.
     /// Cursor skills have no substitution syntax — the invoking message rides
     /// along as-is, so the body just points the agent at it. VS Code prompt

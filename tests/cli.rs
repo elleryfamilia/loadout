@@ -1238,14 +1238,61 @@ fn copilot_writes_workflow_stages_as_gitignored_prompt_files() {
         .success();
 
     for stage in ["brainstorm", "plan", "implement", "verify", "ship"] {
-        let p = format!(".github/prompts/loadout/loadout-{stage}.prompt.md");
+        let p = format!(".github/prompts/loadout-{stage}.prompt.md");
         assert!(fx.exists(&p), "missing {p}");
     }
-    let plan = fx.read(".github/prompts/loadout/loadout-plan.prompt.md");
+    let plan = fx.read(".github/prompts/loadout-plan.prompt.md");
     assert!(plan.starts_with("---\nmode: agent\n"));
     assert!(plan.contains("$LOADOUT_PLAN_PATH"));
-    // The owned command dir is gitignored, like every other loadout artifact.
-    assert!(fx.read(".gitignore").contains(".github/prompts/loadout/"));
+    // Flat, not nested: VS Code's prompt discovery doesn't recurse.
+    assert!(!fx.exists(".github/prompts/loadout"));
+    // Only our own files are gitignored — the dir is the user's.
+    assert!(fx
+        .read(".gitignore")
+        .contains(".github/prompts/loadout-*.prompt.md"));
+}
+
+/// `.github/prompts/` belongs to the user — loadout writes prefixed files into
+/// it and must never prune or clean anything else living there.
+#[test]
+fn copilot_prompt_files_never_touch_the_users_own_prompts() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"superpowers\"\n",
+    );
+    fx.write(
+        ".github/prompts/my-own.prompt.md",
+        "---\nmode: agent\n---\nmine\n",
+    );
+
+    fx.cmd()
+        .args(["refresh", "--agent", "copilot"])
+        .assert()
+        .success();
+    assert_eq!(
+        fx.read(".github/prompts/my-own.prompt.md"),
+        "---\nmode: agent\n---\nmine\n"
+    );
+
+    // A second render prunes stale generated commands but still spares it.
+    fx.cmd()
+        .args(["refresh", "--agent", "copilot"])
+        .assert()
+        .success();
+    assert!(fx.exists(".github/prompts/my-own.prompt.md"));
+
+    fx.cmd()
+        .args(["clean", "--agent", "copilot"])
+        .assert()
+        .success();
+    assert!(
+        fx.exists(".github/prompts/my-own.prompt.md"),
+        "clean removed a prompt file loadout does not own"
+    );
+    assert!(!fx.exists(".github/prompts/loadout-plan.prompt.md"));
 }
 
 #[test]
