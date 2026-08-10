@@ -55,6 +55,11 @@ pub enum CommandFormat {
     /// folder names the skill, so commands land as
     /// `<commands_dir>/loadout/loadout-<stage>/SKILL.md` → `/loadout-<stage>`).
     Skill,
+    /// VS Code prompt files: `<name>.prompt.md`, invoked as `/<name>` in
+    /// Copilot Chat. The command name is the filename stem alone — prompt
+    /// files carry no namespace — so the stem is prefixed (`loadout-plan`
+    /// → `/loadout-plan`) to avoid colliding with a user's own prompts.
+    Prompt,
 }
 
 impl CommandFormat {
@@ -62,16 +67,20 @@ impl CommandFormat {
     pub fn ext(self) -> &'static str {
         match self {
             CommandFormat::Markdown | CommandFormat::Skill => "md",
+            CommandFormat::Prompt => "prompt.md",
         }
     }
 
     /// The placeholder this agent substitutes the user's command text into.
     /// Cursor skills have no substitution syntax — the invoking message rides
-    /// along as-is, so the body just points the agent at it.
+    /// along as-is, so the body just points the agent at it. VS Code prompt
+    /// files expand `${input:…}` variables, with the prompt's description as
+    /// the placeholder text.
     fn arg_placeholder(self) -> &'static str {
         match self {
             CommandFormat::Markdown => "$ARGUMENTS",
             CommandFormat::Skill => "the request that accompanied this skill invocation",
+            CommandFormat::Prompt => "${input:focus:this run's focus (optional)}",
         }
     }
 }
@@ -119,6 +128,8 @@ fn render_stage_command(
     let filename = match format {
         // A skill is a folder named after the skill, holding a SKILL.md.
         CommandFormat::Skill => format!("loadout-{stem}/SKILL.md"),
+        // A prompt file's stem IS the slash command, so it carries the prefix.
+        CommandFormat::Prompt => format!("loadout-{stem}.{}", format.ext()),
         _ => format!("{stem}.{}", format.ext()),
     };
     let description = stage
@@ -144,6 +155,14 @@ fn render_stage_command(
         CommandFormat::Skill => {
             format!(
                 "---\nname: loadout-{stem}\ndescription: {}\n---\n\n{body}\n",
+                yaml_dq(&description)
+            )
+        }
+        // `mode: agent` lets the stage actually do work (read/write files, run
+        // tasks) rather than only answer, which is what every stage needs.
+        CommandFormat::Prompt => {
+            format!(
+                "---\nmode: agent\ndescription: {}\n---\n\n{body}\n",
                 yaml_dq(&description)
             )
         }
@@ -296,6 +315,38 @@ mod tests {
             .into_iter()
             .find(|w| w.id == id)
             .unwrap()
+    }
+
+    /// VS Code derives the slash command from a prompt file's stem alone —
+    /// there is no namespace — so every stem carries the `loadout-` prefix and
+    /// the `.prompt.md` double extension that makes it discoverable.
+    #[test]
+    fn prompt_commands_are_prefixed_and_agent_mode() {
+        let cmds = stage_commands(&builtin("superpowers"), CommandFormat::Prompt, &[]);
+        let names: Vec<&str> = cmds.iter().map(|c| c.filename.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "loadout-brainstorm.prompt.md",
+                "loadout-plan.prompt.md",
+                "loadout-implement.prompt.md",
+                "loadout-verify.prompt.md",
+                "loadout-ship.prompt.md"
+            ]
+        );
+
+        let plan = cmds
+            .iter()
+            .find(|c| c.filename == "loadout-plan.prompt.md")
+            .unwrap();
+        // `mode: agent` — stages do work, not just answer.
+        assert!(plan.content.starts_with("---\nmode: agent\ndescription: "));
+        // VS Code's own input-variable syntax, not Claude's $ARGUMENTS.
+        assert!(plan.content.contains("${input:focus:"));
+        assert!(!plan.content.contains("$ARGUMENTS"));
+        // The handoff contract survives the format.
+        assert!(plan.content.contains(".loadout/workflow/artifacts/plan.md"));
+        assert!(plan.content.contains("$LOADOUT_PLAN_PATH"));
     }
 
     #[test]

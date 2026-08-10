@@ -1220,6 +1220,34 @@ fn copilot_render_writes_nested_overlay_without_touching_committed_files() {
     assert!(!fx.exists("AGENTS.md"));
 }
 
+/// The workflow spine reaches Copilot Chat as VS Code prompt files: one
+/// `/loadout-<stage>` per step, in a gitignored dir loadout owns.
+#[test]
+fn copilot_writes_workflow_stages_as_gitignored_prompt_files() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"superpowers\"\n",
+    );
+
+    fx.cmd()
+        .args(["refresh", "--agent", "copilot"])
+        .assert()
+        .success();
+
+    for stage in ["brainstorm", "plan", "implement", "verify", "ship"] {
+        let p = format!(".github/prompts/loadout/loadout-{stage}.prompt.md");
+        assert!(fx.exists(&p), "missing {p}");
+    }
+    let plan = fx.read(".github/prompts/loadout/loadout-plan.prompt.md");
+    assert!(plan.starts_with("---\nmode: agent\n"));
+    assert!(plan.contains("$LOADOUT_PLAN_PATH"));
+    // The owned command dir is gitignored, like every other loadout artifact.
+    assert!(fx.read(".gitignore").contains(".github/prompts/loadout/"));
+}
+
 #[test]
 fn copilot_run_injects_custom_instructions_dirs_env() {
     let fx = Fixture::new();
