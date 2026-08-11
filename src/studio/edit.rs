@@ -164,6 +164,11 @@ pub struct Session {
     repo_base: PathBuf,
     layers: Vec<LayerFile>,
     ops: Vec<StagedOp>,
+    /// Per-machine state dir a global layer's `.bak` snapshot backs up under
+    /// (see [`backup_dir_for`]). Injected rather than read from
+    /// [`config::state_dir`] directly, so tests never touch the real
+    /// `~/.local/state`.
+    state_dir: Option<PathBuf>,
     /// Script hashes to record as trusted once `apply()` writes succeed — one
     /// entry per accepted script-bearing `EditFragment`/`EditTarget`. The
     /// explicit studio edit *is* the trust approval.
@@ -196,7 +201,21 @@ impl Session {
     /// Open a session over the repo's writable layers (`config.toml` +
     /// `local.toml`), plus the global layers when `global_dir` is given. Missing
     /// files are tracked as empty so they can be created by staged ops.
+    ///
+    /// Uses the real per-machine state dir ([`config::state_dir`]) for
+    /// global-layer backups; see [`Self::open_with`] to inject a different one.
     pub fn open(repo_base: &Path, global_dir: Option<&Path>) -> Result<Self> {
+        Self::open_with(repo_base, global_dir, config::state_dir())
+    }
+
+    /// Like [`Self::open`], but with the state dir injected instead of read
+    /// from the environment — lets callers (tests, mainly) keep backups out of
+    /// the real `~/.local/state`.
+    pub fn open_with(
+        repo_base: &Path,
+        global_dir: Option<&Path>,
+        state_dir: Option<PathBuf>,
+    ) -> Result<Self> {
         let mut candidates: Vec<(Layer, PathBuf, bool)> = Vec::new();
         if let Some(g) = global_dir {
             candidates.push((Layer::Global, g.join("config.toml"), true));
@@ -213,6 +232,7 @@ impl Session {
             repo_base: repo_base.to_path_buf(),
             layers,
             ops: Vec::new(),
+            state_dir,
             pending_trust: Vec::new(),
         })
     }
@@ -395,8 +415,9 @@ impl Session {
         self.validate().context("staged config is invalid")?;
         self.check_external_edits()?;
 
-        // Snapshot a one-shot .bak for each existing file that will change.
-        let backup_dir = config::cache_dir(&self.repo_base).join("studio-backups");
+        // Snapshot a one-shot .bak for each existing file that will change, in
+        // a directory that matches that layer's scope — a global layer must
+        // not back up into whatever repo happens to be studio's cwd.
         for lf in &self.layers {
             if lf.staged.to_string() != lf.original && !lf.original.is_empty() {
                 let name = lf
@@ -404,6 +425,8 @@ impl Session {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "layer".to_string());
+                let backup_dir =
+                    backup_dir_for(lf.layer, &self.repo_base, self.state_dir.as_deref());
                 let bak = backup_dir.join(format!("{}.{:?}.bak", name, lf.layer));
                 atomic_write(&bak, &lf.original)
                     .with_context(|| format!("backing up {}", lf.path.display()))?;
@@ -454,6 +477,30 @@ impl Session {
             );
         }
         Ok(())
+    }
+}
+
+/// Where a layer's pre-apply `.bak` snapshot belongs.
+///
+/// Global layers (`Layer::Global`, `Layer::GlobalLocal`) are per-machine
+/// state, not repo state — the studio process may have no meaningful
+/// `repo_base` at all (e.g. launched with no cwd), and `load sync` puts the
+/// global config dir itself under git, so a `.bak` dropped there would get
+/// committed and synced between machines. They back up under
+/// [`config::state_dir`] instead — the directory that already exists for
+/// exactly this "must never sync" reason (script trust hashes).
+///
+/// Repo layers (`Layer::Repo`, `Layer::RepoLocal`) keep the existing
+/// repo-scoped cache dir. A `None` state dir (no `$HOME` to resolve one)
+/// falls back to the repo path for every layer, preserving today's behavior
+/// rather than failing.
+fn backup_dir_for(layer: Layer, repo_base: &Path, state_dir: Option<&Path>) -> PathBuf {
+    let repo_backups = config::cache_dir(repo_base).join("studio-backups");
+    match layer {
+        Layer::Global | Layer::GlobalLocal => state_dir
+            .map(|dir| dir.join("studio-backups"))
+            .unwrap_or(repo_backups),
+        Layer::BuiltIn | Layer::Repo | Layer::RepoLocal => repo_backups,
     }
 }
 
@@ -1196,5 +1243,124 @@ mod tests {
         let cfg =
             crate::config::Config::load_from(Some(&gdir.join("config.toml")), d.path()).unwrap();
         assert_eq!(cfg.default_agent, "codex");
+    }
+
+    // --- backup routing: global layers back up to state_dir, not repo cache ---
+
+    fn session_with_state(repo: &Path, gdir: &Path, state_dir: &Path) -> Session {
+        Session::open_with(repo, Some(gdir), Some(state_dir.to_path_buf())).unwrap()
+    }
+
+    #[test]
+    fn backup_dir_for_global_layers_uses_injected_state_dir() {
+        let repo = Path::new("/repo");
+        let state = Path::new("/state");
+        for layer in [Layer::Global, Layer::GlobalLocal] {
+            assert_eq!(
+                backup_dir_for(layer, repo, Some(state)),
+                state.join("studio-backups"),
+                "{layer:?} should back up under the state dir"
+            );
+        }
+    }
+
+    #[test]
+    fn backup_dir_for_repo_layers_uses_repo_cache() {
+        let repo = Path::new("/repo");
+        let state = Path::new("/state");
+        for layer in [Layer::Repo, Layer::RepoLocal] {
+            assert_eq!(
+                backup_dir_for(layer, repo, Some(state)),
+                config::cache_dir(repo).join("studio-backups"),
+                "{layer:?} should stay repo-scoped even with a state dir available"
+            );
+        }
+    }
+
+    #[test]
+    fn backup_dir_for_falls_back_to_repo_cache_without_a_state_dir() {
+        let repo = Path::new("/repo");
+        for layer in [
+            Layer::BuiltIn,
+            Layer::Global,
+            Layer::GlobalLocal,
+            Layer::Repo,
+            Layer::RepoLocal,
+        ] {
+            assert_eq!(
+                backup_dir_for(layer, repo, None),
+                config::cache_dir(repo).join("studio-backups"),
+                "{layer:?} with no state dir (no $HOME) should preserve today's behavior"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_backs_up_global_layer_under_state_dir_not_repo_cache() {
+        let (d, gdir) = repo_with_global("[[fragments]]\nid = \"a\"\nguidance = \"A\"\n");
+        let state = tempfile::tempdir().unwrap();
+        let mut s = session_with_state(d.path(), &gdir, state.path());
+        s.stage(StagedOp::CreateFragment {
+            layer: Layer::Global,
+            cap: Box::new(cap("b", "B")),
+        })
+        .unwrap();
+
+        s.apply().unwrap();
+
+        let bak_dir = state.path().join("studio-backups");
+        assert!(
+            bak_dir.exists(),
+            "global layer's backup should land under the injected state dir"
+        );
+        assert!(
+            std::fs::read_dir(&bak_dir).unwrap().next().is_some(),
+            "state dir's studio-backups should contain the .bak file"
+        );
+        assert!(
+            !config::cache_dir(d.path()).exists(),
+            "repo cache dir must never be created for a global-only apply"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn apply_succeeds_when_repo_base_is_unwritable() {
+        // Regression for the reported bug: studio launched with no cwd (VS
+        // Code extension) inherits `/` as repo_base. A global-layer backup
+        // must not depend on repo_base being writable at all.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!(
+                "skipping apply_succeeds_when_repo_base_is_unwritable: running as root, \
+                 permission bits are not enforced"
+            );
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (d, gdir) = repo_with_global("[[fragments]]\nid = \"a\"\nguidance = \"A\"\n");
+        let state = tempfile::tempdir().unwrap();
+        let original_mode = std::fs::metadata(d.path()).unwrap().permissions().mode();
+        std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = (|| -> Result<()> {
+            let mut s = session_with_state(d.path(), &gdir, state.path());
+            s.stage(StagedOp::CreateFragment {
+                layer: Layer::Global,
+                cap: Box::new(cap("b", "B")),
+            })?;
+            s.apply()?;
+            Ok(())
+        })();
+
+        // Restore write permission unconditionally so `tempfile` can clean up
+        // the directory, regardless of whether apply succeeded.
+        std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(original_mode)).unwrap();
+
+        result.expect(
+            "apply must succeed with a read-only repo_base — the global layer's backup \
+             does not belong there",
+        );
     }
 }
