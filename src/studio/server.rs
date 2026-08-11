@@ -1934,7 +1934,7 @@ fn handle_fragment_try(req: &Req) -> Resp {
 
 fn handle_discard(state: &Arc<Mutex<StudioState>>) -> Resp {
     if let Err(e) = state.lock().unwrap().session.discard() {
-        return Resp::html(views::error_fragment(&format!("discard failed: {e}")));
+        return Resp::html(views::error_fragment(&format!("discard failed: {e:#}")));
     }
     profiles_tab_resp(state, None, Some("discarded staged changes"), true)
 }
@@ -1986,7 +1986,7 @@ fn handle_apply(state: &Arc<Mutex<StudioState>>) -> Resp {
             }
             profiles_tab_resp(state, None, Some(&msg), true)
         }
-        Err(e) => Resp::html(views::error_fragment(&format!("apply failed: {e}"))),
+        Err(e) => Resp::html(views::error_fragment(&format!("apply failed: {e:#}"))),
     }
 }
 
