@@ -1297,7 +1297,8 @@ mod tests {
 
     #[test]
     fn apply_backs_up_global_layer_under_state_dir_not_repo_cache() {
-        let (d, gdir) = repo_with_global("[[fragments]]\nid = \"a\"\nguidance = \"A\"\n");
+        let body = "[[fragments]]\nid = \"a\"\nguidance = \"A\"\n";
+        let (d, gdir) = repo_with_global(body);
         let state = tempfile::tempdir().unwrap();
         let mut s = session_with_state(d.path(), &gdir, state.path());
         s.stage(StagedOp::CreateFragment {
@@ -1308,14 +1309,22 @@ mod tests {
 
         s.apply().unwrap();
 
-        let bak_dir = state.path().join("studio-backups");
+        // Exact expected name (`apply`'s `"{name}.{layer:?}.bak"` scheme) and
+        // exact pre-apply contents — pins what the backup is *for*, not just
+        // that some file landed in the right directory.
+        let bak_path = state
+            .path()
+            .join("studio-backups")
+            .join("config.toml.Global.bak");
         assert!(
-            bak_dir.exists(),
-            "global layer's backup should land under the injected state dir"
+            bak_path.is_file(),
+            "expected {} to exist",
+            bak_path.display()
         );
-        assert!(
-            std::fs::read_dir(&bak_dir).unwrap().next().is_some(),
-            "state dir's studio-backups should contain the .bak file"
+        assert_eq!(
+            std::fs::read_to_string(&bak_path).unwrap(),
+            body,
+            "backup should hold the pre-apply bytes"
         );
         assert!(
             !config::cache_dir(d.path()).exists(),
@@ -1341,7 +1350,9 @@ mod tests {
 
         let (d, gdir) = repo_with_global("[[fragments]]\nid = \"a\"\nguidance = \"A\"\n");
         let state = tempfile::tempdir().unwrap();
-        let original_mode = std::fs::metadata(d.path()).unwrap().permissions().mode();
+        // Mask off the file-type bits (`mode()` returns e.g. `0o40755` for a
+        // directory) — `Permissions::from_mode` wants permission bits only.
+        let original_mode = std::fs::metadata(d.path()).unwrap().permissions().mode() & 0o777;
         std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
 
         let result = (|| -> Result<()> {
