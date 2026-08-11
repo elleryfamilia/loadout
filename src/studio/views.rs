@@ -428,7 +428,7 @@ fn library_nav(active: &str) -> Markup {
 }
 
 /// The staged-changes indicator (top-bar right). Re-pulled via `GET /staged`.
-/// At or below 1300px `.staged-label`/`.btn-label` hide (see studio.css),
+/// At or below 1360px `.staged-label`/`.btn-label` hide (see studio.css),
 /// leaving icon-only controls — each button keeps a `title` as its
 /// accessible name, and the count itself keeps a `title` spelling out the
 /// full phrase.
