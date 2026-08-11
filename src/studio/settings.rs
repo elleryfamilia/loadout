@@ -172,10 +172,26 @@ fn apply_or_stage(state: &Arc<Mutex<StudioState>>, op: StagedOp, applied_msg: &s
                 // The op stays staged — `apply()` only clears ops on success —
                 // so this is surfaced rather than discarded; the top-bar
                 // Apply can retry once the conflict is resolved.
-                Err(e) => (
-                    true,
-                    format!("config changed on disk — review and apply from the top bar: {e}"),
-                ),
+                //
+                // `apply()`'s external-edit gate runs before any write, so if
+                // that's why this failed, the on-disk bytes it compared
+                // against are still out of sync with what this session
+                // loaded — checking `external_edits()` here (same lock,
+                // right after the failure) tells us that structurally
+                // instead of guessing from the error text. Any other failure
+                // (e.g. a backup write that couldn't create its directory)
+                // leaves the loaded files untouched, so this reads empty and
+                // the message doesn't assert a cause it doesn't know.
+                Err(e) => {
+                    let is_external_edit =
+                        !state.lock().unwrap().session.external_edits().is_empty();
+                    let msg = if is_external_edit {
+                        format!("config changed on disk — review and apply from the top bar: {e:#}")
+                    } else {
+                        format!("apply failed: {e:#}")
+                    };
+                    (true, msg)
+                }
             }
         }
     };
@@ -184,4 +200,129 @@ fn apply_or_stage(state: &Arc<Mutex<StudioState>>, op: StagedOp, applied_msg: &s
     resp.body
         .extend_from_slice(views::staged_indicator_loader().as_bytes());
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+    use crate::fragment::Layer;
+
+    /// A repo tempdir plus a global config dir (a subdir of it) whose
+    /// `config.toml` starts with `body`. Mirrors the fixture in
+    /// `studio::edit::tests` / `studio::sync_card::tests`.
+    fn repo_with_global(body: &str) -> (tempfile::TempDir, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let gdir = d.path().join("global");
+        std::fs::create_dir_all(&gdir).unwrap();
+        std::fs::write(gdir.join("config.toml"), body).unwrap();
+        (d, gdir)
+    }
+
+    /// A studio state whose session is opened via `open_with`, so the state
+    /// dir is injected rather than resolved from the real `~/.local/state`
+    /// (see `studio::edit::Session::open_with`).
+    fn state_with_session(
+        repo: &Path,
+        gdir: &Path,
+        state_dir: Option<PathBuf>,
+    ) -> Arc<Mutex<StudioState>> {
+        let gcfg = gdir.join("config.toml");
+        let config = crate::config::Config::load_from(Some(&gcfg), repo).unwrap();
+        let base_context = crate::context::detect_context(repo, &config).unwrap();
+        let session = crate::studio::edit::Session::open_with(repo, Some(gdir), state_dir).unwrap();
+        Arc::new(Mutex::new(StudioState {
+            session,
+            base_context,
+            repo_base: repo.to_path_buf(),
+            token: "testtoken".into(),
+            port: 7777,
+            onboarding_active: false,
+            active_tab: "settings".into(),
+            recents_path: None,
+        }))
+    }
+
+    #[test]
+    fn apply_or_stage_names_the_external_edit_when_thats_the_cause() {
+        let (d, gdir) = repo_with_global("[defaults]\nagent = \"claude\"\n");
+        let state = state_with_session(d.path(), &gdir, Some(d.path().join("state")));
+
+        // Someone edits the global config out from under the open session.
+        std::fs::write(gdir.join("config.toml"), "[defaults]\nagent = \"codex\"\n").unwrap();
+
+        let resp = apply_or_stage(
+            &state,
+            StagedOp::SetDefaultAgent {
+                layer: Layer::Global,
+                agent: "opencode".into(),
+            },
+            "saved",
+        );
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(
+            body.contains("config changed on disk — review and apply from the top bar"),
+            "external-edit failure should keep its specific wording: {body}"
+        );
+        assert!(
+            body.contains("changed on disk"),
+            "should still surface the real error text: {body}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn apply_or_stage_does_not_blame_an_external_edit_for_an_unrelated_failure() {
+        // Regression for the settings-page half of the read-only-backup bug:
+        // a failure that has nothing to do with an external edit (here, the
+        // same unwritable-backup-dir failure `Session::apply` was just fixed
+        // for at the repo-scoped layer) must not be reported with the
+        // external-edit wording, and must show the real chain.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!(
+                "skipping apply_or_stage_does_not_blame_an_external_edit_for_an_unrelated_failure: \
+                 running as root, permission bits are not enforced"
+            );
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (d, gdir) = repo_with_global("[defaults]\nagent = \"claude\"\n");
+        // No state dir injected: a Global-layer backup falls back to the
+        // repo-scoped cache dir (`Session::open` with no `$HOME` behaves the
+        // same way), which we then make unwritable.
+        let state = state_with_session(d.path(), &gdir, None);
+
+        let original_mode = std::fs::metadata(d.path()).unwrap().permissions().mode();
+        std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let resp = apply_or_stage(
+            &state,
+            StagedOp::SetDefaultAgent {
+                layer: Layer::Global,
+                agent: "codex".into(),
+            },
+            "saved",
+        );
+
+        // Restore unconditionally so `tempfile` can clean up.
+        std::fs::set_permissions(d.path(), std::fs::Permissions::from_mode(original_mode)).unwrap();
+
+        let body = String::from_utf8(resp.body).unwrap();
+        assert!(
+            !body.contains("changed on disk"),
+            "must not claim an external edit when the real cause was a write failure: {body}"
+        );
+        assert!(
+            body.contains("apply failed"),
+            "should surface a cause-neutral message: {body}"
+        );
+        assert!(
+            body.contains("Permission denied"),
+            "{{e:#}} should surface the full chain, not just the outermost \
+             'backing up ...' frame: {body}"
+        );
+    }
 }
