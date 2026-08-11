@@ -399,8 +399,8 @@ fn tab_bar(active: &str) -> Markup {
     let cls = |name: &str| if name == active { "tab active" } else { "tab" };
     html! {
         nav class="tabs" {
-            button class=(cls("profiles")) data-tab="profiles" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) "Loadouts" }
-            button class=(cls("library")) data-tab="library" hx-get="/tab/library" hx-target="#main" { (icon("book")) "Library" }
+            button class=(cls("profiles")) data-tab="profiles" title="Loadouts" hx-get="/tab/profiles" hx-target="#main" { (icon("layers")) span class="tab-label" { "Loadouts" } }
+            button class=(cls("library")) data-tab="library" title="Library" hx-get="/tab/library" hx-target="#main" { (icon("book")) span class="tab-label" { "Library" } }
         }
     }
 }
@@ -428,15 +428,22 @@ fn library_nav(active: &str) -> Markup {
 }
 
 /// The staged-changes indicator (top-bar right). Re-pulled via `GET /staged`.
+/// Below 1300px `.staged-label`/`.btn-label` hide (see studio.css), leaving
+/// icon-only controls — each button keeps a `title` as its accessible name,
+/// and the count itself keeps a `title` spelling out the full phrase.
 pub fn staged_indicator(staged: usize) -> Markup {
+    let phrase = format!(
+        "{staged} staged change{}",
+        if staged == 1 { "" } else { "s" }
+    );
     html! {
         @if staged > 0 {
-            span class="staged-count" { (icon("layers")) (staged) " staged" }
-            button class="btn btn-ghost btn-sm" hx-get="/diff" hx-target="#main" { "Review" }
-            button class="btn btn-ghost btn-sm" hx-post="/discard" hx-target="#main"
-                hx-confirm="Discard all staged changes? Your config files won't be modified." { (icon("x")) "Discard" }
-            button class="btn btn-primary btn-sm" hx-post="/apply" hx-target="#main"
-                hx-confirm="Apply staged changes to your config files?" { (icon("check")) "Apply" }
+            span class="staged-count" title=(phrase) { (icon("layers")) (staged) span class="staged-label" { " staged" } }
+            button class="btn btn-ghost btn-sm" title="Review" hx-get="/diff" hx-target="#main" { (icon("eye")) span class="btn-label" { "Review" } }
+            button class="btn btn-ghost btn-sm" title="Discard" hx-post="/discard" hx-target="#main"
+                hx-confirm="Discard all staged changes? Your config files won't be modified." { (icon("x")) span class="btn-label" { "Discard" } }
+            button class="btn btn-primary btn-sm" title="Apply" hx-post="/apply" hx-target="#main"
+                hx-confirm="Apply staged changes to your config files?" { (icon("check")) span class="btn-label" { "Apply" } }
         } @else {
             span class="muted small" { "No staged changes" }
         }

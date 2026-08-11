@@ -142,7 +142,7 @@ body {
   display: inline-flex; align-items: center; gap: 8px;
   font: 600 15px var(--sans); color: var(--muted);
   padding: 9px 20px; border: none; border-radius: var(--r);
-  background: transparent; cursor: pointer;
+  background: transparent; cursor: pointer; white-space: nowrap;
 }
 .tab .icon { width: 17px; height: 17px; }
 .tab:hover { background: var(--panel-2); color: var(--fg); }
@@ -169,7 +169,7 @@ body {
 :root[data-theme-pref="light"] .theme-toggle .ti-light,
 :root[data-theme-pref="dark"] .theme-toggle .ti-dark,
 :root:not([data-theme-pref]) .theme-toggle .ti-auto { display: inline-flex; }
-.staged-count { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.staged-count { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; white-space: nowrap; }
 .staged-count .icon { color: var(--accent); }
 
 /* --- main + buttons -------------------------------------------------------- */
@@ -941,6 +941,49 @@ pre.error { color: var(--error-fg); padding: 16px; font-family: var(--mono); whi
   .tab-profiles, .profile-editor { grid-template-columns: 1fr; }
   .profile-rail, .editor-preview-col { position: static; max-height: none; overflow: visible; }
   .pack-grid { grid-template-columns: 1fr; }
+}
+
+/* Responsive topbar. The bar is three flex groups (brand / tabs / controls);
+   full labels on all three stop fitting a bit above 1300px (measured: at
+   1200px they already overlap by ~49px), well before the 1024px breakpoint
+   above handles the rest of the page, so this gets its own threshold. Each
+   group sheds its *label* first and keeps every control: the wordmark drops
+   to just the mark, tab buttons and the staged/Review/Discard/Apply buttons
+   go icon-only (each keeps a `title` as its accessible name), and the
+   "N staged" text shrinks to just the count. Nothing is ever hidden — only
+   a label. Studio now commonly opens in an IDE's Simple Browser pane
+   (~1000px, often narrower next to a chat sidebar), so this isn't a rare
+   case. */
+@media (max-width: 1300px) {
+  .topbar {
+    /* Once labels are gone, brand and the controls no longer need matching
+       widths to keep the tabs *visually* centered (that math only held while
+       both sides had comparable content) — space-between plus each side
+       sizing to its own content places the tabs reasonably between two
+       unevenly-sized groups instead of leaving a lopsided gap on one side. */
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .brand { flex: 0 1 auto; }
+  .brand-name { display: none; }
+  .tabs { gap: 4px; }
+  .tab { padding: 7px 10px; }
+  .tab-label { display: none; }
+  .topbar-right { flex: 0 1 auto; gap: 6px; }
+  .staged-wrap { min-width: 0; gap: 4px; }
+  .staged-label { display: none; }
+  .btn-label { display: none; }
+  #staged .btn.btn-sm { padding: 5px 7px; }
+}
+
+/* Phone-width panes: squeeze further. Still no control is hidden. */
+@media (max-width: 480px) {
+  .topbar { padding: 0 8px; gap: 6px; }
+  .tabs { gap: 3px; }
+  .tab { padding: 6px 7px; }
+  .topbar-right { gap: 4px; }
+  .staged-wrap { gap: 3px; }
+  .icon-btn { width: 26px; height: 26px; }
 }
 
 /* --- Recents drawer ------------------------------------------------------ */
