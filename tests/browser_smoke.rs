@@ -214,11 +214,16 @@ fn viewer_selftest_passes_under_opaque_origin_sandbox() {
 // --- studio topbar responsiveness -------------------------------------------
 
 /// The widths the topbar is required to handle without overlap or
-/// horizontal overflow (R2 brief): 1400px down to 380px. 1310 and 1301 are
-/// the tightest sampled points just above the 1300px compact-mode
-/// breakpoint (`studio.css`) -- everything else here is round; these two
-/// exist specifically to catch the breakpoint being set too low.
-const TOPBAR_TEST_WIDTHS: [u32; 10] = [1400, 1310, 1301, 1200, 1024, 900, 768, 600, 480, 380];
+/// horizontal overflow (R2 brief): 1400px down to 380px. 1360/1361 are the
+/// tightest sampled points straddling the compact-mode breakpoint
+/// (`studio.css`, currently 1360px) -- 1360 is the last compact width, 1361
+/// the first full-label one, so together they catch the breakpoint being
+/// set too low. 1301/1310 are kept from an earlier (lower) breakpoint value
+/// as a regression check that they stay comfortably inside compact mode.
+/// Everything else here is round.
+const TOPBAR_TEST_WIDTHS: [u32; 12] = [
+    1400, 1361, 1360, 1310, 1301, 1200, 1024, 900, 768, 600, 480, 380,
+];
 
 /// Expected count of measured pieces per group (brand: mark + wordmark;
 /// tabs: the two nav buttons; topbar-right: the staged count + its three
@@ -330,14 +335,29 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
-/// Renders the studio shell with a non-zero staged count -- the busiest the
-/// topbar ever gets, since that's what puts the "N staged" text plus the
-/// Review/Discard/Apply buttons in the right-hand group (the cluster that
-/// actually collided with the tabs; see R2 brief) -- inlines the real
-/// stylesheet (fonts included; see below), and checks at a spread of widths
-/// from 1400px down to 380px that no rendered piece of the brand, tabs, or
-/// top-right controls ever overlaps a piece from a different group, and
-/// that the page never scrolls horizontally.
+/// The staged count rendered in the test below. "N staged" grows a digit
+/// once this crosses into double digits, which is where the string's width
+/// actually jumps -- so the test needs a plausibly *wide* count, not a
+/// small one. `staged` is `Session::ops().len()` (`src/studio/edit.rs`),
+/// which is uncapped and never deduplicated (re-saving the same fragment
+/// three times pushes three ops, not one); applying a single starter pack
+/// already stages 14-15 ops (`server.rs`'s pack-apply tests), and a heavier
+/// single sitting -- a pack apply plus hand-adopting several more palette
+/// fragments, a few edits redone, a profile toggle or two -- plausibly
+/// reaches well into double digits. 99 is used here: the widest count still
+/// inside that plausible double-digit range, without assuming an
+/// implausible triple-digit session.
+const TOPBAR_TEST_STAGED_COUNT: usize = 99;
+
+/// Renders the studio shell with a wide staged count (see
+/// [`TOPBAR_TEST_STAGED_COUNT`]) -- the busiest the topbar ever gets, since
+/// that's what puts the "N staged" text plus the Review/Discard/Apply
+/// buttons in the right-hand group (the cluster that actually collided with
+/// the tabs; see R2 brief) -- inlines the real stylesheet (fonts included;
+/// see below), and checks at a spread of widths from 1400px down to 380px
+/// that no rendered piece of the brand, tabs, or top-right controls ever
+/// overlaps a piece from a different group, and that the page never scrolls
+/// horizontally.
 ///
 /// Each width gets its own `<iframe>` (a nested browsing context whose CSS
 /// viewport is exactly its own rendered box) rather than relaunching Chrome
@@ -346,13 +366,13 @@ fn base64_encode(data: &[u8]) -> String {
 /// a real OS/window-manager minimum, not a bug in this test), which would
 /// have made the 480px and 380px cases secretly re-test 500px. The iframe
 /// approach sidesteps that floor entirely and needs only one Chrome launch
-/// for all ten widths.
+/// for all twelve widths.
 #[test]
 #[ignore = "needs Chrome; CI runs it via `cargo test --test browser_smoke -- --ignored`"]
 fn topbar_never_overlaps_or_overflows_from_1400px_to_380px() {
     let chrome = chrome().expect("no Chrome found; set CHROME_BIN");
 
-    let shell = loadout::studio::views::shell(maud::html! {}, 3, "profiles");
+    let shell = loadout::studio::views::shell(maud::html! {}, TOPBAR_TEST_STAGED_COUNT, "profiles");
 
     // The shell's own `<link rel="stylesheet" href="/assets/studio.css">`
     // 404s under `file://`/`srcdoc` (a rooted path doesn't resolve on disk),
