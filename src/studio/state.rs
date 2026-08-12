@@ -1771,7 +1771,7 @@ pub fn draft_profile_from_form(pairs: &[(String, String)]) -> LoadoutConfig {
             .map(FragmentRef::Id)
             .collect(),
         workflow: opt(value_of(pairs, "workflow")),
-        template: None,
+        template: opt(value_of(pairs, "template")),
         disabled: value_of(pairs, "disabled").is_some(),
     }
 }
@@ -2060,6 +2060,20 @@ mod tests {
         assert_eq!(none.workflow, None);
         let some = draft_profile_from_form(&parse_pairs("name=rust&workflow=lean"));
         assert_eq!(some.workflow.as_deref(), Some("lean"));
+    }
+
+    #[test]
+    fn draft_profile_from_form_carries_template() {
+        // Same care as the workflow field: `template` has no visible editor
+        // control, but the editor carries it forward as a hidden field, and
+        // this draft path — the one that feeds the re-render after a
+        // validation error or an inline fragment add — must not drop it, or
+        // the hidden field vanishes from the next render and the value is
+        // lost for good.
+        let none = draft_profile_from_form(&parse_pairs("name=rust"));
+        assert_eq!(none.template, None);
+        let some = draft_profile_from_form(&parse_pairs("name=rust&template=custom"));
+        assert_eq!(some.template.as_deref(), Some("custom"));
     }
 
     #[test]

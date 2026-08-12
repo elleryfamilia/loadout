@@ -4102,6 +4102,59 @@ mod tests {
     }
 
     #[test]
+    fn editing_a_loadout_preserves_its_template_override() {
+        // Sibling to the workflow regression above, same failure mode: the
+        // editor form never grew a `template` control (nobody asked for one —
+        // this is a rare, hand-authored override), so nothing ever posted a
+        // `template` field back. `profile_from_form` reads `template` from the
+        // form correctly, but an absent field reads as `None` regardless of
+        // what the loadout had before — so any edit through the studio form
+        // silently dropped a `template = "…"` override, with no warning.
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\
+             \n[[fragments]]\nid = \"tc\"\nguidance = \"y\"\n\
+             \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\ntemplate = \"custom\"\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+
+        // The edit form carries the current template forward — no visible
+        // control is required, just a hidden field so a save round-trips it.
+        let edit = body_of(route(
+            &st,
+            &req("GET", "/profiles/rust/edit", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            edit.contains(r#"name="template" value="custom""#),
+            "template carried in the edit form: {edit}"
+        );
+
+        // Save exactly as the editor would submit it: the carried `template`
+        // field forward, plus one unrelated change.
+        let saved = body_of(route(
+            &st,
+            &req(
+                "POST",
+                "/profiles",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "original_name=rust&name=rust&targets=rust&fragments=rc&fragments=tc&template=custom",
+            ),
+        ));
+        assert!(saved.contains("staged loadout"), "save succeeded: {saved}");
+
+        // …and on disk after apply — the assertion that matters: the data,
+        // not just the form markup.
+        body_of(route(
+            &st,
+            &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
+        assert!(
+            on_disk.contains("template = \"custom\""),
+            "template persisted on disk: {on_disk}"
+        );
+    }
+
+    #[test]
     fn profile_rename_onto_existing_name_is_rejected() {
         // Renaming `a` onto the existing `b` would clobber it — refused inline.
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\n\
