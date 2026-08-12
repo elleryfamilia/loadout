@@ -4041,6 +4041,67 @@ mod tests {
     }
 
     #[test]
+    fn editing_a_loadout_preserves_its_bound_workflow() {
+        // Regression (problem 2, found while scoping the picker — not the
+        // reported bug): `profile_from_form` used to hardcode `workflow:
+        // None`, so saving the editor form for a loadout that already had a
+        // workflow bound (e.g. via the Board's "Equip a workflow" tile)
+        // silently wiped it out on any edit — no warning, no diff signal. An
+        // edit that changes something unrelated (equipping a second fragment)
+        // must not touch the workflow.
+        let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\
+             \n[[fragments]]\nid = \"tc\"\nguidance = \"y\"\n\
+             \n[[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"superpowers\"\n";
+        let d = rust_repo();
+        let st = state_for(d.path(), Some(cfg));
+
+        // The edit form pre-selects the loadout's current workflow.
+        let edit = body_of(route(
+            &st,
+            &req("GET", "/profiles/rust/edit", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            edit.contains(r#"value="superpowers" checked"#),
+            "workflow pre-selected in the edit form: {edit}"
+        );
+
+        // Save exactly as the editor would submit it: the pre-selected
+        // `workflow` field carried forward, plus one unrelated change.
+        let saved = body_of(route(
+            &st,
+            &req(
+                "POST",
+                "/profiles",
+                "",
+                &[HOST, COOKIE, ORIGIN],
+                "original_name=rust&name=rust&targets=rust&fragments=rc&fragments=tc&workflow=superpowers",
+            ),
+        ));
+        assert!(saved.contains("staged loadout"), "save succeeded: {saved}");
+
+        // The workflow survived the edit, in the staged config…
+        let board = body_of(route(
+            &st,
+            &req("GET", "/profiles/rust/select", "", &[HOST, COOKIE], ""),
+        ));
+        assert!(
+            board.contains("superpowers"),
+            "workflow still bound after edit: {board}"
+        );
+
+        // …and on disk after apply.
+        body_of(route(
+            &st,
+            &req("POST", "/apply", "", &[HOST, COOKIE, ORIGIN], ""),
+        ));
+        let on_disk = std::fs::read_to_string(global_config_path(d.path())).unwrap();
+        assert!(
+            on_disk.contains("workflow = \"superpowers\""),
+            "workflow persisted on disk: {on_disk}"
+        );
+    }
+
+    #[test]
     fn profile_rename_onto_existing_name_is_rejected() {
         // Renaming `a` onto the existing `b` would clobber it — refused inline.
         let cfg = "[[fragments]]\nid = \"rc\"\nguidance = \"x\"\n\n\

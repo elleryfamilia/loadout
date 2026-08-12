@@ -2587,6 +2587,16 @@ pub fn profile_editor(
         .map(String::as_str)
         .filter(|t| !known.contains(t))
         .collect();
+    // The bound workflow may be a dangling id (the workflow that defined it
+    // was deleted, or it was hand-edited into the TOML) — the model tolerates
+    // this (doctor warns, run notes it), so the picker must too: still offer
+    // it as a genuinely-selected option instead of silently dropping it.
+    let known_workflows: std::collections::HashSet<&str> =
+        lib.workflows.iter().map(|(id, _, _)| id.as_str()).collect();
+    let extra_workflow = draft
+        .workflow
+        .as_deref()
+        .filter(|w| !known_workflows.contains(w));
     html! {
         div class="profile-editor" {
             form class="editor-form" hx-post="/profiles/preview" hx-trigger="change delay:200ms" hx-target="#editor-preview" {
@@ -2635,6 +2645,36 @@ pub fn profile_editor(
                         }
                     }
                     (inline_new_cap())
+                }
+                fieldset class="workflow-picker" {
+                    legend { "Workflow" span class="field-hint" { "the process it works by — optional, at most one" } }
+                    div class="pick-list" {
+                        label class="pick" {
+                            input type="radio" name="workflow" value="" checked[draft.workflow.is_none()];
+                            span class="pick-glyph" { (icon("power")) }
+                            span class="pick-main" { span class="pick-title" { "None" } }
+                        }
+                        @for (id, title, spine) in &lib.workflows {
+                            label class="pick" {
+                                input type="radio" name="workflow" value=(id) checked[draft.workflow.as_deref() == Some(id.as_str())];
+                                span class="pick-glyph" { (icon("git-branch")) }
+                                span class="pick-main" {
+                                    span class="pick-title" { (title) }
+                                    @if !spine.is_empty() { span class="pick-id" { (spine) } }
+                                }
+                            }
+                        }
+                        @if let Some(w) = extra_workflow {
+                            label class="pick" {
+                                input type="radio" name="workflow" value=(w) checked;
+                                span class="pick-glyph" { (icon("alert")) }
+                                span class="pick-main" {
+                                    span class="pick-title" { (w) }
+                                    span class="pick-id" { "not in your workflow catalog" }
+                                }
+                            }
+                        }
+                    }
                 }
                 fieldset class="lives-in" {
                     legend { "Where it lives" }
@@ -2963,6 +3003,76 @@ mod tests {
         let html = skill_card(&["loadout-migrate"], &[], &SkillCardState::HandsOff);
         assert!(html.contains("loadout-migrate"));
         assert!(!html.contains("hx-post=\"/skills/"));
+    }
+
+    fn empty_library() -> LibraryView {
+        LibraryView {
+            yours: vec![],
+            palette: vec![],
+            profiles: vec![],
+            targets: vec![],
+            workflows: vec![],
+        }
+    }
+
+    fn empty_preview() -> PreviewOutcome {
+        PreviewOutcome {
+            agent: String::new(),
+            context_summary: String::new(),
+            fragment_count: 0,
+            overlay: String::new(),
+            caps: vec![],
+            note: None,
+        }
+    }
+
+    #[test]
+    fn profile_editor_renders_with_no_fragments_targets_or_workflows() {
+        // An empty catalog (a fresh global config with no `[[workflows]]`, no
+        // custom targets, and no fragments yet) must not panic or render a
+        // broken workflow control — it should degrade to just the "None"
+        // option, same as the Targets/Fragments fieldsets degrade to empty
+        // lists.
+        let draft = LoadoutConfig {
+            name: "new".into(),
+            targets: vec![],
+            fragments: vec![],
+            workflow: None,
+            template: None,
+            disabled: false,
+        };
+        let html = profile_editor(&draft, true, None, &empty_library(), &empty_preview(), None);
+        assert!(html.contains("workflow-picker"));
+        assert!(html.contains(r#"input type="radio" name="workflow" value="" checked"#));
+        // No known workflows and no dangling selection → exactly the "None" row.
+        assert_eq!(html.matches(r#"name="workflow""#).count(), 1);
+    }
+
+    #[test]
+    fn profile_editor_workflow_picker_preselects_the_draft_and_keeps_a_dangling_id() {
+        let mut lib = empty_library();
+        lib.workflows = vec![
+            ("lean".into(), "Lean".into(), "plan → implement".into()),
+            ("compound".into(), "Compound".into(), "".into()),
+        ];
+        // A dangling id — no longer in the catalog — must still round-trip
+        // instead of silently vanishing from the form.
+        let draft = LoadoutConfig {
+            name: "rust".into(),
+            targets: vec![],
+            fragments: vec![],
+            workflow: Some("deleted-workflow".into()),
+            template: None,
+            disabled: false,
+        };
+        let html = profile_editor(&draft, false, Some("rust"), &lib, &empty_preview(), None);
+        assert!(html.contains(r#"value="lean""#));
+        assert!(html.contains(r#"value="compound""#));
+        assert!(html.contains(r#"value="deleted-workflow" checked"#));
+        assert!(html.contains("not in your workflow catalog"));
+        // The known options are present but not checked (the dangling id is).
+        assert!(!html.contains(r#"value="lean" checked"#));
+        assert!(!html.contains(r#"value="compound" checked"#));
     }
 
     #[test]
