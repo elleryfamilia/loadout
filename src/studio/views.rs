@@ -2613,6 +2613,12 @@ pub fn profile_editor(
                     // When editing, carry the original name as the rename key so
                     // the save can find-and-replace the right profile.
                     @if let Some(orig) = original_name { input type="hidden" name="original_name" value=(orig); }
+                    // `template` has no editor control (a rare, hand-authored
+                    // override — nobody asked to edit it here), but it must
+                    // still round-trip: carry it forward as a hidden field so
+                    // a save doesn't silently drop it, the same failure mode
+                    // `workflow` had before its picker.
+                    @if let Some(t) = &draft.template { input type="hidden" name="template" value=(t); }
                 }
                 fieldset class="targets-picker" {
                     legend { "Targets" span class="field-hint" { "applies when the repo looks like one of these" } }
