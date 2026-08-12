@@ -8,6 +8,29 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.27.0 — 2026-08-12
+
+### Added
+
+- **Pick a workflow when you create a loadout.** The New/Edit loadout form now
+  has a workflow field — optional, one at a time, and pre-selected with whatever
+  the loadout already binds. Until now the only place to equip one was the Board
+  view's "Equip a workflow" tile, so unless you created the loadout, opened it,
+  and switched views, workflows were effectively invisible.
+
+### Fixed
+
+- **Editing a loadout no longer deletes its workflow.** Saving from the editor
+  replaced the whole loadout while the form carried no workflow field, so a
+  workflow you had equipped from the Board view vanished the next time you
+  renamed the loadout or ticked one more fragment — silently, with nothing in the
+  diff to catch your eye. The form now carries the value through.
+- **Editing a loadout no longer deletes a `template` override.** The same bug on
+  a sibling field: a hand-authored `template = "…"` was dropped on the first
+  studio edit. It now survives, carried through the form. There is still no
+  visible control for it — editing templates in studio is not a thing you asked
+  for, and this is about not destroying what you wrote by hand.
+
 ## 0.26.0 — 2026-08-11
 
 ### Added
