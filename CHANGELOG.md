@@ -8,6 +8,55 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.26.0 — 2026-08-11
+
+### Added
+
+- **Config sync, set up and run from studio Settings.** Sharing one config
+  across machines no longer means a terminal. Settings grows a sync card that
+  shows where your config lives and whether it's in step with its remote, plus
+  three actions: **Sync now** (pull, resolving divergence in place, then push),
+  **Set up sync** (create the config repo — `gh` does the creating when it's
+  installed and authenticated), and **Clone an existing config** (point a new
+  machine at a repo you already have). Studio already pushed after every apply;
+  what was missing was setup, pull, and being able to see the state at all.
+  Authentication stays where it belongs: if the remote refuses, the error names
+  `gh auth login` rather than asking you for credentials.
+
+### Fixed
+
+- **Saving a config change could fail with a misleading error and save
+  nothing.** Reported as `apply failed: backing up ~/.config/loadout/config.toml`.
+  Before writing, studio snapshots a `.bak` of every file it's about to change —
+  but it put *every* layer's backup under a directory derived from studio's own
+  working directory. Your **global** config's backup location therefore depended
+  on whichever repo happened to be open, which are unrelated things. Opened from
+  the VS Code extension, studio's working directory is `/`, so the backup tried
+  to land in `/.loadout/cache/` — which macOS does not permit — and apply stops
+  on a failed backup rather than writing a config it cannot roll back. Global
+  backups now go to `~/.local/state/loadout/studio-backups`, independent of where
+  studio was launched. Not the config directory itself: `load sync` puts that
+  under git, and the `.bak` files would sync between your machines.
+- **Studio's error messages hid the actual cause.** They printed only the
+  outermost layer of an error, so the reason above surfaced as "backing up
+  <file>" instead of "Read-only file system". Settings was worse still — it
+  labelled *every* apply failure "config changed on disk", a cause it had not
+  checked. It now checks, and says so only when it's true.
+- **Studio's top bar overlapped itself in a narrow window.** Below roughly
+  1360px the tab labels and the staged-changes indicator were drawn on top of
+  each other. The bar is now responsive from 1400px down to 380px: each group
+  drops its *label* and keeps every control, so nothing is hidden behind a menu
+  and icon-only buttons keep their names for screen readers. This shows up most
+  in an IDE, where studio opens in a side pane beside a chat panel.
+- **Studio kept serving a config that a sync had replaced.** After a pull or
+  clone rewrote `config.toml`, the running studio still held the version it read
+  at startup: it rendered stale content, every later Apply failed telling you to
+  reload, and the advice to reopen studio didn't help because `load studio`
+  re-attaches to the running instance. It now reloads the session as part of the
+  sync.
+- **`load sync init` could leave a repo `gh` had already created without the
+  right author email.** The noreply address is now stamped first.
+
 ## 0.25.0 — 2026-08-10
 
 ### Added
