@@ -167,6 +167,11 @@ pub struct LibraryView {
     /// Selectable target options for the profile editor (built-ins + custom
     /// targets + the `machine` scope), in catalog order, each with its icon.
     pub targets: Vec<TargetChip>,
+    /// Selectable workflow options for the profile editor's workflow picker —
+    /// the same `(id, title, spine)` rows and the same source
+    /// ([`board_workflow_options`]) as the Board view's "Equip a workflow"
+    /// modal, so both surfaces always agree.
+    pub workflows: Vec<(String, String, String)>,
 }
 
 /// One target row for the Targets tab.
@@ -791,6 +796,7 @@ pub fn library_view(snap: &Snapshot) -> crate::Result<LibraryView> {
         palette,
         profiles,
         targets: target_options,
+        workflows: board_workflow_options(snap),
     })
 }
 
@@ -1706,7 +1712,7 @@ pub fn profile_from_form(pairs: &[(String, String)]) -> crate::Result<LoadoutCon
         name,
         targets: values_for(pairs, "targets"),
         fragments,
-        workflow: None,
+        workflow: opt(value_of(pairs, "workflow")),
         template: opt(value_of(pairs, "template")),
         disabled: value_of(pairs, "disabled").is_some(),
     })
@@ -1764,7 +1770,7 @@ pub fn draft_profile_from_form(pairs: &[(String, String)]) -> LoadoutConfig {
             .into_iter()
             .map(FragmentRef::Id)
             .collect(),
-        workflow: None,
+        workflow: opt(value_of(pairs, "workflow")),
         template: None,
         disabled: value_of(pairs, "disabled").is_some(),
     }
@@ -2011,6 +2017,49 @@ mod tests {
         assert_eq!(p.fragments.len(), 2);
         // Zero fragments is rejected (§3).
         assert!(profile_from_form(&parse_pairs("name=rust&targets=rust")).is_err());
+    }
+
+    #[test]
+    fn profile_from_form_workflow_selection() {
+        // Table: (form body, expected workflow) — a selected workflow lands on
+        // the profile; no `workflow` field at all, and an explicit empty
+        // selection (the "None" radio), both yield `None`.
+        let base = "name=rust&targets=rust&fragments=rc";
+        let cases: &[(&str, Option<&str>)] = &[
+            (base, None),
+            (&format!("{base}&workflow="), None),
+            (&format!("{base}&workflow=lean"), Some("lean")),
+        ];
+        for (body, want) in cases {
+            let p = profile_from_form(&parse_pairs(body)).unwrap();
+            assert_eq!(p.workflow.as_deref(), *want, "body: {body}");
+        }
+    }
+
+    #[test]
+    fn profile_from_form_edit_path_preserves_existing_workflow() {
+        // Regression (problem 2): `profile_from_form` used to hardcode
+        // `workflow: None`, so `handle_profile_save` — which calls this
+        // function directly on the posted form — silently dropped a workflow
+        // that was bound before the edit, with no warning. Simulating the
+        // editor's edit-mode submission (an `original_name` present) with the
+        // pre-selected workflow field carried along must round-trip it.
+        let p = profile_from_form(&parse_pairs(
+            "name=rust&original_name=rust&targets=rust&fragments=rc&workflow=lean",
+        ))
+        .unwrap();
+        assert_eq!(p.workflow.as_deref(), Some("lean"));
+    }
+
+    #[test]
+    fn draft_profile_from_form_carries_workflow() {
+        // The lenient live-preview draft must round-trip the selection too, so
+        // the preview and the re-render after a validation error don't drop it
+        // mid-edit.
+        let none = draft_profile_from_form(&parse_pairs("name=rust"));
+        assert_eq!(none.workflow, None);
+        let some = draft_profile_from_form(&parse_pairs("name=rust&workflow=lean"));
+        assert_eq!(some.workflow.as_deref(), Some("lean"));
     }
 
     #[test]
