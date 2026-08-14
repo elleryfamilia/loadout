@@ -103,6 +103,18 @@ impl CommandFormat {
         format!("{COMMAND_NAMESPACE}-")
     }
 
+    /// How a generated stage actually invokes in this agent, as a display
+    /// pattern (`<stage>` stands in for the stage name). Claude namespaces by
+    /// subdirectory, so its commands carry a colon; every other format encodes
+    /// the namespace in the name itself and carries a hyphen. Shown in the
+    /// `load run` summary, so it must match what the user can really type.
+    pub fn invocation(self) -> &'static str {
+        match self {
+            CommandFormat::Markdown => "/loadout:<stage>",
+            CommandFormat::Skill | CommandFormat::Prompt => "/loadout-<stage>",
+        }
+    }
+
     /// The placeholder this agent substitutes the user's command text into.
     /// Cursor skills have no substitution syntax — the invoking message rides
     /// along as-is, so the body just points the agent at it. VS Code prompt

@@ -311,7 +311,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
             Phase::Flow,
             Glyph::Ok,
             Some(wf.title().to_string()),
-            workflow_step_line(&p, workflow.as_ref()),
+            workflow_step_line(&p, workflow.as_ref(), &descriptor),
         ),
         None => hud.settle(Phase::Flow, Glyph::Ok, None, None),
     }
@@ -605,9 +605,22 @@ fn launch_step_line(p: &Painter, program: &str, args: &[String]) -> String {
 }
 
 /// One concise run-summary line naming the active workflow (or `None` when
-/// none is bound). Tells the user the spine is live and how to invoke a stage.
-fn workflow_step_line(p: &Painter, workflow: Option<&crate::workflow::Workflow>) -> Option<String> {
+/// none is bound). Tells the user the spine is live and how to invoke a stage
+/// **in the agent being launched** — the invocation is per-agent
+/// (`/loadout:plan` on Claude, `/loadout-plan` on Cursor and Copilot), and some
+/// agents get no command files at all and see only the `## Workflow` context
+/// section. Saying `/loadout:<stage>` unconditionally sent users hunting for a
+/// command their agent never had.
+fn workflow_step_line(
+    p: &Painter,
+    workflow: Option<&crate::workflow::Workflow>,
+    descriptor: &AgentDescriptor,
+) -> Option<String> {
     let wf = workflow?;
+    let how = match adapters::stage_invocation(descriptor) {
+        Some(invocation) => invocation.to_string(),
+        None => format!("no stage commands for {}", descriptor.id),
+    };
     Some(step(
         p,
         p.cyan("◆"),
@@ -615,7 +628,7 @@ fn workflow_step_line(p: &Painter, workflow: Option<&crate::workflow::Workflow>)
         format!(
             "{} {}",
             wf.title(),
-            p.dim(&format!("· {} stages · /loadout:<stage>", wf.stages.len()))
+            p.dim(&format!("· {} stages · {how}", wf.stages.len()))
         ),
     ))
 }
@@ -819,6 +832,41 @@ mod tests {
             out[1]
         );
         assert_eq!(out[2..], user[..]);
+    }
+
+    /// The flow line must name the invocation the *launched agent* actually
+    /// has. It used to print `/loadout:<stage>` for every agent, which is only
+    /// true for Claude — Cursor and Copilot use a hyphen, and Codex has no
+    /// stage commands at all.
+    #[test]
+    fn flow_line_states_each_agents_real_stage_invocation() {
+        let p = Painter::new(false);
+        let wf = crate::workflow::builtin_workflows()
+            .into_iter()
+            .next()
+            .expect("at least one built-in workflow");
+        let line = |id: &str| {
+            workflow_step_line(&p, Some(&wf), &descriptor(id)).expect("a bound workflow prints")
+        };
+
+        assert!(line("claude").contains("/loadout:<stage>"));
+        assert!(line("cursor").contains("/loadout-<stage>"));
+        assert!(line("copilot").contains("/loadout-<stage>"));
+
+        // No command channel → say so plainly instead of promising a command.
+        let codex = line("codex");
+        assert!(
+            codex.contains("no stage commands for codex"),
+            "codex has no commands_dir, got: {codex}"
+        );
+        assert!(!codex.contains("/loadout"));
+    }
+
+    /// No workflow bound → no flow line at all, for any agent.
+    #[test]
+    fn flow_line_absent_without_a_workflow() {
+        let p = Painter::new(false);
+        assert!(workflow_step_line(&p, None, &descriptor("claude")).is_none());
     }
 
     #[test]
