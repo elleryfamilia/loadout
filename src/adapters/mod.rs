@@ -783,17 +783,15 @@ pub fn apply(
     // importer. One file per stage, in the owned `<commands_dir>/loadout/` dir
     // or flat with a `loadout-` prefix when the dir is shared with the user.
     if let Some(wf) = workflow.as_ref() {
-        for channel in command_channels(d) {
-            if app.in_repo() && !bleeds && is_repo_relative(&channel.dir) {
-                write_stage_commands(app, d, &channel, wf, &mut files)?;
-                let (dir, fmt) = (&channel.dir, channel.format);
-                gitignore_extra.push(if fmt.owns_namespace_dir() {
-                    format!("{dir}/{}/", commands::COMMAND_NAMESPACE)
-                } else {
-                    // Shared dir: ignore only our own files, by prefix.
-                    format!("{dir}/{}*.{}", fmt.shared_dir_prefix(), fmt.ext())
-                });
-            }
+        for channel in emitted_channels(d, app.context) {
+            write_stage_commands(app, d, &channel, wf, &mut files)?;
+            let (dir, fmt) = (&channel.dir, channel.format);
+            gitignore_extra.push(if fmt.owns_namespace_dir() {
+                format!("{dir}/{}/", commands::COMMAND_NAMESPACE)
+            } else {
+                // Shared dir: ignore only our own files, by prefix.
+                format!("{dir}/{}*.{}", fmt.shared_dir_prefix(), fmt.ext())
+            });
         }
     }
 
@@ -877,7 +875,7 @@ pub fn artifacts(d: &AgentDescriptor, repo_base: &Path) -> Vec<PathBuf> {
     }
     // Generated slash commands: the owned dir, or — in a shared dir — each of
     // our own prefixed files.
-    for channel in command_channels(d) {
+    for channel in managed_channels(d, repo_base) {
         let fmt = channel.format;
         let ns = command_namespace_dir(repo_base, &channel.dir, fmt);
         if fmt.owns_namespace_dir() {
@@ -953,7 +951,7 @@ pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult
     // dir (VS Code's `.github/prompts/`) gives up only our prefixed files —
     // the dir itself and the user's own prompts stay. The agent's own
     // `<commands_dir>` (e.g. `.claude/commands/`) is left alone either way.
-    for channel in command_channels(d) {
+    for channel in managed_channels(d, app.repo_base()) {
         let fmt = channel.format;
         let ns = command_namespace_dir(app.repo_base(), &channel.dir, fmt);
         if fmt.owns_namespace_dir() {
@@ -1105,16 +1103,47 @@ fn command_channels(d: &AgentDescriptor) -> Vec<CommandChannel> {
         .collect()
 }
 
-/// How this agent invokes a generated workflow stage (`/loadout:<stage>`,
-/// `/loadout-<stage>`, `loadout-<stage> skill`), or `None` when it has no
-/// command channel at all and only ever sees the always-on `## Workflow`
-/// context section.
+/// The channels loadout may touch under `repo_base` — the destructive-safety
+/// gate, shared by writing, discovery (`artifacts`) and removal (`clean`) so
+/// those three can never disagree about which directories are loadout's to
+/// manage.
 ///
-/// Reports the first channel — the surface `load run` launches. The invocation
-/// differs per agent and is easy to state wrongly, so every user-facing mention
-/// of it should come from here rather than hardcode Claude's shape.
-pub fn stage_invocation(d: &AgentDescriptor) -> Option<&'static str> {
-    command_channels(d).first().map(|c| c.invocation)
+/// Two exclusions, both of which apply to deleting as much as to writing:
+/// `$HOME` (a global command dir like `~/.codex/skills/` bleeds into every
+/// repo, and loadout keeps its own global skill links there), and any channel
+/// that escapes the project tree. Removal used to skip both checks while
+/// writing enforced them, so `clean` could delete a directory `refresh` would
+/// have refused to create.
+fn managed_channels(d: &AgentDescriptor, repo_base: &Path) -> Vec<CommandChannel> {
+    if is_home(repo_base) {
+        return Vec::new();
+    }
+    command_channels(d)
+        .into_iter()
+        .filter(|c| is_repo_relative(&c.dir))
+        .collect()
+}
+
+/// The channels a render will actually write: [`managed_channels`] plus the
+/// requirement that we're inside a git repo at all.
+pub fn emitted_channels(d: &AgentDescriptor, ctx: &Context) -> Vec<CommandChannel> {
+    if ctx.git.is_none() {
+        return Vec::new();
+    }
+    managed_channels(d, &ctx.repo_base)
+}
+
+/// How this agent invokes a generated workflow stage (`/loadout:<stage>`,
+/// `/loadout-<stage>`, `loadout-<stage> skill`), or `None` when this render
+/// writes no stage commands for it — either the agent has no command channel
+/// and only ever sees the always-on `## Workflow` context section, or the
+/// channels it does have are gated off here (outside a repo, at `$HOME`).
+///
+/// Reports the first channel — the surface `load run` launches. Deliberately
+/// derived from the same [`emitted_channels`] the writer uses: the whole point
+/// is that what we *say* and what we *write* cannot drift apart.
+pub fn stage_invocation(d: &AgentDescriptor, ctx: &Context) -> Option<&'static str> {
+    emitted_channels(d, ctx).first().map(|c| c.invocation)
 }
 
 /// Whether `name` is a generated command file in a *shared* command dir — the
