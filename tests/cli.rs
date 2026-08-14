@@ -2545,6 +2545,52 @@ fn copilot_cli_skills_never_touch_the_users_own_project_skills() {
     assert!(!fx.exists(".github/skills/loadout"));
 }
 
+/// Writing and deleting must agree on which directories are loadout's. At
+/// `$HOME` a command dir would bleed into every repo underneath, so `refresh`
+/// refuses to write there — and `clean` must refuse to delete there too.
+/// `~/.codex/skills/` is the sharp case: loadout keeps its own global skill
+/// links in that very directory.
+#[test]
+fn clean_refuses_to_touch_command_dirs_refresh_would_not_write() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"superpowers\"\n",
+    );
+    // Something already living where codex's channel would go.
+    fx.write(
+        ".codex/skills/loadout/keep-me/SKILL.md",
+        "---\nname: keep-me\ndescription: pre-existing\n---\nkeep\n",
+    );
+
+    // `--cwd` IS `$HOME` for these two runs.
+    let at_home = || {
+        let mut c = fx.cmd();
+        c.env("HOME", fx.repo_path());
+        c
+    };
+
+    at_home()
+        .args(["refresh", "--agent", "codex"])
+        .assert()
+        .success();
+    assert!(
+        !fx.exists(".codex/skills/loadout/loadout-plan/SKILL.md"),
+        "refresh wrote a command dir at $HOME"
+    );
+
+    at_home()
+        .args(["clean", "--agent", "codex"])
+        .assert()
+        .success();
+    assert!(
+        fx.exists(".codex/skills/loadout/keep-me/SKILL.md"),
+        "clean deleted a directory refresh would have refused to create"
+    );
+}
+
 /// `load agents` lists cursor with the owned-file delivery.
 #[test]
 fn agents_lists_cursor_owned_file_delivery() {

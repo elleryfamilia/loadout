@@ -311,7 +311,7 @@ pub fn run(rt: &Runtime, args: &RunArgs) -> crate::Result<()> {
             Phase::Flow,
             Glyph::Ok,
             Some(wf.title().to_string()),
-            workflow_step_line(&p, workflow.as_ref(), &descriptor),
+            workflow_step_line(&p, workflow.as_ref(), &descriptor, &prep.context),
         ),
         None => hud.settle(Phase::Flow, Glyph::Ok, None, None),
     }
@@ -607,17 +607,20 @@ fn launch_step_line(p: &Painter, program: &str, args: &[String]) -> String {
 /// One concise run-summary line naming the active workflow (or `None` when
 /// none is bound). Tells the user the spine is live and how to invoke a stage
 /// **in the agent being launched** — the invocation is per-agent
-/// (`/loadout:plan` on Claude, `/loadout-plan` on Cursor and Copilot), and some
-/// agents get no command files at all and see only the `## Workflow` context
-/// section. Saying `/loadout:<stage>` unconditionally sent users hunting for a
-/// command their agent never had.
+/// (`/loadout:plan` on Claude, `/loadout-plan` on Cursor, a named skill on
+/// Codex and the Copilot CLI), and a stage command may not exist at all: the
+/// agent may have no channel, or this render may be gated (outside a git repo,
+/// or at `$HOME`). Saying `/loadout:<stage>` unconditionally sent users hunting
+/// for a command their agent never had, so the invocation is read from the same
+/// `emitted_channels` the writer uses rather than from the descriptor alone.
 fn workflow_step_line(
     p: &Painter,
     workflow: Option<&crate::workflow::Workflow>,
     descriptor: &AgentDescriptor,
+    ctx: &Context,
 ) -> Option<String> {
     let wf = workflow?;
-    let how = match adapters::stage_invocation(descriptor) {
+    let how = match adapters::stage_invocation(descriptor, ctx) {
         Some(invocation) => invocation.to_string(),
         None => format!("no stage commands for {}", descriptor.id),
     };
@@ -834,19 +837,36 @@ mod tests {
         assert_eq!(out[2..], user[..]);
     }
 
+    /// A `Context` inside a git repo — stage commands are only ever written
+    /// there, so the flow line only names an invocation there.
+    fn in_repo_context() -> Context {
+        let mut ctx = prepared().context;
+        ctx.git = Some(crate::context::GitContext {
+            root: PathBuf::from("/repo"),
+            branch: Some("main".to_string()),
+            remotes: Vec::new(),
+            is_worktree: false,
+        });
+        ctx
+    }
+
+    fn a_workflow() -> crate::workflow::Workflow {
+        crate::workflow::builtin_workflows()
+            .into_iter()
+            .next()
+            .expect("at least one built-in workflow")
+    }
+
     /// The flow line must name the invocation the *launched agent* actually
     /// has. It used to print `/loadout:<stage>` for every agent, which is only
     /// true for Claude — Cursor uses a hyphen, and Codex and the Copilot CLI
     /// load a named skill that never appears in a slash menu.
     #[test]
     fn flow_line_states_each_agents_real_stage_invocation() {
-        let p = Painter::new(false);
-        let wf = crate::workflow::builtin_workflows()
-            .into_iter()
-            .next()
-            .expect("at least one built-in workflow");
+        let (p, wf, ctx) = (Painter::new(false), a_workflow(), in_repo_context());
         let line = |id: &str| {
-            workflow_step_line(&p, Some(&wf), &descriptor(id)).expect("a bound workflow prints")
+            workflow_step_line(&p, Some(&wf), &descriptor(id), &ctx)
+                .expect("a bound workflow prints")
         };
 
         assert!(line("claude").contains("/loadout:<stage>"));
@@ -867,24 +887,41 @@ mod tests {
     /// An agent with no command channel at all must not be promised one.
     #[test]
     fn flow_line_says_so_when_an_agent_has_no_stage_commands() {
-        let p = Painter::new(false);
-        let wf = crate::workflow::builtin_workflows()
-            .into_iter()
-            .next()
-            .expect("at least one built-in workflow");
+        let (p, wf, ctx) = (Painter::new(false), a_workflow(), in_repo_context());
         let d = descriptor("opencode");
-        assert!(adapters::stage_invocation(&d).is_none());
+        assert!(adapters::stage_invocation(&d, &ctx).is_none());
 
-        let got = workflow_step_line(&p, Some(&wf), &d).expect("a bound workflow prints");
+        let got = workflow_step_line(&p, Some(&wf), &d, &ctx).expect("a bound workflow prints");
         assert!(got.contains("no stage commands for opencode"), "got: {got}");
         assert!(!got.contains("/loadout"));
+    }
+
+    /// Outside a git repo `apply` writes no command files at all, so the line
+    /// must not name an invocation there either. Saying what we don't do is the
+    /// same bug this line was fixed for, one scenario over.
+    #[test]
+    fn flow_line_promises_nothing_outside_a_git_repo() {
+        let (p, wf) = (Painter::new(false), a_workflow());
+        let ctx = prepared().context; // git: None
+        for id in ["claude", "codex", "copilot", "cursor"] {
+            let d = descriptor(id);
+            assert!(
+                adapters::stage_invocation(&d, &ctx).is_none(),
+                "{id} must promise nothing outside a repo"
+            );
+            let got = workflow_step_line(&p, Some(&wf), &d, &ctx).expect("workflow still prints");
+            assert!(
+                got.contains(&format!("no stage commands for {id}")),
+                "got: {got}"
+            );
+        }
     }
 
     /// No workflow bound → no flow line at all, for any agent.
     #[test]
     fn flow_line_absent_without_a_workflow() {
         let p = Painter::new(false);
-        assert!(workflow_step_line(&p, None, &descriptor("claude")).is_none());
+        assert!(workflow_step_line(&p, None, &descriptor("claude"), &in_repo_context()).is_none());
     }
 
     #[test]

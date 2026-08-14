@@ -267,6 +267,18 @@ Every stage directory above is loadout-owned and gitignored. Codex and the
 Copilot CLI surface a stage as a named skill rather than a slash command, so you
 ask for it by name; the others are real slash commands.
 
+**An `[[agents]]` override replaces a built-in descriptor whole.** It does not
+merge field by field. Two consequences worth knowing before you write one:
+
+- The built-in command channels are dropped. If you override `copilot` just to
+  change `launch`, it stops writing both its CLI skills and its VS Code prompts
+  until you add a `commands_dir` back. `commands_dir` declares one channel, so
+  an override cannot reproduce Copilot's two.
+- Stage files written before the override took effect are no longer in any
+  channel loadout knows about, so `clean` won't find them. Remove the override,
+  run `load clean --agent <id>`, then put it back — or delete the directory by
+  hand.
+
 ## `[host_classes]` (implemented; keep mappings private)
 
 Maps hostname globs (`*`/`?`) to a class you reference in rules
