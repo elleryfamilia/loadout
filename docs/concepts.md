@@ -84,12 +84,29 @@ every agent the same way a loadout carries your context. Where a loadout answers
 *"what context applies here?"*, a workflow answers *"what's the process for doing
 the work?"*
 
-**One fixed command spine.** loadout always exposes the same six slash commands
-to your agent — `/loadout:explore`, `/loadout:brainstorm`, `/loadout:plan`,
-`/loadout:implement`, `/loadout:verify`, `/loadout:ship`. Picking a workflow does
-**not** add or rename commands; it changes what each step *means*. "Plan
-spec-first" and "plan compound-style" are the same `/loadout:plan` command
-carrying different instructions.
+**One fixed command spine.** loadout always exposes the same six steps to your
+agent — explore, brainstorm, plan, implement, verify, ship. Picking a workflow
+does **not** add or rename them; it changes what each step *means*. "Plan
+spec-first" and "plan compound-style" are the same plan step carrying different
+instructions.
+
+How you reach a step depends on the agent, because each one discovers commands
+its own way. `load run` prints the right form for the agent it launches:
+
+| Agent | Written as | Reached by |
+| --- | --- | --- |
+| Claude Code | `.claude/commands/loadout/plan.md` | `/loadout:plan` |
+| Cursor | `.cursor/skills/loadout/loadout-plan/SKILL.md` | `/loadout-plan` |
+| Copilot (VS Code) | `.github/prompts/loadout-plan.prompt.md` | `/loadout-plan` |
+| Copilot (CLI) | `.github/skills/loadout/loadout-plan/SKILL.md` | the `loadout-plan` skill, by name |
+| Codex | `.codex/skills/loadout/loadout-plan/SKILL.md` | the `loadout-plan` skill, by name |
+| opencode, generic | — | context section only |
+
+Codex and the Copilot CLI load a skill from its description rather than from a
+slash menu, so you ask for it by name ("use the loadout-plan skill") or let the
+agent pick it up. Every one of these directories is loadout-owned and
+gitignored; neither CLI filters its skill discovery by gitignore (verified
+against codex-cli 0.146.0 and the Copilot CLI).
 
 - A workflow is an ordered list of **stages**, each a free-form `name` plus a
   short `purpose`. Each stage maps onto one of the six canonical slots by its
@@ -252,7 +269,8 @@ a committed, shared instruction file** (`AGENTS.md`,
 content in a shared file.
 
 Built-ins: `claude` (import), `codex` (auto `AGENTS.override.md` merge,
-`--no-override` to skip), `copilot` (owned, gitignored
+`--no-override` to skip; workflow stages land as project skills in
+`.codex/skills/loadout/`), `copilot` (owned, gitignored
 `.github/instructions/loadout.instructions.md` wires VS Code's Copilot Chat;
 `load run` also sets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → the gitignored
 overlay for the CLI, which can't see that owned file), `cursor` (owned
@@ -260,12 +278,15 @@ overlay for the CLI, which can't see that owned file), `cursor` (owned
 `cursor-agent` CLI — plus a user-level `sessionStart` hook in `~/.cursor/hooks.json`
 that keeps repos fresh — and auto-adopts a git repo some loadout applies to on
 first open, no prior `load refresh` needed — since IDE sessions never pass
-through `load run`; workflow commands land as Cursor Skills,
-`.cursor/skills/loadout/loadout-<slot>/SKILL.md`, invoked `/loadout-<slot>`
-rather than `/loadout:<slot>`),
-`opencode` (registers
+through `load run`), `opencode` (registers
 the overlay path in `~/.config/opencode/opencode.json` `instructions`), `generic`
 (emit-only). All overridable / extendable via `[[agents]]`.
+
+An agent can have more than one **command channel** when its surfaces read
+different directories. Copilot is the case: the CLI reads `.github/skills/` and
+has no notion of prompt files at all, while VS Code reads `.github/prompts/`, so
+loadout writes both. Channels are built-in descriptor data; an `[[agents]]`
+override declares a single channel with `commands_dir` / `command_format`.
 
 ## Freshness **(implemented)**
 

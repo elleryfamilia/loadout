@@ -2417,6 +2417,134 @@ fn cursor_workflow_generates_skills() {
     assert!(!fx.exists(".cursor/skills/loadout"));
 }
 
+/// Codex reads project skills from `<repo>/.codex/skills/**/SKILL.md` — the
+/// same folder-per-stage layout as Cursor, in an owned `loadout/` namespace.
+/// Verified live against codex-cli 0.146.0 (`codex debug prompt-input` lists
+/// the skill, and gitignoring the dir does not hide it), which is why loadout
+/// can own a gitignored subdir here at all.
+#[test]
+fn codex_workflow_generates_project_skills() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\
+         \n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"superpowers\"\n",
+    );
+    fx.git_init();
+
+    fx.cmd()
+        .args(["refresh", "--agent", "codex"])
+        .assert()
+        .success();
+
+    for stage in ["brainstorm", "plan", "implement", "verify", "ship"] {
+        let p = format!(".codex/skills/loadout/loadout-{stage}/SKILL.md");
+        assert!(fx.exists(&p), "missing {p}");
+    }
+    let skill = fx.read(".codex/skills/loadout/loadout-plan/SKILL.md");
+    assert!(skill.contains("name: loadout-plan"));
+    assert!(skill.contains("$LOADOUT_PLAN_PATH"));
+    assert!(fx.read(".gitignore").contains(".codex/skills/loadout/"));
+
+    // The overlay channel still works alongside it.
+    assert!(fx.exists("AGENTS.override.md"));
+
+    // clean removes the whole owned namespace dir, leaving `.codex/skills/`
+    // (where loadout also symlinks its global skills) alone.
+    fx.cmd()
+        .args(["clean", "--agent", "codex"])
+        .assert()
+        .success();
+    assert!(!fx.exists(".codex/skills/loadout"));
+}
+
+/// Copilot is one descriptor over two surfaces that read different directories:
+/// the CLI reads `.github/skills/` (it has no notion of prompt files at all),
+/// VS Code reads `.github/prompts/`. Both channels must be written, gitignored
+/// by their own ownership rule, and removed by `clean`.
+#[test]
+fn copilot_writes_both_the_cli_skill_and_vs_code_prompt_channels() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"superpowers\"\n",
+    );
+
+    fx.cmd()
+        .args(["refresh", "--agent", "copilot"])
+        .assert()
+        .success();
+
+    for stage in ["brainstorm", "plan", "implement", "verify", "ship"] {
+        let cli = format!(".github/skills/loadout/loadout-{stage}/SKILL.md");
+        let ide = format!(".github/prompts/loadout-{stage}.prompt.md");
+        assert!(fx.exists(&cli), "missing CLI channel {cli}");
+        assert!(fx.exists(&ide), "missing VS Code channel {ide}");
+    }
+
+    // Each channel carries its own format's frontmatter.
+    assert!(fx
+        .read(".github/skills/loadout/loadout-plan/SKILL.md")
+        .contains("name: loadout-plan"));
+    assert!(fx
+        .read(".github/prompts/loadout-plan.prompt.md")
+        .starts_with("---\nmode: agent\n"));
+
+    // Owned dir ignored whole; shared dir ignored by prefix only.
+    let ignore = fx.read(".gitignore");
+    assert!(ignore.contains(".github/skills/loadout/"));
+    assert!(ignore.contains(".github/prompts/loadout-*.prompt.md"));
+
+    fx.cmd()
+        .args(["clean", "--agent", "copilot"])
+        .assert()
+        .success();
+    assert!(!fx.exists(".github/skills/loadout"));
+    assert!(!fx.exists(".github/prompts/loadout-plan.prompt.md"));
+}
+
+/// `.github/skills/` is a shared discovery location for the Copilot CLI —
+/// loadout owns only its `loadout/` subdir and must leave the user's own
+/// project skills untouched by pruning and by `clean`.
+#[test]
+fn copilot_cli_skills_never_touch_the_users_own_project_skills() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"superpowers\"\n",
+    );
+    fx.write(
+        ".github/skills/my-own/SKILL.md",
+        "---\nname: my-own\ndescription: mine\n---\nmine\n",
+    );
+
+    for _ in 0..2 {
+        fx.cmd()
+            .args(["refresh", "--agent", "copilot"])
+            .assert()
+            .success();
+        assert_eq!(
+            fx.read(".github/skills/my-own/SKILL.md"),
+            "---\nname: my-own\ndescription: mine\n---\nmine\n"
+        );
+    }
+
+    fx.cmd()
+        .args(["clean", "--agent", "copilot"])
+        .assert()
+        .success();
+    assert!(
+        fx.exists(".github/skills/my-own/SKILL.md"),
+        "clean removed a project skill loadout does not own"
+    );
+    assert!(!fx.exists(".github/skills/loadout"));
+}
+
 /// `load agents` lists cursor with the owned-file delivery.
 #[test]
 fn agents_lists_cursor_owned_file_delivery() {

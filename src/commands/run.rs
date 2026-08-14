@@ -836,8 +836,8 @@ mod tests {
 
     /// The flow line must name the invocation the *launched agent* actually
     /// has. It used to print `/loadout:<stage>` for every agent, which is only
-    /// true for Claude — Cursor and Copilot use a hyphen, and Codex has no
-    /// stage commands at all.
+    /// true for Claude — Cursor uses a hyphen, and Codex and the Copilot CLI
+    /// load a named skill that never appears in a slash menu.
     #[test]
     fn flow_line_states_each_agents_real_stage_invocation() {
         let p = Painter::new(false);
@@ -851,15 +851,33 @@ mod tests {
 
         assert!(line("claude").contains("/loadout:<stage>"));
         assert!(line("cursor").contains("/loadout-<stage>"));
-        assert!(line("copilot").contains("/loadout-<stage>"));
 
-        // No command channel → say so plainly instead of promising a command.
-        let codex = line("codex");
-        assert!(
-            codex.contains("no stage commands for codex"),
-            "codex has no commands_dir, got: {codex}"
-        );
-        assert!(!codex.contains("/loadout"));
+        // `load run` launches the CLI for both, so the CLI's skill channel is
+        // what the line names — not Copilot's VS Code prompt files.
+        for id in ["codex", "copilot"] {
+            let got = line(id);
+            assert!(
+                got.contains("loadout-<stage> skill"),
+                "{id} loads stages as a named skill, got: {got}"
+            );
+            assert!(!got.contains('/'), "{id} has no slash command, got: {got}");
+        }
+    }
+
+    /// An agent with no command channel at all must not be promised one.
+    #[test]
+    fn flow_line_says_so_when_an_agent_has_no_stage_commands() {
+        let p = Painter::new(false);
+        let wf = crate::workflow::builtin_workflows()
+            .into_iter()
+            .next()
+            .expect("at least one built-in workflow");
+        let d = descriptor("opencode");
+        assert!(adapters::stage_invocation(&d).is_none());
+
+        let got = workflow_step_line(&p, Some(&wf), &d).expect("a bound workflow prints");
+        assert!(got.contains("no stage commands for opencode"), "got: {got}");
+        assert!(!got.contains("/loadout"));
     }
 
     /// No workflow bound → no flow line at all, for any agent.
