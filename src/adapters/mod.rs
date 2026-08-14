@@ -977,6 +977,18 @@ fn command_format(d: &AgentDescriptor) -> commands::CommandFormat {
         .unwrap_or(commands::CommandFormat::Markdown)
 }
 
+/// How this agent invokes a generated workflow stage (`/loadout:<stage>`,
+/// `/loadout-<stage>`, …), or `None` when it has no command channel at all and
+/// only ever sees the always-on `## Workflow` context section.
+///
+/// The invocation differs per agent and is easy to state wrongly, so every
+/// user-facing mention of it should come from here rather than hardcode
+/// Claude's shape.
+pub fn stage_invocation(d: &AgentDescriptor) -> Option<&'static str> {
+    d.commands_dir.as_ref()?;
+    Some(command_format(d).invocation())
+}
+
 /// Whether `name` is a generated command file in a *shared* command dir — the
 /// only entries loadout may prune or remove there.
 fn is_generated_shared_command(name: &str, format: commands::CommandFormat) -> bool {
