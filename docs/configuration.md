@@ -254,14 +254,18 @@ wire_hint = "include .loadout/generated/opencode.md from your agent config"
 
 Built-in defaults:
 
-| id | generated file | wiring | launch |
-| --- | --- | --- | --- |
-| `claude` | `claude.md` | import → `CLAUDE.local.md` | `claude` |
-| `codex` | `agents.md` | auto → gitignored `AGENTS.override.md` (Codex prefers it); `--no-override` = emit-only | `codex` |
-| `opencode` | `opencode.md` | registers overlay path in `~/.config/opencode/opencode.json` `instructions` | `opencode` |
-| `copilot` | `copilot/.github/instructions/loadout.instructions.md` | owned file → gitignored `.github/instructions/loadout.instructions.md` (`applyTo: '**'`, wires VS Code's Copilot Chat) + `load run` sets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → `.loadout/generated/copilot` for the CLI | `copilot` |
-| `cursor` | `cursor.md` | owned file → gitignored `.cursor/rules/loadout.mdc` (`alwaysApply` rule, IDE + CLI) + `sessionStart` hook in `~/.cursor/hooks.json` for IDE freshness | `cursor-agent` |
-| `generic` | `generic.md` | emit-only | — |
+| id | generated file | wiring | workflow stages | launch |
+| --- | --- | --- | --- | --- |
+| `claude` | `claude.md` | import → `CLAUDE.local.md` | `.claude/commands/loadout/` → `/loadout:<slot>` | `claude` |
+| `codex` | `agents.md` | auto → gitignored `AGENTS.override.md` (Codex prefers it); `--no-override` = emit-only | `.codex/skills/loadout/` → `loadout-<slot>` skill | `codex` |
+| `opencode` | `opencode.md` | registers overlay path in `~/.config/opencode/opencode.json` `instructions` | — (context section only) | `opencode` |
+| `copilot` | `copilot/.github/instructions/loadout.instructions.md` | owned file → gitignored `.github/instructions/loadout.instructions.md` (`applyTo: '**'`, wires VS Code's Copilot Chat) + `load run` sets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` → `.loadout/generated/copilot` for the CLI | `.github/skills/loadout/` → `loadout-<slot>` skill (CLI); `.github/prompts/loadout-<slot>.prompt.md` → `/loadout-<slot>` (VS Code) | `copilot` |
+| `cursor` | `cursor.md` | owned file → gitignored `.cursor/rules/loadout.mdc` (`alwaysApply` rule, IDE + CLI) + `sessionStart` hook in `~/.cursor/hooks.json` for IDE freshness | `.cursor/skills/loadout/` → `/loadout-<slot>` | `cursor-agent` |
+| `generic` | `generic.md` | emit-only | — (context section only) | — |
+
+Every stage directory above is loadout-owned and gitignored. Codex and the
+Copilot CLI surface a stage as a named skill rather than a slash command, so you
+ask for it by name; the others are real slash commands.
 
 ## `[host_classes]` (implemented; keep mappings private)
 

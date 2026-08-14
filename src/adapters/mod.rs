@@ -126,6 +126,22 @@ pub struct AgentDescriptor {
     /// set; defaults to markdown.
     #[serde(default)]
     pub command_format: Option<commands::CommandFormat>,
+    /// Every command channel this agent has, when one directory isn't enough.
+    /// Copilot is the case that forced it: its IDE and its CLI read *different*
+    /// directories in different formats (`.github/prompts` vs `.github/skills`),
+    /// and one descriptor covers both surfaces.
+    ///
+    /// Built-in descriptor data only — deliberately NOT part of the `[[agents]]`
+    /// config schema (`deny_unknown_fields` still rejects it there), so a
+    /// newer-written, synced config can never brick an older binary. The same
+    /// reasoning as `review_commands`.
+    ///
+    /// When non-empty this **replaces** `commands_dir`/`command_format`, which
+    /// then exist purely so a user's `[[agents]]` override can declare a single
+    /// channel by hand. The first entry is the surface `load run` launches, so
+    /// it's the one the run summary names.
+    #[serde(skip)]
+    pub command_channels: Vec<CommandChannel>,
     /// Native review commands to run during the verify stage (e.g. Claude
     /// Code's `/code-review`, `/security-review`). Built-in descriptor data
     /// only — deliberately NOT part of the `[[agents]]` config schema
@@ -138,6 +154,53 @@ pub struct AgentDescriptor {
 fn default_template() -> String {
     "overlay".to_string()
 }
+
+/// One directory an agent reads generated workflow-stage commands from, in one
+/// on-disk format. Most agents have exactly one; Copilot has two (IDE + CLI).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandChannel {
+    /// Project-relative directory the agent scans (e.g. `.claude/commands`).
+    pub dir: String,
+    /// On-disk shape of the files written there.
+    pub format: commands::CommandFormat,
+    /// How a user actually reaches a generated stage through this channel,
+    /// with `<stage>` standing in for the stage name.
+    ///
+    /// This is per-channel, not per-format, because the same on-disk shape
+    /// surfaces differently per agent: a Cursor skill is a real slash command
+    /// (`/loadout-plan`), while a Codex or Copilot CLI skill is loaded by name
+    /// from its description and never appears in a slash menu.
+    pub invocation: &'static str,
+}
+
+impl CommandChannel {
+    /// A channel whose invocation is the format's default — used for a channel
+    /// a user declared by hand via `commands_dir` in `[[agents]]`.
+    fn new(dir: impl Into<String>, format: commands::CommandFormat) -> Self {
+        Self {
+            dir: dir.into(),
+            format,
+            invocation: format.invocation(),
+        }
+    }
+
+    /// A channel that states its own invocation (built-in descriptors).
+    fn invoked_as(
+        dir: impl Into<String>,
+        format: commands::CommandFormat,
+        invocation: &'static str,
+    ) -> Self {
+        Self {
+            dir: dir.into(),
+            format,
+            invocation,
+        }
+    }
+}
+
+/// Display pattern for a stage loaded by name rather than typed as a command —
+/// Codex and the Copilot CLI both work this way.
+const NAMED_SKILL: &str = "loadout-<stage> skill";
 
 /// How to register an [`AgentDescriptor::importer`]'s filename in an agent's own
 /// settings file so the agent actually loads it. The settings file is resolved
@@ -234,6 +297,7 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             launch_context_dir: None,
             commands_dir: None,
             command_format: None,
+            command_channels: Vec::new(),
             review_commands: Vec::new(),
         }
     }
@@ -245,7 +309,10 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             append_prompt_flag: Some("--append-system-prompt".into()),
             // Claude reads project commands from `.claude/commands/`; a `loadout/`
             // subdir namespaces them as `/loadout:<stage>`.
-            commands_dir: Some(".claude/commands".into()),
+            command_channels: vec![CommandChannel::new(
+                ".claude/commands",
+                commands::CommandFormat::Markdown,
+            )],
             review_commands: vec!["/code-review".into(), "/security-review".into()],
             ..d("claude", "claude.md")
         },
@@ -254,6 +321,23 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             launch: Some("codex".into()),
             override_target: Some("AGENTS.override.md".into()),
             override_base: Some("AGENTS.md".into()),
+            // Codex scans `<repo>/.codex/skills/**/SKILL.md` for project skills
+            // — verified live against codex-cli 0.146.0 with `codex debug
+            // prompt-input`, which renders the model-visible prompt without an
+            // API call: a probe skill appears there, nested one level under a
+            // `loadout/` dir appears too, and — unlike Copilot's
+            // `.github/instructions` — discovery is NOT gitignore-filtered, so
+            // a gitignored, loadout-owned `loadout/` subdir is read normally.
+            //
+            // That makes the ownership model identical to Cursor's: same
+            // `CommandFormat::Skill` layout, same owned namespace dir. A Codex
+            // skill isn't a slash command though — it's listed to the model with
+            // its description and loaded by name — hence `NAMED_SKILL`.
+            command_channels: vec![CommandChannel::invoked_as(
+                ".codex/skills",
+                commands::CommandFormat::Skill,
+                NAMED_SKILL,
+            )],
             wire_hint: Some(
                 "override writing is OFF — Codex won't see this overlay (it only reads \
                  AGENTS.md). Drop --no-override (or set [codex] write_override = true) to \
@@ -316,17 +400,38 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             ),
             launch_context_dir_env: Some("COPILOT_CUSTOM_INSTRUCTIONS_DIRS".into()),
             launch_context_dir: Some("copilot".into()),
-            // Workflow stages as VS Code prompt files: `.github/prompts` is a
-            // default discovery location, and a `<name>.prompt.md` there is
-            // invocable as `/<name>` in Copilot Chat. Unlike the instructions
-            // above, prompt discovery does NOT recurse into subdirectories
-            // (verified live), so these land flat in a dir the user also owns
-            // — hence `CommandFormat::Prompt`'s `loadout-` prefix ownership,
-            // which keeps pruning and `clean` off the user's own prompts.
-            // Gitignore-filtering doesn't apply either way, so ours stay
-            // gitignored by prefix.
-            commands_dir: Some(".github/prompts".into()),
-            command_format: Some(commands::CommandFormat::Prompt),
+            // Two command channels, because the two surfaces read different
+            // directories in different formats. CLI first: that's what
+            // `load run copilot` launches, so it's the invocation the run
+            // summary names.
+            //
+            // 1. Copilot CLI reads project skills from `.github/skills/`
+            //    (its own `copilot skill --help` documents `.github/skills/`,
+            //    `.agents/skills/`, `.claude/skills/`; verified live with
+            //    `copilot skill list`, which finds a probe both flat and nested
+            //    under a `loadout/` dir). Discovery is NOT gitignore-filtered —
+            //    unlike this agent's `.github/instructions` discovery above —
+            //    so the owned `loadout/` subdir works gitignored. The CLI never
+            //    reads `.github/prompts`: no reference to prompt files exists
+            //    anywhere in its bundle. A skill there is loaded by name from
+            //    its description, not typed as a command, hence `NAMED_SKILL`.
+            //
+            // 2. VS Code (Copilot Chat) reads `.github/prompts`, a default
+            //    discovery location where a `<name>.prompt.md` is invocable as
+            //    `/<name>`. Prompt discovery does NOT recurse into
+            //    subdirectories (verified live), so these land flat in a dir the
+            //    user also owns — hence `CommandFormat::Prompt`'s `loadout-`
+            //    prefix ownership, which keeps pruning and `clean` off the
+            //    user's own prompts. Gitignore-filtering doesn't apply here
+            //    either, so ours stay gitignored by prefix.
+            command_channels: vec![
+                CommandChannel::invoked_as(
+                    ".github/skills",
+                    commands::CommandFormat::Skill,
+                    NAMED_SKILL,
+                ),
+                CommandChannel::new(".github/prompts", commands::CommandFormat::Prompt),
+            ],
             wire_hint: Some(
                 "VS Code reads the gitignored .github/instructions/loadout.instructions.md; \
                  `load run copilot` wires the CLI via COPILOT_CUSTOM_INSTRUCTIONS_DIRS."
@@ -372,9 +477,13 @@ pub fn builtin_agents() -> Vec<AgentDescriptor> {
             // Cursor Skills: `.cursor/skills/<category>/<skill>/SKILL.md` — the
             // leaf folder names the skill (the category above it doesn't), so
             // loadout owns `.cursor/skills/loadout/` whole and the stages
-            // invoke as `/loadout-<stage>`.
-            commands_dir: Some(".cursor/skills".into()),
-            command_format: Some(commands::CommandFormat::Skill),
+            // invoke as `/loadout-<stage>`. Cursor is the one agent whose skills
+            // *are* real slash commands, so it keeps the format's default
+            // invocation rather than `NAMED_SKILL`.
+            command_channels: vec![CommandChannel::new(
+                ".cursor/skills",
+                commands::CommandFormat::Skill,
+            )],
             ..d("cursor", "cursor.md")
         },
         AgentDescriptor {
@@ -673,16 +782,18 @@ pub fn apply(
     // dir (`~/.claude/commands/`) would bleed into every repo, exactly like an
     // importer. One file per stage, in the owned `<commands_dir>/loadout/` dir
     // or flat with a `loadout-` prefix when the dir is shared with the user.
-    if let (Some(commands_dir), Some(wf)) = (&d.commands_dir, workflow.as_ref()) {
-        if app.in_repo() && !bleeds && is_repo_relative(commands_dir) {
-            write_stage_commands(app, d, commands_dir, wf, &mut files)?;
-            let fmt = command_format(d);
-            gitignore_extra.push(if fmt.owns_namespace_dir() {
-                format!("{commands_dir}/{}/", commands::COMMAND_NAMESPACE)
-            } else {
-                // Shared dir: ignore only our own files, by prefix.
-                format!("{commands_dir}/{}*.{}", fmt.shared_dir_prefix(), fmt.ext())
-            });
+    if let Some(wf) = workflow.as_ref() {
+        for channel in command_channels(d) {
+            if app.in_repo() && !bleeds && is_repo_relative(&channel.dir) {
+                write_stage_commands(app, d, &channel, wf, &mut files)?;
+                let (dir, fmt) = (&channel.dir, channel.format);
+                gitignore_extra.push(if fmt.owns_namespace_dir() {
+                    format!("{dir}/{}/", commands::COMMAND_NAMESPACE)
+                } else {
+                    // Shared dir: ignore only our own files, by prefix.
+                    format!("{dir}/{}*.{}", fmt.shared_dir_prefix(), fmt.ext())
+                });
+            }
         }
     }
 
@@ -766,9 +877,9 @@ pub fn artifacts(d: &AgentDescriptor, repo_base: &Path) -> Vec<PathBuf> {
     }
     // Generated slash commands: the owned dir, or — in a shared dir — each of
     // our own prefixed files.
-    if let Some(commands_dir) = &d.commands_dir {
-        let fmt = command_format(d);
-        let ns = command_namespace_dir(repo_base, commands_dir, fmt);
+    for channel in command_channels(d) {
+        let fmt = channel.format;
+        let ns = command_namespace_dir(repo_base, &channel.dir, fmt);
         if fmt.owns_namespace_dir() {
             if ns.exists() {
                 out.push(ns);
@@ -842,9 +953,9 @@ pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult
     // dir (VS Code's `.github/prompts/`) gives up only our prefixed files —
     // the dir itself and the user's own prompts stay. The agent's own
     // `<commands_dir>` (e.g. `.claude/commands/`) is left alone either way.
-    if let Some(commands_dir) = &d.commands_dir {
-        let fmt = command_format(d);
-        let ns = command_namespace_dir(app.repo_base(), commands_dir, fmt);
+    for channel in command_channels(d) {
+        let fmt = channel.format;
+        let ns = command_namespace_dir(app.repo_base(), &channel.dir, fmt);
         if fmt.owns_namespace_dir() {
             if ns.exists() {
                 if !dry {
@@ -977,16 +1088,33 @@ fn command_format(d: &AgentDescriptor) -> commands::CommandFormat {
         .unwrap_or(commands::CommandFormat::Markdown)
 }
 
-/// How this agent invokes a generated workflow stage (`/loadout:<stage>`,
-/// `/loadout-<stage>`, …), or `None` when it has no command channel at all and
-/// only ever sees the always-on `## Workflow` context section.
+/// Every command channel this agent has, in launch order. Built-in
+/// `command_channels` win; otherwise a user's `[[agents]]` override may declare
+/// a single channel via `commands_dir`/`command_format`. Empty means the agent
+/// gets the `## Workflow` context section and nothing else.
 ///
-/// The invocation differs per agent and is easy to state wrongly, so every
-/// user-facing mention of it should come from here rather than hardcode
-/// Claude's shape.
+/// The single place these two spellings are reconciled — every consumer
+/// (`apply`, `artifacts`, `clean`, the run summary) goes through here.
+fn command_channels(d: &AgentDescriptor) -> Vec<CommandChannel> {
+    if !d.command_channels.is_empty() {
+        return d.command_channels.clone();
+    }
+    d.commands_dir
+        .iter()
+        .map(|dir| CommandChannel::new(dir.clone(), command_format(d)))
+        .collect()
+}
+
+/// How this agent invokes a generated workflow stage (`/loadout:<stage>`,
+/// `/loadout-<stage>`, `loadout-<stage> skill`), or `None` when it has no
+/// command channel at all and only ever sees the always-on `## Workflow`
+/// context section.
+///
+/// Reports the first channel — the surface `load run` launches. The invocation
+/// differs per agent and is easy to state wrongly, so every user-facing mention
+/// of it should come from here rather than hardcode Claude's shape.
 pub fn stage_invocation(d: &AgentDescriptor) -> Option<&'static str> {
-    d.commands_dir.as_ref()?;
-    Some(command_format(d).invocation())
+    command_channels(d).first().map(|c| c.invocation)
 }
 
 /// Whether `name` is a generated command file in a *shared* command dir — the
@@ -1014,14 +1142,12 @@ fn is_repo_relative(dir: &str) -> bool {
 fn write_stage_commands(
     app: &AppContext,
     d: &AgentDescriptor,
-    commands_dir: &str,
+    channel: &CommandChannel,
     wf: &Workflow,
     files: &mut Vec<WrittenFile>,
 ) -> crate::Result<()> {
-    let format = d
-        .command_format
-        .unwrap_or(commands::CommandFormat::Markdown);
-    let ns_dir = command_namespace_dir(app.repo_base(), commands_dir, format);
+    let format = channel.format;
+    let ns_dir = command_namespace_dir(app.repo_base(), &channel.dir, format);
     let generated = commands::stage_commands(wf, format, &d.review_commands);
     // A command's top-level entry in the namespace dir: the file itself, or —
     // for folder-shaped formats (Cursor skills' `loadout-plan/SKILL.md`) — the
