@@ -2596,6 +2596,7 @@ fn clean_refuses_to_touch_command_dirs_refresh_would_not_write() {
 /// the lexical `is_repo_relative` check, so without resolving the path loadout
 /// would prune "stale" entries through the link — deleting the target's real
 /// contents — and then write stage files there.
+#[cfg(unix)]
 #[test]
 fn a_symlinked_command_dir_cannot_escape_the_repo() {
     let fx = Fixture::new();
@@ -2645,6 +2646,7 @@ fn a_symlinked_command_dir_cannot_escape_the_repo() {
 /// The escape guard must not break the ordinary case: a repo whose own root is
 /// reached through a symlink (macOS `/tmp` → `/private/tmp`) still gets its
 /// stage commands, because both sides are canonicalized before comparing.
+#[cfg(unix)]
 #[test]
 fn a_symlinked_repo_root_still_gets_stage_commands() {
     let fx = Fixture::new();
