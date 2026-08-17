@@ -2591,6 +2591,86 @@ fn clean_refuses_to_touch_command_dirs_refresh_would_not_write() {
     );
 }
 
+/// Cloning a repo must never hand it a delete-anywhere primitive. A repo that
+/// ships its command namespace as a symlink pointing outside the tree passes
+/// the lexical `is_repo_relative` check, so without resolving the path loadout
+/// would prune "stale" entries through the link — deleting the target's real
+/// contents — and then write stage files there.
+#[test]
+fn a_symlinked_command_dir_cannot_escape_the_repo() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"superpowers\"\n",
+    );
+
+    // A directory outside the repo holding something precious.
+    let outside = fx.global.path().join("precious");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("id_rsa"), "PRIVATE KEY").unwrap();
+
+    // The repo points its codex namespace dir straight at it.
+    fs::create_dir_all(fx.repo.path().join(".codex/skills")).unwrap();
+    std::os::unix::fs::symlink(&outside, fx.repo.path().join(".codex/skills/loadout")).unwrap();
+
+    fx.cmd()
+        .args(["refresh", "--agent", "codex"])
+        .assert()
+        .success();
+
+    // Nothing pruned, nothing written through the link.
+    assert_eq!(
+        fs::read_to_string(outside.join("id_rsa")).unwrap(),
+        "PRIVATE KEY",
+        "pruning deleted through a symlinked command dir"
+    );
+    assert!(
+        !outside.join("loadout-plan").exists(),
+        "wrote stage commands outside the repo"
+    );
+
+    // `clean` must not remove the link's target either.
+    fx.cmd()
+        .args(["clean", "--agent", "codex"])
+        .assert()
+        .success();
+    assert!(
+        outside.join("id_rsa").exists(),
+        "clean removed a directory outside the repo"
+    );
+}
+
+/// The escape guard must not break the ordinary case: a repo whose own root is
+/// reached through a symlink (macOS `/tmp` → `/private/tmp`) still gets its
+/// stage commands, because both sides are canonicalized before comparing.
+#[test]
+fn a_symlinked_repo_root_still_gets_stage_commands() {
+    let fx = Fixture::new();
+    fx.rust_project();
+    fx.git_init();
+    fx.author(
+        "[[fragments]]\nid = \"rc\"\nguidance = \"Rust.\"\n\n\
+         [[loadouts]]\nname = \"rust\"\ntargets = [\"rust\"]\nfragments = [\"rc\"]\nworkflow = \"superpowers\"\n",
+    );
+
+    let link = fx.global.path().join("repo-link");
+    std::os::unix::fs::symlink(fx.repo.path(), &link).unwrap();
+
+    let mut c = Command::cargo_bin("load").unwrap();
+    c.env("LOADOUT_CONFIG_DIR", fx.global.path().join("empty"));
+    c.env("HOME", fx.global.path().join("home"));
+    c.env("LOADOUT_STATE_DIR", fx.global.path().join("state"));
+    c.arg("--cwd").arg(&link);
+    c.args(["refresh", "--agent", "codex"]).assert().success();
+
+    assert!(
+        fx.exists(".codex/skills/loadout/loadout-plan/SKILL.md"),
+        "the guard rejected a legitimately symlinked repo root"
+    );
+}
+
 /// `load agents` lists cursor with the owned-file delivery.
 #[test]
 fn agents_lists_cursor_owned_file_delivery() {
