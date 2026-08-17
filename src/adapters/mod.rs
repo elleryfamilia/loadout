@@ -784,7 +784,7 @@ pub fn apply(
     // or flat with a `loadout-` prefix when the dir is shared with the user.
     if let Some(wf) = workflow.as_ref() {
         for channel in emitted_channels(d, app.context) {
-            write_stage_commands(app, d, &channel, wf, &mut files)?;
+            write_stage_commands(app, d, &channel, wf, &mut files, &mut warnings)?;
             let (dir, fmt) = (&channel.dir, channel.format);
             gitignore_extra.push(if fmt.owns_namespace_dir() {
                 format!("{dir}/{}/", commands::COMMAND_NAMESPACE)
@@ -877,7 +877,9 @@ pub fn artifacts(d: &AgentDescriptor, repo_base: &Path) -> Vec<PathBuf> {
     // our own prefixed files.
     for channel in managed_channels(d, repo_base) {
         let fmt = channel.format;
-        let ns = command_namespace_dir(repo_base, &channel.dir, fmt);
+        let Some(ns) = command_namespace_dir(repo_base, &channel.dir, fmt) else {
+            continue;
+        };
         if fmt.owns_namespace_dir() {
             if ns.exists() {
                 out.push(ns);
@@ -953,7 +955,9 @@ pub fn clean(d: &AgentDescriptor, app: &AppContext) -> crate::Result<CleanResult
     // `<commands_dir>` (e.g. `.claude/commands/`) is left alone either way.
     for channel in managed_channels(d, app.repo_base()) {
         let fmt = channel.format;
-        let ns = command_namespace_dir(app.repo_base(), &channel.dir, fmt);
+        let Some(ns) = command_namespace_dir(app.repo_base(), &channel.dir, fmt) else {
+            continue;
+        };
         if fmt.owns_namespace_dir() {
             if ns.exists() {
                 if !dry {
@@ -1067,16 +1071,53 @@ fn redact_artifact(content: String, what: &str) -> String {
 /// loadout owns outright, or — for formats whose discovery doesn't recurse
 /// (VS Code prompt files) — the agent's command dir itself, shared with the
 /// user's own files and owned only by filename prefix.
+///
+/// `None` when that directory doesn't actually resolve inside the repo (see
+/// [`resolves_inside`]), which callers must treat as "this channel has no
+/// namespace dir" — never as "use the unchecked path".
 fn command_namespace_dir(
     repo_base: &Path,
     commands_dir: &str,
     format: commands::CommandFormat,
-) -> PathBuf {
+) -> Option<PathBuf> {
     let base = repo_base.join(commands_dir);
-    if format.owns_namespace_dir() {
+    let ns = if format.owns_namespace_dir() {
         base.join(commands::COMMAND_NAMESPACE)
     } else {
         base
+    };
+    resolves_inside(repo_base, &ns).then_some(ns)
+}
+
+/// Whether `path` really lands inside `repo_base` once symlinks are resolved.
+///
+/// [`is_repo_relative`] only inspects the configured *string*, so it cannot see
+/// a link: a repo that ships `.codex/skills/loadout -> ../../../.ssh` passes it,
+/// and loadout would then prune "stale" entries — deleting through the link —
+/// before writing stage files there. Cloning a repo must never hand it a
+/// delete-anywhere primitive.
+///
+/// The namespace dir usually doesn't exist yet on a first render, so this
+/// canonicalizes the deepest ancestor that *does* exist. A link anywhere along
+/// the path (`.codex`, `.codex/skills`, or the namespace dir itself) is
+/// therefore caught, because canonicalizing that ancestor already leaves the
+/// repo. Both sides are canonicalized so a symlinked repo root (macOS `/tmp` →
+/// `/private/tmp`) still compares equal.
+fn resolves_inside(repo_base: &Path, path: &Path) -> bool {
+    let Ok(root) = repo_base.canonicalize() else {
+        return false;
+    };
+    let mut probe = path;
+    loop {
+        match probe.canonicalize() {
+            Ok(real) => return real.starts_with(&root),
+            // Doesn't exist yet — ask the same question of its parent, which is
+            // where a link would have to sit for this path to escape.
+            Err(_) => match probe.parent() {
+                Some(parent) => probe = parent,
+                None => return false,
+            },
+        }
     }
 }
 
@@ -1174,9 +1215,18 @@ fn write_stage_commands(
     channel: &CommandChannel,
     wf: &Workflow,
     files: &mut Vec<WrittenFile>,
+    warnings: &mut Vec<String>,
 ) -> crate::Result<()> {
     let format = channel.format;
-    let ns_dir = command_namespace_dir(app.repo_base(), &channel.dir, format);
+    // Escapes the repo (a symlinked path component) → write nothing and say so.
+    // Silence would look like a working channel that simply produced no files.
+    let Some(ns_dir) = command_namespace_dir(app.repo_base(), &channel.dir, format) else {
+        warnings.push(format!(
+            "{} resolves outside the repo (symlinked?) — skipping {}'s stage commands there",
+            channel.dir, d.id
+        ));
+        return Ok(());
+    };
     let generated = commands::stage_commands(wf, format, &d.review_commands);
     // A command's top-level entry in the namespace dir: the file itself, or —
     // for folder-shaped formats (Cursor skills' `loadout-plan/SKILL.md`) — the
