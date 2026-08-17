@@ -8,6 +8,55 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## 0.28.0 — 2026-08-17
+
+### Added
+
+- **Codex and the GitHub Copilot CLI now get your workflow's steps.** Until now
+  they saw the always-on `## Workflow` section in their context and nothing else,
+  so there was no way to actually *start* a step — the commands existed for
+  Claude Code, Cursor, and VS Code Copilot only. Both CLIs read project skills,
+  so loadout now writes one skill per step: `.codex/skills/loadout/` for Codex,
+  `.github/skills/loadout/` for the Copilot CLI. They aren't slash commands
+  there — you ask for one by name ("use the loadout-plan skill") or let the agent
+  pick it up from the description. Nothing to configure, and it works whether you
+  launch through `load run` or run the CLI yourself.
+
+  Copilot's VS Code prompt files are unchanged. Its editor and its CLI read
+  different directories in different formats, so loadout now writes both.
+
+### Fixed
+
+- **`load run` no longer tells you to type a command your agent doesn't have.**
+  It announced `/loadout:<stage>` for every agent, which is true only for Claude
+  Code: Cursor and VS Code Copilot use `/loadout-<stage>`, Codex and the Copilot
+  CLI load a named skill, and some agents get no step commands at all. The line
+  now reports what the agent you're launching actually offers — including saying
+  plainly that there are none, which is also the honest answer outside a git
+  repo, where loadout writes no command files.
+- **studio's Workflows tab no longer quotes one agent's commands.** It described
+  the spine as `/loadout:explore · plan · …`, the Claude-only form. studio edits
+  your global config rather than any single agent's wiring, so it now names the
+  steps themselves and leaves the invocation to `load run`.
+- **`load clean` no longer removes directories `load refresh` refuses to
+  create.** Writing skipped a command directory sitting at `$HOME` or outside the
+  project; removal checked neither. Running `load clean` from `$HOME` could
+  therefore delete `~/.codex/skills/loadout` — inside the very directory loadout
+  keeps your global skill links in.
+
+### Security
+
+- **A repository you clone can no longer make loadout delete files outside it.**
+  loadout checked only that a command directory's *path* stayed inside the
+  project, and a symlink walks straight past that kind of check. A repository
+  shipping `.codex/skills/loadout` as a link to somewhere else — `~/.ssh`, say —
+  would have had that directory's real contents pruned as "stale", on nothing
+  more than a `load refresh` after cloning.
+
+  Command directories are now resolved before they're used, so a path that leaves
+  the project is refused and reported instead of followed. This affected Claude
+  Code and Cursor too, in every version that generated workflow commands.
+
 ## 0.27.0 — 2026-08-12
 
 ### Added
