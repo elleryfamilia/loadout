@@ -1353,9 +1353,13 @@ pub fn workflows_tab(view: &WorkflowsView, flash: Option<&str>) -> Markup {
                 h1 { "Workflows" }
             }
             @if let Some(msg) = flash { p class="flash" { (icon("check")) (msg) } }
+            // Names the slots, not one agent's invocation: how you reach a step
+            // differs per agent (`/loadout:plan` on Claude, `/loadout-plan` on
+            // Cursor, a named skill on Codex and the Copilot CLI), and studio
+            // edits the global config rather than any single agent.
             p class="muted workflows-lead" {
-                "One fixed set of commands — "
-                code { "/loadout:explore" } " · " code { "plan" } " · " code { "implement" } " · " code { "verify" }
+                "One fixed set of steps — "
+                code { "explore" } " · " code { "plan" } " · " code { "implement" } " · " code { "verify" }
                 ". The " strong { "workflow" } " you pick decides what each one does."
             }
             // The gallery: tiny named cards across the top, always visible.
