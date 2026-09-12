@@ -169,15 +169,25 @@ fn capture(args: &[String]) -> crate::Result<String> {
 /// Like [`capture`], for a side question: `None` on any failure, nothing
 /// printed anywhere.
 fn capture_quiet(args: &[String]) -> Option<String> {
+    let (ok, stdout) = capture_any(args)?;
+    ok.then_some(stdout)
+}
+
+/// `artefacto plan <args>` with nothing printed, whatever the exit: the
+/// success flag and stdout together. `plan status` is the verb that exits
+/// non-zero and still prints its answer (a stale or missing render is not
+/// a success), so its caller reads the answer before judging the exit.
+fn capture_any(args: &[String]) -> Option<(bool, String)> {
     let out = artefacto::command()
         .arg("plan")
         .args(args)
         .stderr(Stdio::null())
         .output()
         .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+    Some((
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).to_string(),
+    ))
 }
 
 fn plan_file(prep: &Prepared, rt: &Runtime, file: Option<&Path>) -> PathBuf {
@@ -201,14 +211,17 @@ fn status(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
     }
     require_artefacto()?;
     let html = plan_html_path(&prep.repo_base);
-    let raw = capture_quiet(&[
+    // Not `capture`: artefacto exits non-zero for a stale or missing render
+    // and still prints the answer, and that answer is the status.
+    let raw = capture_any(&[
         "status".to_string(),
         arg(&json),
         "--out".to_string(),
         arg(&html),
         "--json".to_string(),
     ]);
-    let Some(v) = raw.and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok()) else {
+    let parsed = raw.and_then(|(_, raw)| serde_json::from_str::<serde_json::Value>(&raw).ok());
+    let Some(v) = parsed.filter(|v| v["state"].as_str().is_some_and(|s| s != "unknown")) else {
         println!("plan.json present but invalid — run `load plan check`");
         return Ok(());
     };

@@ -3110,8 +3110,14 @@ case "$verb" in
     echo '{"ok":true,"path":"'"$file"'","out":"'"$out"'","plan_hash":"sha256:fake","title":"Demo plan","phases":1,"tasks":1,"warnings":[{"code":"long_summary","path":"/meta/summary_md","message":"long"}],"index":{"recorded":true,"poster":"/tmp/poster.svg"}}'
     ;;
   status)
+    if grep -q '"broken"' "$file" 2>/dev/null; then
+      echo '{"ok":false,"state":"unknown","path":"'"$file"'","errors":[{"code":"invalid_json","path":"","message":"bad"}]}'
+      exit 1
+    fi
     state=none; if [ -f "$out" ]; then state=fresh; fi
-    echo '{"ok":true,"state":"'"$state"'","path":"'"$file"'","out":"'"$out"'","plan_hash":"sha256:fake","rendered_hash":null,"title":"Demo plan","phases":1,"tasks":1}'
+    echo '{"ok":'"$([ "$state" = fresh ] && echo true || echo false)"',"state":"'"$state"'","path":"'"$file"'","out":"'"$out"'","plan_hash":"sha256:fake","rendered_hash":null,"title":"Demo plan","phases":1,"tasks":1}'
+    # As artefacto does: the answer is printed either way, and only fresh is a success.
+    [ "$state" = fresh ] || exit 1
     ;;
   push) echo "pushed: $*"; exit "${FAKE_PUSH_EXIT:-0}" ;;
   schema) echo "artefacto.plan/1 schema reference" ;;
@@ -3554,7 +3560,8 @@ fn plan_status_forwards_and_reports_the_render_state() {
         .assert()
         .success()
         .stdout(predicate::str::contains("plan 'Demo plan' — 1 tasks"))
-        .stdout(predicate::str::contains("render: none"));
+        .stdout(predicate::str::contains("render: none"))
+        .stdout(predicate::str::contains("invalid").not());
     assert_eq!(
         fake.calls(),
         [format!(
@@ -3572,6 +3579,18 @@ fn plan_status_forwards_and_reports_the_render_state() {
         .assert()
         .success()
         .stdout(predicate::str::contains("render: fresh"));
+
+    // A plan artefacto cannot read is said to be invalid, not stale.
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "broken": true "#,
+    );
+    plan_cmd(&f, &fake)
+        .args(["plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("present but invalid"));
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
 
     // Stale feedback is said here too.
     f.write(
