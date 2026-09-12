@@ -1428,6 +1428,15 @@ const PLAN_BADGE_TIMEOUT: Duration = Duration::from_secs(10);
 
 type PlanHashes = HashMap<std::path::PathBuf, String>;
 
+/// One cached batch: when it was taken, which binary answered, for which
+/// files, and what it said.
+type BadgeCache = Option<(
+    std::time::Instant,
+    String,
+    Vec<std::path::PathBuf>,
+    PlanHashes,
+)>;
+
 /// The current hash of every plan.json in `paths`, from ONE
 /// `artefacto plan check --json --lenient` over all of them (spec 10: never
 /// one subprocess per row), matched back by the path artefacto echoes as
@@ -1435,14 +1444,7 @@ type PlanHashes = HashMap<std::path::PathBuf, String>;
 /// has no hash and gets no badge; no artefacto at all means no badges,
 /// and the rows are listed and served all the same.
 fn plan_hashes(program: &str, paths: &[std::path::PathBuf]) -> PlanHashes {
-    static CACHE: Mutex<
-        Option<(
-            std::time::Instant,
-            String,
-            Vec<std::path::PathBuf>,
-            PlanHashes,
-        )>,
-    > = Mutex::new(None);
+    static CACHE: Mutex<BadgeCache> = Mutex::new(None);
     if let Ok(cache) = CACHE.lock() {
         if let Some((at, prog, cached_paths, hashes)) = cache.as_ref() {
             if at.elapsed() < PLAN_BADGE_TTL && prog == program && cached_paths == paths {
