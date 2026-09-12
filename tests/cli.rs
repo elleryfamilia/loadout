@@ -3219,6 +3219,87 @@ fn plan_clean_removes_only_marked_html() {
     assert!(f.exists(".loadout/generated/plan.html"));
 }
 
+/// A stand-in `artefacto` that answers `--version` with `version`, for the
+/// commands that only need to know it is there.
+fn fake_artefacto(f: &Fixture, version: &str) -> std::path::PathBuf {
+    let bin = f.global.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let path = bin.join("artefacto");
+    fs::write(
+        &path,
+        format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"artefacto {version}\"; exit 0; fi\necho \"fake artefacto: $*\" >&2\nexit 2\n"),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path
+}
+
+#[test]
+fn doctor_reports_artefacto_present_absent_or_mismatched() {
+    let f = Fixture::new();
+    let bin = fake_artefacto(&f, "0.1.4");
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &bin)
+        .arg("doctor")
+        .assert()
+        .stdout(predicate::str::contains("artefacto: 0.1.4"))
+        .stdout(predicate::str::contains("tested with").not());
+
+    let newer = fake_artefacto(&f, "0.2.0");
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &newer)
+        .arg("doctor")
+        .assert()
+        .stdout(predicate::str::contains("artefacto: 0.2.0"))
+        .stdout(predicate::str::contains(
+            "this loadout was tested with 0.1.0",
+        ));
+
+    f.cmd()
+        .env(
+            "LOADOUT_ARTEFACTO_BIN",
+            f.global.path().join("nowhere/artefacto"),
+        )
+        .arg("doctor")
+        .assert()
+        .stdout(predicate::str::contains("artefacto not on PATH"))
+        .stdout(predicate::str::contains("artefacto-installer.sh | sh"));
+}
+
+#[test]
+fn update_check_reports_an_artefacto_it_did_not_install() {
+    // No receipt for either binary in the isolated config, so neither is
+    // managed and no release host is asked: the report is offline.
+    let f = Fixture::new();
+    let bin = fake_artefacto(&f, "0.1.0");
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &bin)
+        .env("XDG_CONFIG_HOME", f.global.path().join("xdg"))
+        .args(["update", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "artefacto 0.1.0 wasn't installed via its installer",
+        ))
+        .stdout(predicate::str::contains("artefacto-installer.sh | sh"));
+
+    // With no artefacto at all there is nothing to say about it.
+    f.cmd()
+        .env(
+            "LOADOUT_ARTEFACTO_BIN",
+            f.global.path().join("nowhere/artefacto"),
+        )
+        .env("XDG_CONFIG_HOME", f.global.path().join("xdg"))
+        .args(["update", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("artefacto").not());
+}
+
 #[test]
 fn plan_clean_removes_a_page_artefacto_rendered() {
     // The frozen first line artefacto writes, pinned on both sides so the

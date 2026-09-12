@@ -53,5 +53,54 @@ pub fn run(_rt: &Runtime, args: &UpdateArgs) -> crate::Result<()> {
             );
         }
     }
+    update_artefacto(&p, args.check)?;
+    Ok(())
+}
+
+/// artefacto, when it is here: the same updater, off artefacto's own install
+/// receipt. Absent means nothing to update; `load doctor` says how to get it.
+fn update_artefacto(p: &Painter, check_only: bool) -> crate::Result<()> {
+    use crate::artefacto::{self, Presence};
+    let version = match artefacto::probe() {
+        Presence::Missing => return Ok(()),
+        Presence::TimedOut => {
+            println!(
+                "  {} artefacto is installed but its version probe timed out; not updated",
+                p.yellow("⚠")
+            );
+            return Ok(());
+        }
+        Presence::Found { version } => version,
+    };
+    match update::perform_app("artefacto", check_only)? {
+        Outcome::Updated { from, to } => {
+            let was = from
+                .map(|f| format!("{} → ", p.dim(&f)))
+                .unwrap_or_default();
+            println!("  {} updated artefacto {was}{}", p.green("✓"), p.bold(&to));
+        }
+        Outcome::AlreadyCurrent => println!(
+            "  {} artefacto {} is the latest release",
+            p.green("✓"),
+            p.bold(&version)
+        ),
+        Outcome::UpdateAvailable => println!(
+            "  {} a newer artefacto is available — run {} to install",
+            p.cyan("↑"),
+            p.bold("load update")
+        ),
+        Outcome::NotManaged => {
+            println!(
+                "  {} artefacto {version} wasn't installed via its installer, so `load update` \
+                 can't update it.",
+                p.yellow("⚠")
+            );
+            println!(
+                "    {}",
+                p.dim("reinstall with the installer to enable it:")
+            );
+            println!("    {}", p.dim(&artefacto::install_hint()));
+        }
+    }
     Ok(())
 }

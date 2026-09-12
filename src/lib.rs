@@ -26,6 +26,7 @@
 //! Nothing here should be treated as a hard security control.
 
 pub mod adapters;
+pub mod artefacto;
 pub mod audit;
 pub mod binding;
 pub mod cli;

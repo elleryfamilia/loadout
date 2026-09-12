@@ -50,6 +50,29 @@ pub fn run(rt: &Runtime) -> crate::Result<()> {
             "git not found on PATH (git detection disabled)",
         ),
     }
+    // artefacto renders and reviews plans; `load plan` dispatches to it.
+    match crate::artefacto::probe() {
+        crate::artefacto::Presence::Found { version } => {
+            c.line(
+                Status::Ok,
+                format!("artefacto: {version} (`load plan` dispatches to it)"),
+            );
+            if let Some(note) = crate::artefacto::version_note(&version) {
+                c.line(Status::Warn, note);
+            }
+        }
+        crate::artefacto::Presence::TimedOut => c.line(
+            Status::Warn,
+            "artefacto: probe timed out — installed but not responding",
+        ),
+        crate::artefacto::Presence::Missing => c.line(
+            Status::Warn,
+            format!(
+                "artefacto not on PATH — `load plan` offers to install it, or: {}",
+                crate::artefacto::install_hint()
+            ),
+        ),
+    }
     // Config + context. Suppress compose's `warn_user!` lines here — doctor
     // reports the same conditions (dangling refs, etc.) through its own checks,
     // so the raw stderr warnings would just duplicate them.
