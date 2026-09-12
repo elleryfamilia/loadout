@@ -1344,16 +1344,40 @@ fn handle_recents_remove(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
 /// taken; no state mutex is held). Reads fail fast (ENOENT) on unmounted
 /// volumes and NEVER write back — listing must not prune.
 fn recent_rows(store: &crate::recents::RecentsStore) -> Vec<views::RecentRow> {
+    recent_rows_with(store, &crate::artefacto::program())
+}
+
+/// [`recent_rows`] with the artefacto binary named, so a test can hand it
+/// a stand-in without touching the environment.
+fn recent_rows_with(store: &crate::recents::RecentsStore, program: &str) -> Vec<views::RecentRow> {
     let now = crate::commands::now_utc();
-    store
-        .entries()
+    let entries = store.entries();
+    // Every plan row's plan.json, once each, for one batched check.
+    let plan_paths: Vec<std::path::PathBuf> = entries
+        .iter()
+        .filter(|e| e.kind == "plan")
+        .map(|e| crate::commands::plan::plan_json_path(&e.repo))
+        .filter(|p| p.is_file())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let hashes = if plan_paths.is_empty() {
+        HashMap::new()
+    } else {
+        plan_hashes(program, &plan_paths)
+    };
+    entries
         .into_iter()
         .map(|e| {
             let available = artifact_available(&e.path);
             let badge = if !available {
                 views::RecentBadge::None
             } else if e.kind == "plan" {
-                plan_badge(e)
+                match hashes.get(&crate::commands::plan::plan_json_path(&e.repo)) {
+                    Some(h) if *h == e.hash => views::RecentBadge::Fresh,
+                    Some(_) => views::RecentBadge::Stale,
+                    None => views::RecentBadge::None,
+                }
             } else {
                 views::RecentBadge::None
             };
@@ -1394,24 +1418,69 @@ fn artifact_available(path: &std::path::Path) -> bool {
         && crate::render::header::is_plan_page_marker(line.trim_start())
 }
 
-/// Plan-kind staleness: compare the recorded hash to the repo's CURRENT
-/// plan.json (same semantic as `load plan status`). Absent/invalid
-/// plan.json → no badge.
-fn plan_badge(entry: &crate::recents::Entry) -> views::RecentBadge {
-    let pj = crate::commands::plan::plan_json_path(&entry.repo);
-    let Ok(raw) = std::fs::read_to_string(&pj) else {
-        return views::RecentBadge::None;
-    };
-    match crate::plan::model::parse(&raw, true) {
-        Ok(p) if crate::plan::model::validate(&p.plan).is_empty() => {
-            if crate::plan::model::plan_hash(&p.plan) == entry.hash {
-                views::RecentBadge::Fresh
-            } else {
-                views::RecentBadge::Stale
+/// How long a batch of plan hashes is reused. A drawer refreshed twice in
+/// a row must not spawn artefacto twice; a plan edited and refreshed a few
+/// seconds later shows the change.
+const PLAN_BADGE_TTL: Duration = Duration::from_secs(5);
+
+/// The batched check's deadline: thirty small files, well under this.
+const PLAN_BADGE_TIMEOUT: Duration = Duration::from_secs(10);
+
+type PlanHashes = HashMap<std::path::PathBuf, String>;
+
+/// The current hash of every plan.json in `paths`, from ONE
+/// `artefacto plan check --json --lenient` over all of them (spec 10: never
+/// one subprocess per row), matched back by the path artefacto echoes as
+/// given, and cached for [`PLAN_BADGE_TTL`]. A file that does not check
+/// has no hash and gets no badge; no artefacto at all means no badges,
+/// and the rows are listed and served all the same.
+fn plan_hashes(program: &str, paths: &[std::path::PathBuf]) -> PlanHashes {
+    static CACHE: Mutex<
+        Option<(
+            std::time::Instant,
+            String,
+            Vec<std::path::PathBuf>,
+            PlanHashes,
+        )>,
+    > = Mutex::new(None);
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((at, prog, cached_paths, hashes)) = cache.as_ref() {
+            if at.elapsed() < PLAN_BADGE_TTL && prog == program && cached_paths == paths {
+                return hashes.clone();
             }
         }
-        _ => views::RecentBadge::None,
     }
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(["plan", "check", "--json", "--lenient"])
+        .args(paths);
+    let hashes: PlanHashes =
+        match crate::providers::output_with_timeout(&mut cmd, PLAN_BADGE_TIMEOUT) {
+            // A file that fails makes the whole answer `ok: false`; the ones
+            // that passed still carry their hashes.
+            Ok(Some(out)) => serde_json::from_slice::<serde_json::Value>(&out.stdout)
+                .ok()
+                .and_then(|v| v["files"].as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter(|f| f["ok"] == true)
+                .filter_map(|f| {
+                    Some((
+                        std::path::PathBuf::from(f["path"].as_str()?),
+                        f["plan_hash"].as_str()?.to_string(),
+                    ))
+                })
+                .collect(),
+            _ => HashMap::new(),
+        };
+    if let Ok(mut cache) = CACHE.lock() {
+        *cache = Some((
+            std::time::Instant::now(),
+            program.to_string(),
+            paths.to_vec(),
+            hashes.clone(),
+        ));
+    }
+    hashes
 }
 
 /// Kind-specific display line from the entry's `detail` map ("4 phases ·
@@ -2747,9 +2816,11 @@ mod tests {
         assert!(body.contains(&format!("/artifacts/{id}")));
         assert!(body.contains("target=\"_blank\""));
         assert!(body.contains("rel=\"noopener\""));
+        // Badges come from artefacto, which the route test does not have;
+        // the batched check is covered by `plan_badges_come_from_one_batched_check`.
         assert!(
-            body.contains("stale"),
-            "hash mismatch must badge stale: {body}"
+            !body.contains("recent-badge"),
+            "no artefacto, no badge: {body}"
         );
         assert!(
             body.contains("4 phases · 15 tasks"),
@@ -2758,6 +2829,131 @@ mod tests {
         assert!(body.contains(&format!("/recents/{id}")), "per-row remove");
         assert!(body.contains("/recents/clear"));
         assert!(body.contains("Rendered files are not deleted."));
+    }
+
+    /// A stand-in artefacto whose `plan check --json --lenient` answers with
+    /// the `hash` field each plan.json carries, and logs every call.
+    fn fake_checker(dir: &std::path::Path) -> String {
+        let bin = dir.join("artefacto");
+        std::fs::write(
+            &bin,
+            r##"#!/bin/sh
+echo "$@" >> "$0.log"
+shift 4
+first=1; printf '{"ok":true,"files":['
+for f in "$@"; do
+  h=$(sed -n 's/.*"hash": *"\([^"]*\)".*/\1/p' "$f")
+  [ $first = 1 ] || printf ','
+  first=0
+  printf '{"path":"%s","ok":true,"plan_hash":"%s"}' "$f" "$h"
+done
+printf ']}\n'
+"##,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        bin.display().to_string()
+    }
+
+    fn seed_plan_json(repo: &std::path::Path, hash: &str) {
+        std::fs::create_dir_all(repo.join(".loadout/workflow/artifacts")).unwrap();
+        std::fs::write(
+            repo.join(".loadout/workflow/artifacts/plan.json"),
+            format!(r#"{{ "hash": "{hash}" }}"#),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn plan_badges_come_from_one_batched_check() {
+        let d = rust_repo();
+        let fresh_repo = d.path().join("fresh");
+        let stale_repo = d.path().join("stale");
+        let bare_repo = d.path().join("bare");
+        for r in [&fresh_repo, &stale_repo, &bare_repo] {
+            std::fs::create_dir_all(r).unwrap();
+        }
+        seed_plan_json(&fresh_repo, "sha256:abc");
+        seed_plan_json(&stale_repo, "sha256:zzz");
+        let store_path = d.path().join("state").join("recents.json");
+        let mut store = crate::recents::RecentsStore::load_from(&store_path);
+        for (repo, title, hash, kind) in [
+            (&fresh_repo, "Fresh", "sha256:abc", "plan"),
+            (&stale_repo, "Stale", "sha256:old", "plan"),
+            (&bare_repo, "Bare", "sha256:abc", "plan"),
+            (&fresh_repo, "Other", "sha256:abc", "recap"),
+        ] {
+            let artifact = repo.join(format!("{title}.html"));
+            std::fs::write(
+                &artifact,
+                "<!-- loadout:generated context=sha256:x -->
+<html></html>",
+            )
+            .unwrap();
+            let entry = crate::recents::Entry {
+                kind: kind.into(),
+                path: artifact,
+                repo: repo.clone(),
+                title: title.into(),
+                hash: hash.into(),
+                rendered_at: "2026-09-12T00:00:00Z".into(),
+                detail: Default::default(),
+                extra: Default::default(),
+            };
+            assert!(matches!(
+                store.record(entry),
+                crate::recents::RecordOutcome::Recorded
+            ));
+        }
+        let program = fake_checker(d.path());
+
+        let rows = recent_rows_with(&store, &program);
+        let badge = |title: &str| {
+            let row = rows.iter().find(|r| r.title == title).unwrap();
+            match row.badge {
+                views::RecentBadge::Fresh => "Fresh",
+                views::RecentBadge::Stale => "Stale",
+                views::RecentBadge::None => "None",
+            }
+        };
+        assert_eq!(badge("Fresh"), "Fresh");
+        assert_eq!(badge("Stale"), "Stale");
+        assert_eq!(badge("Bare"), "None", "no plan.json, no badge");
+        assert_eq!(badge("Other"), "None", "not a plan");
+
+        let log = std::fs::read_to_string(format!("{program}.log")).unwrap();
+        assert_eq!(log.lines().count(), 1, "one call for every row: {log}");
+        let line = log.lines().next().unwrap();
+        assert!(line.starts_with("plan check --json --lenient "), "{line}");
+        assert!(line.contains("fresh/.loadout/workflow/artifacts/plan.json"));
+        assert!(line.contains("stale/.loadout/workflow/artifacts/plan.json"));
+        assert!(
+            !line.contains("bare/"),
+            "a repo with no plan.json is not asked about"
+        );
+
+        // A second listing within the window reuses the answer.
+        let again = recent_rows_with(&store, &program);
+        assert_eq!(again.len(), rows.len());
+        let log = std::fs::read_to_string(format!("{program}.log")).unwrap();
+        assert_eq!(log.lines().count(), 1, "cached: {log}");
+    }
+
+    #[test]
+    fn no_artefacto_means_no_badge_and_the_row_is_still_listed() {
+        let d = rust_repo();
+        seed_plan_json(d.path(), "sha256:abc");
+        let id = seed_recents(d.path(), "Demo plan", "gen/demo.html", "sha256:abc");
+        let store = crate::recents::RecentsStore::load_from(&d.path().join("state/recents.json"));
+        let rows = recent_rows_with(&store, "/nowhere/artefacto");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+        assert!(rows[0].available);
+        assert!(matches!(rows[0].badge, views::RecentBadge::None));
     }
 
     #[test]
