@@ -54,7 +54,8 @@ user's browser and keep the session token it prints (or `load plan render` for a
 static page). If plan.json already holds a different pending plan, don't overwrite \
 it — write a sibling `plan-<topic>.json` instead and push or render that file. The \
 `artefacto-plan` skill carries the full authoring and review-loop guidance when \
-available; `load plan` installs artefacto on first use if it is missing.";
+available. If `load plan` reports that artefacto is not installed, show the user \
+the install line it prints and ask before installing anything.";
 
 /// On-disk format for an agent's command files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

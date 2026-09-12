@@ -57,8 +57,12 @@ pub fn run(_rt: &Runtime, args: &UpdateArgs) -> crate::Result<()> {
     Ok(())
 }
 
-/// artefacto, when it is here: the same updater, off artefacto's own install
-/// receipt. Absent means nothing to update; `load doctor` says how to get it.
+/// artefacto, when it is here and its own installer put it here: run that
+/// installer again, which fetches the latest release, and say what changed.
+/// Not axoupdater: that is a self-updater, and asked about a second binary
+/// it compares the receipt against the running `load` and answers "current"
+/// offline whenever the two live in different places. Absent means nothing
+/// to update; no receipt means a copy loadout will not replace.
 fn update_artefacto(p: &Painter, check_only: bool) -> crate::Result<()> {
     use crate::artefacto::{self, Presence};
     let version = match artefacto::probe() {
@@ -72,35 +76,44 @@ fn update_artefacto(p: &Painter, check_only: bool) -> crate::Result<()> {
         }
         Presence::Found { version } => version,
     };
-    match update::perform_app("artefacto", check_only)? {
-        Outcome::Updated { from, to } => {
-            let was = from
-                .map(|f| format!("{} → ", p.dim(&f)))
-                .unwrap_or_default();
-            println!("  {} updated artefacto {was}{}", p.green("✓"), p.bold(&to));
-        }
-        Outcome::AlreadyCurrent => println!(
+    if !artefacto::has_receipt() {
+        println!(
+            "  {} artefacto {version} wasn't installed via its installer, so `load update` \
+             can't update it.",
+            p.yellow("⚠")
+        );
+        println!(
+            "    {}",
+            p.dim("reinstall with the installer to enable it:")
+        );
+        println!("    {}", p.dim(&artefacto::install_hint()));
+        return Ok(());
+    }
+    if check_only {
+        println!(
+            "  {} artefacto {} is installed; {} reinstalls the latest release",
+            p.cyan("·"),
+            p.bold(&version),
+            p.bold("load update")
+        );
+        return Ok(());
+    }
+    artefacto::install()?;
+    match artefacto::probe() {
+        Presence::Found { version: now } if now == version => println!(
             "  {} artefacto {} is the latest release",
             p.green("✓"),
             p.bold(&version)
         ),
-        Outcome::UpdateAvailable => println!(
-            "  {} a newer artefacto is available — run {} to install",
-            p.cyan("↑"),
-            p.bold("load update")
+        Presence::Found { version: now } => println!(
+            "  {} updated artefacto {} → {}",
+            p.green("✓"),
+            p.dim(&version),
+            p.bold(&now)
         ),
-        Outcome::NotManaged => {
-            println!(
-                "  {} artefacto {version} wasn't installed via its installer, so `load update` \
-                 can't update it.",
-                p.yellow("⚠")
-            );
-            println!(
-                "    {}",
-                p.dim("reinstall with the installer to enable it:")
-            );
-            println!("    {}", p.dim(&artefacto::install_hint()));
-        }
+        _ => crate::warn_user!(
+            "the artefacto installer finished but `artefacto --version` does not answer"
+        ),
     }
     Ok(())
 }

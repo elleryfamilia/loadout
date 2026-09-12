@@ -69,9 +69,9 @@ tests, live with the renderer. What loadout still does:
   `.loadout/workflow/artifacts/plan-feedback.json`, `.loadout/generated/` —
   before doing anything else, and only inside a git repo. A plan (which may
   quote code and secrets) must never be committable by accident.
-- **Marker-gated removal and serving.** `load plan clean`, `load clean`, and
-  studio's Recents serve or remove a `plan.html` only when its first line is
-  the generated marker — loadout's own or artefacto's, whose exact bytes are
+- **Marker-gated removal and serving.** `load plan clean` and `load clean`
+  remove a `plan.html`, and studio's Recents serves one, only when its first
+  line is the generated marker — loadout's own or artefacto's, whose exact bytes are
   pinned by `tests/fixtures/artefacto-marker-first-line.txt`. A file that is
   neither is left alone and never served.
 

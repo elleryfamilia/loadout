@@ -201,14 +201,19 @@ fn check_skills(c: &mut Checks) {
     };
     for id in crate::skills::RETIRED {
         let stale = crate::skills::Skill { id, files: &[] };
-        if matches!(
-            crate::skills::status(&home, &stale).state,
-            crate::skills::SkillState::Managed { .. }
-        ) {
-            c.line(
+        match crate::skills::status(&home, &stale).state {
+            crate::skills::SkillState::Managed {
+                user_modified: true,
+                ..
+            } => c.line(
+                Status::Warn,
+                format!("{id}: retired (the plan skill is now `artefacto-plan`) and edited by you — loadout leaves it; remove it by hand when you are done with it"),
+            ),
+            crate::skills::SkillState::Managed { .. } => c.line(
                 Status::Warn,
                 format!("{id}: retired (the plan skill is now `artefacto-plan`) — `load skill install` removes it"),
-            );
+            ),
+            _ => {}
         }
     }
     for skill in crate::skills::all() {

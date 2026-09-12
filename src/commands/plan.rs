@@ -308,7 +308,7 @@ fn render(
         .unwrap_or_else(|| plan_html_path(&prep.repo_base));
     if rt.dry_run {
         println!(
-            "would run: {} plan render {} --out {}",
+            "would run: {} plan render {} --out {} --json",
             artefacto::program(),
             path.display(),
             target.display()
@@ -343,12 +343,14 @@ fn render(
             v["title"].as_str().unwrap_or_default(),
             target.display()
         );
-        warn_stale_feedback(prep, &hash);
         if !no_open {
             crate::studio::server::open_browser(&file_url(&target));
             println!("opened in your browser (pass --no-open to skip)");
         }
     }
+    // On stderr in both modes: a stale feedback file is worth a line even
+    // to a caller reading the JSON.
+    warn_stale_feedback(prep, &hash);
     // Record in the per-machine recents registry — canonical renders only
     // (default input AND default output): a --out/FILE render pairs a
     // non-canonical plan or scratch path with no clean verb or staleness

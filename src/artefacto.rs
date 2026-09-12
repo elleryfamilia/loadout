@@ -151,6 +151,19 @@ pub fn command() -> Command {
     Command::new(program())
 }
 
+/// Whether artefacto's own installer put it here: cargo-dist writes a
+/// receipt under the config directory, `artefacto/artefacto-receipt.json`.
+/// `load update` reinstalls through the same installer only when it did;
+/// a build or a package manager's copy is not loadout's to replace.
+pub fn has_receipt() -> bool {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| crate::config::home_dir().map(|h| h.join(".config")));
+    base.map(|b| b.join("artefacto").join("artefacto-receipt.json").is_file())
+        .unwrap_or(false)
+}
+
 /// How to install artefacto by hand.
 pub fn install_hint() -> String {
     format!("curl -LsSf {INSTALLER_URL} | sh")

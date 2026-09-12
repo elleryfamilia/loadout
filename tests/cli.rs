@@ -66,6 +66,12 @@ impl Fixture {
         // Isolate the per-machine trust store (the HOME override already
         // covers the fallback path; the explicit var makes asserts addressable).
         c.env("LOADOUT_STATE_DIR", self.global.path().join("state"));
+        // No artefacto unless a test names one: the developer's PATH or
+        // shell must not decide what `load plan` and `load skill` see.
+        c.env(
+            "LOADOUT_ARTEFACTO_BIN",
+            self.global.path().join("no-artefacto-here"),
+        );
         c.arg("--cwd").arg(self.repo.path());
         c
     }
@@ -3110,6 +3116,10 @@ case "$verb" in
     echo '{"ok":true,"path":"'"$file"'","out":"'"$out"'","plan_hash":"sha256:fake","title":"Demo plan","phases":1,"tasks":1,"warnings":[{"code":"long_summary","path":"/meta/summary_md","message":"long"}],"index":{"recorded":true,"poster":"/tmp/poster.svg"}}'
     ;;
   status)
+    if grep -q '"stale-render"' "$file" 2>/dev/null; then
+      echo '{"ok":false,"state":"stale","path":"'"$file"'","out":"'"$out"'","plan_hash":"sha256:new","rendered_hash":"sha256:fake","title":"Demo plan","phases":1,"tasks":1}'
+      exit 1
+    fi
     if grep -q '"broken"' "$file" 2>/dev/null; then
       echo '{"ok":false,"state":"unknown","path":"'"$file"'","errors":[{"code":"invalid_json","path":"","message":"bad"}]}'
       exit 1
@@ -3124,6 +3134,18 @@ case "$verb" in
   *) echo "fake artefacto: unknown $*" >&2; exit 2 ;;
 esac
 "##;
+
+/// A SKILL.md exactly as loadout installs it: frontmatter, then the marker
+/// carrying the real content hash of the file, then the body. What
+/// `write_skill_files` writes, rebuilt here so a test can seed a pristine
+/// managed install of any id.
+fn pristine_managed_skill_md(id: &str, body: &str) -> String {
+    let content = format!("---\nname: {id}\n---\n{body}");
+    let hash = loadout::hash::context_hash(&[("SKILL.md", content.as_str())]);
+    format!(
+        "---\nname: {id}\n---\n<!-- loadout:skill content={hash} — installed by loadout; edits disable auto-upgrade; manage with `load skill` -->\n{body}"
+    )
+}
 
 struct FakeDispatchTarget {
     bin: std::path::PathBuf,
@@ -3374,6 +3396,18 @@ fn plan_render_json_prints_artefactos_result_verbatim_and_still_records() {
     assert_eq!(v["ok"], true);
     assert_eq!(v["out"], default_html(&f));
     assert!(f.read_state("recents.json").contains("Demo plan"));
+
+    // A stale feedback file is still said, on stderr, beside the JSON.
+    f.write(
+        ".loadout/workflow/artifacts/plan-feedback.json",
+        r#"{ "format": "artefacto.feedback/1", "plan_id": "demo",
+             "plan_hash": "sha256:dead", "verdict": "comment", "comments": [] }"#,
+    );
+    plan_cmd(&f, &fake)
+        .args(["plan", "render", "--json"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("feedback may be stale"));
 }
 
 #[test]
@@ -3579,6 +3613,17 @@ fn plan_status_forwards_and_reports_the_render_state() {
         .assert()
         .success()
         .stdout(predicate::str::contains("render: fresh"));
+
+    // A render artefacto calls stale (non-zero exit, an answer all the same).
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "format": "artefacto.plan/1", "stale-render": true }"#,
+    );
+    plan_cmd(&f, &fake)
+        .args(["plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("render: STALE"));
 
     // A plan artefacto cannot read is said to be invalid, not stale.
     f.write(
@@ -3837,7 +3882,7 @@ fn skill_install_takes_the_plan_skill_from_artefactos_manifest_and_retires_the_o
     fs::create_dir_all(skills.join("loadout-plan-preview")).unwrap();
     fs::write(
         skills.join("loadout-plan-preview/SKILL.md"),
-        "---\nname: loadout-plan-preview\n---\n<!-- loadout:skill content=sha256:old — installed by loadout -->\nold\n",
+        pristine_managed_skill_md("loadout-plan-preview", "old\n"),
     )
     .unwrap();
     fs::create_dir_all(skills.join("mine")).unwrap();
@@ -3889,6 +3934,155 @@ fn skill_install_takes_the_plan_skill_from_artefactos_manifest_and_retires_the_o
             .contains("skill --print"),
         "read from the manifest"
     );
+}
+
+#[test]
+fn the_pointer_skill_becomes_the_real_one_and_back_again() {
+    // Installed while artefacto was missing, the pointer has one file; once
+    // artefacto answers, the next install must replace it — a pristine
+    // install is pristine however many files this binary would write today.
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
+    let dir = f.global.path().join("home/.agents/skills/artefacto-plan");
+    f.cmd()
+        .args(["skill", "install", "artefacto-plan"])
+        .assert()
+        .success();
+    assert!(fs::read_to_string(dir.join("SKILL.md"))
+        .unwrap()
+        .contains("artefacto is not installed"));
+    assert!(!dir.join("reference.md").exists());
+
+    plan_cmd(&f, &fake)
+        .args(["skill", "install", "artefacto-plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("upgraded").or(predicate::str::contains("installed")))
+        .stdout(predicate::str::contains("local edits").not());
+    let md = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+    assert!(
+        md.contains("# Fake plan skill"),
+        "the real skill replaced the pointer: {md}"
+    );
+    assert!(dir.join("reference.md").exists());
+    plan_cmd(&f, &fake)
+        .args(["skill", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("installed, current"))
+        .stdout(predicate::str::contains("edited by you").not());
+
+    // And back: artefacto gone, the install must read as pristine and the
+    // pointer must replace it, leaving no file of the real skill behind.
+    f.cmd()
+        .args(["skill", "install", "artefacto-plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local edits").not());
+    assert!(fs::read_to_string(dir.join("SKILL.md"))
+        .unwrap()
+        .contains("artefacto is not installed"));
+    assert!(
+        !dir.join("reference.md").exists(),
+        "a file the pointer does not ship is not left behind"
+    );
+    f.cmd()
+        .args(["skill", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("installed, current"));
+
+    // A real edit is still a real edit.
+    fs::write(
+        dir.join("SKILL.md"),
+        format!(
+            "{}\nmy note\n",
+            fs::read_to_string(dir.join("SKILL.md")).unwrap()
+        ),
+    )
+    .unwrap();
+    plan_cmd(&f, &fake)
+        .args(["skill", "install", "artefacto-plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local edits"));
+    assert!(fs::read_to_string(dir.join("SKILL.md"))
+        .unwrap()
+        .contains("my note"));
+}
+
+#[test]
+fn a_retired_install_the_user_edited_stays_and_doctor_says_so() {
+    let f = Fixture::new();
+    let skills = f.global.path().join("home/.agents/skills");
+    fs::create_dir_all(skills.join("loadout-plan-preview")).unwrap();
+    fs::write(
+        skills.join("loadout-plan-preview/SKILL.md"),
+        "---\nname: loadout-plan-preview\n---\n<!-- loadout:skill content=sha256:old — installed by loadout -->\nold, plus my own notes\n",
+    )
+    .unwrap();
+    f.cmd()
+        .args(["skill", "install", "loadout-migrate"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed the retired skill").not());
+    assert!(
+        skills.join("loadout-plan-preview/SKILL.md").exists(),
+        "an edited managed install is never deleted"
+    );
+    f.cmd()
+        .arg("doctor")
+        .assert()
+        .stdout(predicate::str::contains(
+        "loadout-plan-preview: retired (the plan skill is now `artefacto-plan`) and edited by you",
+    ));
+}
+
+#[test]
+fn update_reinstalls_artefacto_through_its_installer_when_it_has_a_receipt() {
+    let f = Fixture::new();
+    let bin = fake_artefacto(&f, "0.1.0");
+    let xdg = f.global.path().join("xdg");
+    fs::create_dir_all(xdg.join("artefacto")).unwrap();
+    fs::write(
+        xdg.join("artefacto/artefacto-receipt.json"),
+        r#"{"binaries":["artefacto"],"install_prefix":"/somewhere","version":"0.0.1"}"#,
+    )
+    .unwrap();
+    // A local installer standing in for the download; it records that it ran.
+    let ran = f.global.path().join("installer-ran");
+    let installer = f.global.path().join("installer.sh");
+    fs::write(
+        &installer,
+        format!("#!/bin/sh\ntouch '{}'\n", ran.display()),
+    )
+    .unwrap();
+    make_executable(&installer);
+
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &bin)
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "30000")
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("LOADOUT_ARTEFACTO_INSTALLER", &installer)
+        .args(["update", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("artefacto 0.1.0 is installed"))
+        .stdout(predicate::str::contains("reinstalls the latest release"));
+    assert!(!ran.exists(), "--check runs nothing");
+
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &bin)
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "30000")
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("LOADOUT_ARTEFACTO_INSTALLER", &installer)
+        .args(["update"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "artefacto 0.1.0 is the latest release",
+        ));
+    assert!(ran.exists(), "the installer ran");
 }
 
 #[test]

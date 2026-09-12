@@ -2818,12 +2818,9 @@ mod tests {
         assert!(body.contains(&format!("/artifacts/{id}")));
         assert!(body.contains("target=\"_blank\""));
         assert!(body.contains("rel=\"noopener\""));
-        // Badges come from artefacto, which the route test does not have;
-        // the batched check is covered by `plan_badges_come_from_one_batched_check`.
-        assert!(
-            !body.contains("recent-badge"),
-            "no artefacto, no badge: {body}"
-        );
+        // Badges come from artefacto, which this route test does not
+        // control (it may or may not be on the developer's PATH); the
+        // batched check is covered by `plan_badges_come_from_one_batched_check`.
         assert!(
             body.contains("4 phases · 15 tasks"),
             "detail line from the seeded entry's detail map: {body}"

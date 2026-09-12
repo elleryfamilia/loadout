@@ -21,8 +21,11 @@ version and date (see [RELEASING.md](RELEASING.md)).
   file goes to artefacto as it is, and artefacto's exit codes come back
   unchanged. If artefacto is missing, `load plan` offers to install it (a
   terminal prompt; off a terminal it prints the one-liner). `load doctor`
-  reports artefacto's version or absence, and `load update` updates it after
-  loadout. The plan format is now `artefacto.plan/1`; `loadout.plan/1`
+  reports artefacto's version or absence, and `load update` reinstalls the
+  latest release through artefacto's installer when artefacto's own installer
+  put it there (`--check` says so instead of guessing). A pushed review is
+  not a Recents row — it lives on artefacto's server and in `artefacto list`;
+  Recents keeps recording static renders. The plan format is now `artefacto.plan/1`; `loadout.plan/1`
   documents are still read.
 - **The plan skill is `artefacto-plan`.** It is artefacto's own, read from the
   installed binary by `load skill install`, `load run`, and studio; a two-line

@@ -81,14 +81,8 @@ pub enum Outcome {
 /// Run the update (or, with `check_only`, just report whether one exists).
 /// Network- and filesystem-heavy; backs the `load update` subcommand.
 pub fn perform(check_only: bool) -> crate::Result<Outcome> {
-    perform_app(APP, check_only)
-}
-
-/// [`perform`] for any cargo-dist-installed app with a receipt in the config
-/// directory. `load update` runs it for loadout and then for artefacto.
-pub fn perform_app(app: &str, check_only: bool) -> crate::Result<Outcome> {
     use axoupdater::AxoUpdater;
-    let mut updater = AxoUpdater::new_for(app);
+    let mut updater = AxoUpdater::new_for(APP);
     // No receipt ⇒ not an installer-based install ⇒ can't self-update.
     if updater.load_receipt().is_err() {
         return Ok(Outcome::NotManaged);

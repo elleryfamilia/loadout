@@ -153,14 +153,21 @@ pub fn all() -> &'static [Skill] {
     ALL.get_or_init(|| vec![MIGRATE, REMEMBER, IMPORT_WORKFLOW, artefacto_plan_skill()])
 }
 
-/// Remove every retired skill still installed under loadout's marker, and
-/// return what was removed. A copy without the marker is the user's and
-/// stays.
+/// Remove every retired skill still installed under loadout's marker and
+/// untouched since, and return what was removed. A copy without the marker
+/// is the user's and stays; so does a managed install the user has edited,
+/// which `load doctor` names instead — loadout never deletes an edit.
 pub fn remove_retired(home: &Path) -> Vec<PathBuf> {
     let mut removed = Vec::new();
     for id in RETIRED {
         let stale = Skill { id, files: &[] };
-        if matches!(status(home, &stale).state, SkillState::Managed { .. }) {
+        if matches!(
+            status(home, &stale).state,
+            SkillState::Managed {
+                user_modified: false,
+                ..
+            }
+        ) {
             if let Ok(paths) = remove(home, &stale) {
                 removed.extend(paths);
             }
@@ -244,15 +251,30 @@ pub fn embedded_hash(skill: &Skill) -> String {
     hash::context_hash(&pairs)
 }
 
-/// Recompute the content hash from an installed directory, stripping markers.
-/// `None` if any manifest file is missing or unreadable.
-fn on_disk_hash(dir: &Path, skill: &Skill) -> Option<String> {
-    let mut pairs: Vec<(&str, String)> = Vec::new();
-    for f in skill.files {
-        let text = std::fs::read_to_string(dir.join(f.relpath)).ok()?;
-        pairs.push((f.relpath, strip_marker(&text)));
+/// Recompute the content hash from an installed directory: every regular
+/// file in it, by relative path, markers stripped. Over what is there, not
+/// over the skill's current file list, because the two can differ without
+/// anyone having edited anything — the plan skill has one file as a pointer
+/// and two once artefacto answers — and an install that matches its own
+/// marker is pristine whatever this binary would write today. `None` if the
+/// directory cannot be read.
+fn on_disk_hash(dir: &Path, _skill: &Skill) -> Option<String> {
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    for entry in std::fs::read_dir(dir).ok()? {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let text = std::fs::read_to_string(entry.path()).ok()?;
+        pairs.push((name, strip_marker(&text)));
     }
-    Some(hash::context_hash(&pairs))
+    pairs.sort();
+    let borrowed: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(n, t)| (n.as_str(), t.as_str()))
+        .collect();
+    Some(hash::context_hash(&borrowed))
 }
 
 // --- layout -------------------------------------------------------------------
@@ -522,6 +544,11 @@ pub fn remove(home: &Path, skill: &Skill) -> Result<Vec<PathBuf>> {
     Ok(removed)
 }
 
+/// Write the skill's files, and drop any regular file of a previous version
+/// that this one does not ship: the install must hold exactly this version's
+/// files, or its on-disk hash can never match its marker again. Only ever
+/// called for a directory that is new or pristine under loadout's marker,
+/// so nothing a user wrote is in reach.
 fn write_skill_files(dir: &Path, skill: &Skill) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let content_hash = embedded_hash(skill);
@@ -532,6 +559,16 @@ fn write_skill_files(dir: &Path, skill: &Skill) -> Result<()> {
             f.content.to_string()
         };
         atomic_write(&dir.join(f.relpath), &body)?;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+            let name = entry.file_name().to_string_lossy().to_string();
+            if is_file && !skill.files.iter().any(|f| f.relpath == name) {
+                std::fs::remove_file(entry.path())
+                    .with_context(|| format!("removing {}", entry.path().display()))?;
+            }
+        }
     }
     Ok(())
 }
