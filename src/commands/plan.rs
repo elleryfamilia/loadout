@@ -1,17 +1,28 @@
-//! `load plan` — validate, render, and review agent-emitted development plans.
+//! `load plan` — a dispatcher over `artefacto plan`.
 //!
-//! Every verb first ensures the plan gitignore entries (the agent writes
-//! plan.json before any render runs, and this must never be committable by
-//! accident), then does its work. See design-plan-visualizer.md.
+//! artefacto owns the plan artifact: the `artefacto.plan/1` format, its
+//! validation, the rendered page, and the live review (`push`, the served
+//! page, the loop an agent runs). loadout keeps what is loadout's: the
+//! well-known paths under `.loadout/`, the gitignore entries (the agent
+//! writes plan.json before anything runs, and it must never be committable
+//! by accident), the Recents registry, and `clean`. Every verb ensures the
+//! gitignore entries, then runs `artefacto plan <verb>` with those paths
+//! filled in. artefacto's exit codes reach the caller unchanged: an agent
+//! branches on them.
+//!
+//! `LOADOUT_ARTEFACTO_BIN` names the binary to run; tests point it at a
+//! stand-in.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::{ExitStatus, Stdio};
 
-use anyhow::bail;
+use anyhow::{bail, Context as _};
 
 use super::{prepare, Prepared, Runtime};
+use crate::artefacto::{self, Presence};
 use crate::cli::{PlanAction, PlanArgs};
-use crate::plan::model;
+use crate::style::Painter;
 use crate::workflow::artifacts_dir;
 use crate::writer::{ensure_line, AtomicWriter, Writer as _};
 
@@ -84,21 +95,280 @@ pub fn run(rt: &Runtime, args: &PlanArgs) -> crate::Result<()> {
             json,
             lenient,
         }) => check(&prep, rt, file.as_deref(), *json, *lenient),
-        Some(PlanAction::Render { file, out, no_open }) => {
-            render(&prep, rt, file.as_deref(), out.as_deref(), *no_open)
-        }
+        Some(PlanAction::Render {
+            file,
+            out,
+            no_open,
+            json,
+        }) => render(&prep, rt, file.as_deref(), out.as_deref(), *no_open, *json),
+        Some(PlanAction::Push { args }) => push(&prep, rt, args),
         Some(PlanAction::Schema) => {
-            let skill = crate::skills::by_id("loadout-plan-preview").expect("shipped skill");
-            let reference = skill
-                .files
-                .iter()
-                .find(|f| f.relpath == "reference.md")
-                .expect("skill ships reference.md");
-            println!("{}", reference.content);
-            Ok(())
+            require_artefacto()?;
+            forward(&["schema".to_string()])
         }
         Some(PlanAction::Clean) => clean(&prep, rt),
     }
+}
+
+/// artefacto must answer before a verb runs. Missing, it is offered on a
+/// terminal and named off one; either way the verb does not run without it.
+fn require_artefacto() -> crate::Result<()> {
+    match artefacto::probe() {
+        Presence::Found { .. } => Ok(()),
+        Presence::TimedOut => bail!(
+            "artefacto is installed but `{} --version` did not answer within the probe deadline",
+            artefacto::program()
+        ),
+        Presence::Missing => {
+            if artefacto::offer_install(&Painter::auto())? {
+                Ok(())
+            } else {
+                bail!("artefacto is not installed")
+            }
+        }
+    }
+}
+
+/// `artefacto plan <args>` with the terminal's stdio. A non-zero exit ends
+/// this process with the same code: 2, 4, 6, and 7 are artefacto's contract
+/// with an agent, and a dispatcher that flattened them would break the loop.
+fn forward(args: &[String]) -> crate::Result<()> {
+    let status = artefacto::command()
+        .arg("plan")
+        .args(args)
+        .status()
+        .with_context(|| format!("running `{} plan`", artefacto::program()))?;
+    exit_unless_ok(status)
+}
+
+fn exit_unless_ok(status: ExitStatus) -> crate::Result<()> {
+    if status.success() {
+        return Ok(());
+    }
+    std::process::exit(status.code().unwrap_or(1))
+}
+
+/// `artefacto plan <args>` with stdout captured, for a verb loadout reads
+/// the result of. stderr stays the terminal's. On failure the captured
+/// stdout is printed (an agent's JSON lives there) and the code is kept.
+fn capture(args: &[String]) -> crate::Result<String> {
+    let out = artefacto::command()
+        .arg("plan")
+        .args(args)
+        .stderr(Stdio::inherit())
+        .output()
+        .with_context(|| format!("running `{} plan`", artefacto::program()))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    if !out.status.success() {
+        print!("{stdout}");
+        std::process::exit(out.status.code().unwrap_or(1));
+    }
+    Ok(stdout)
+}
+
+/// Like [`capture`], for a side question: `None` on any failure, nothing
+/// printed anywhere.
+fn capture_quiet(args: &[String]) -> Option<String> {
+    let out = artefacto::command()
+        .arg("plan")
+        .args(args)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn plan_file(prep: &Prepared, rt: &Runtime, file: Option<&Path>) -> PathBuf {
+    file.map(|f| resolve_relative(&rt.cwd, f))
+        .unwrap_or_else(|| plan_json_path(&prep.repo_base))
+}
+
+fn arg(p: &Path) -> String {
+    p.display().to_string()
+}
+
+fn status(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
+    let _ = rt;
+    let json = plan_json_path(&prep.repo_base);
+    if !json.exists() {
+        println!(
+            "no plan.json at {} — an agent with the artefacto-plan skill writes one",
+            json.display()
+        );
+        return Ok(());
+    }
+    require_artefacto()?;
+    let html = plan_html_path(&prep.repo_base);
+    let raw = capture_quiet(&[
+        "status".to_string(),
+        arg(&json),
+        "--out".to_string(),
+        arg(&html),
+        "--json".to_string(),
+    ]);
+    let Some(v) = raw.and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok()) else {
+        println!("plan.json present but invalid — run `load plan check`");
+        return Ok(());
+    };
+    let hash = v["plan_hash"].as_str().unwrap_or_default().to_string();
+    println!(
+        "plan '{}' — {} tasks, hash {}",
+        v["title"].as_str().unwrap_or_default(),
+        v["tasks"],
+        crate::hash::short(&hash)
+    );
+    match v["state"].as_str().unwrap_or("none") {
+        "fresh" => println!("render: fresh ({})", html.display()),
+        "stale" => println!("render: STALE — run `load plan render`"),
+        _ => println!("render: none — run `load plan render`"),
+    }
+    warn_stale_feedback(prep, &hash);
+    Ok(())
+}
+
+fn check(
+    prep: &Prepared,
+    rt: &Runtime,
+    file: Option<&Path>,
+    json: bool,
+    lenient: bool,
+) -> crate::Result<()> {
+    require_artefacto()?;
+    let path = plan_file(prep, rt, file);
+    let mut args = vec!["check".to_string(), arg(&path)];
+    if json {
+        args.push("--json".to_string());
+    }
+    if lenient {
+        args.push("--lenient".to_string());
+    }
+    // The stale-feedback warning wants the plan's hash, which only the JSON
+    // form carries: one quiet extra call, and only when there is a feedback
+    // file to compare it with.
+    if feedback_path(&prep.repo_base).exists() {
+        let mut quiet = vec!["check".to_string(), arg(&path), "--json".to_string()];
+        if lenient {
+            quiet.push("--lenient".to_string());
+        }
+        let hash = capture_quiet(&quiet)
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| v["files"][0]["plan_hash"].as_str().map(str::to_string));
+        if let Some(hash) = hash {
+            warn_stale_feedback(prep, &hash);
+        }
+    }
+    forward(&args)
+}
+
+/// Loud stderr warning when plan-feedback.json was written against another
+/// plan than the one with `plan_hash`.
+fn warn_stale_feedback(prep: &Prepared, plan_hash: &str) {
+    let path = feedback_path(&prep.repo_base);
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return;
+    };
+    let fhash = v.get("plan_hash").and_then(|x| x.as_str()).unwrap_or("");
+    if fhash != plan_hash {
+        crate::warn_user!(
+            "plan-feedback.json targets plan hash {fhash}; the current plan is {plan_hash} — feedback may be stale"
+        );
+    }
+}
+
+fn render(
+    prep: &Prepared,
+    rt: &Runtime,
+    file: Option<&Path>,
+    out: Option<&Path>,
+    no_open: bool,
+    json: bool,
+) -> crate::Result<()> {
+    require_artefacto()?;
+    let path = plan_file(prep, rt, file);
+    let target = out
+        .map(|o| resolve_relative(&rt.cwd, o))
+        .unwrap_or_else(|| plan_html_path(&prep.repo_base));
+    if rt.dry_run {
+        println!(
+            "would run: {} plan render {} --out {}",
+            artefacto::program(),
+            path.display(),
+            target.display()
+        );
+        return Ok(());
+    }
+    // `--json` makes artefacto print its result instead of opening a
+    // browser; loadout opens the page itself, or prints the result.
+    let raw = capture(&[
+        "render".to_string(),
+        arg(&path),
+        "--out".to_string(),
+        arg(&target),
+        "--json".to_string(),
+    ])?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).context("reading artefacto's render result")?;
+    let hash = v["plan_hash"].as_str().unwrap_or_default().to_string();
+    if json {
+        print!("{raw}");
+    } else {
+        for w in v["warnings"].as_array().into_iter().flatten() {
+            println!(
+                "warning[{}] {}: {}",
+                w["code"].as_str().unwrap_or_default(),
+                w["path"].as_str().unwrap_or_default(),
+                w["message"].as_str().unwrap_or_default()
+            );
+        }
+        println!(
+            "rendered {} → {}",
+            v["title"].as_str().unwrap_or_default(),
+            target.display()
+        );
+        warn_stale_feedback(prep, &hash);
+        if !no_open {
+            crate::studio::server::open_browser(&file_url(&target));
+            println!("opened in your browser (pass --no-open to skip)");
+        }
+    }
+    // Record in the per-machine recents registry — canonical renders only
+    // (default input AND default output): a --out/FILE render pairs a
+    // non-canonical plan or scratch path with no clean verb or staleness
+    // story, and would sit as a permanent dead row (no-prune rule).
+    if file.is_none() && out.is_none() {
+        record_render(&prep.repo_base, &v, &target, json);
+    }
+    Ok(())
+}
+
+/// `push`: the plan file is the first argument when there is one that does
+/// not start with `-`; loadout's default otherwise. Everything else goes to
+/// artefacto as it is, and its output and exit code come back as they are.
+fn push(prep: &Prepared, rt: &Runtime, args: &[String]) -> crate::Result<()> {
+    require_artefacto()?;
+    let (file, rest) = match args.first() {
+        Some(first) if !first.starts_with('-') => {
+            (resolve_relative(&rt.cwd, Path::new(first)), &args[1..])
+        }
+        _ => (plan_json_path(&prep.repo_base), args),
+    };
+    if rt.dry_run {
+        println!(
+            "would run: {} plan push {} {}",
+            artefacto::program(),
+            file.display(),
+            rest.join(" ")
+        );
+        return Ok(());
+    }
+    let mut argv = vec!["push".to_string(), arg(&file)];
+    argv.extend(rest.iter().cloned());
+    forward(&argv)
 }
 
 fn clean(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
@@ -158,203 +428,21 @@ pub(crate) fn clean_artifacts(repo_base: &Path, dry_run: bool) -> crate::Result<
     Ok(removed)
 }
 
-/// Load + parse + validate; returns the plan or prints diagnostics and errs.
-fn load_checked(
-    prep: &Prepared,
-    cwd: &Path,
-    file: Option<&Path>,
-    json: bool,
-    lenient: bool,
-) -> crate::Result<(model::Plan, Vec<model::Issue>)> {
-    let path = file
-        .map(|f| resolve_relative(cwd, f))
-        .unwrap_or_else(|| plan_json_path(&prep.repo_base));
-    let input = std::fs::read_to_string(&path)
-        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
-    let (plan, warnings, errors) = match model::parse(&input, lenient) {
-        Ok(p) => {
-            let errs = model::validate(&p.plan);
-            if errs.is_empty() {
-                (Some(p.plan), p.warnings, vec![])
-            } else {
-                (None, p.warnings, errs)
-            }
-        }
-        Err(errs) => (None, vec![], errs),
-    };
-    if !errors.is_empty() {
-        report_issues(json, &errors, &warnings);
-        bail!("plan.json has {} error(s)", errors.len());
-    }
-    Ok((plan.expect("no errors means a plan"), warnings))
-}
-
-fn report_issues(json: bool, errors: &[model::Issue], warnings: &[model::Issue]) {
-    if json {
-        let doc = serde_json::json!({
-            "ok": errors.is_empty(), "errors": errors, "warnings": warnings });
-        println!("{}", serde_json::to_string(&doc).expect("issues serialize"));
-    } else {
-        for e in errors {
-            println!("error[{}] {}: {}", e.code, e.path, e.message);
-        }
-        for w in warnings {
-            println!("warning[{}] {}: {}", w.code, w.path, w.message);
-        }
-    }
-}
-
-fn check(
-    prep: &Prepared,
-    rt: &Runtime,
-    file: Option<&Path>,
-    json: bool,
-    lenient: bool,
-) -> crate::Result<()> {
-    let (plan, mut warnings) = load_checked(prep, &rt.cwd, file, json, lenient)?;
-    warnings.extend(model::advisories(&plan));
-    warn_stale_feedback(prep, &plan);
-    if json {
-        report_issues(true, &[], &warnings);
-    } else {
-        for w in &warnings {
-            println!("warning[{}] {}: {}", w.code, w.path, w.message);
-        }
-        println!(
-            "plan.json is valid ({} tasks, hash {})",
-            plan.phases.iter().map(|p| p.tasks.len()).sum::<usize>(),
-            crate::hash::short(&model::plan_hash(&plan))
-        );
-        // Structure at a glance, so the author can sanity-check the shape
-        // without opening the render.
-        if !plan.phases.is_empty() {
-            let breakdown = plan
-                .phases
-                .iter()
-                .map(|p| format!("{} {}", p.title, p.tasks.len()))
-                .collect::<Vec<_>>()
-                .join(" · ");
-            println!("  {} phases: {breakdown}", plan.phases.len());
-        }
-    }
-    Ok(())
-}
-
-/// Loud stderr warning when plan-feedback.json targets a different plan.
-fn warn_stale_feedback(prep: &Prepared, plan: &model::Plan) {
-    let path = feedback_path(&prep.repo_base);
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return;
-    };
-    let fid = v.get("plan_id").and_then(|x| x.as_str()).unwrap_or("");
-    let fhash = v.get("plan_hash").and_then(|x| x.as_str()).unwrap_or("");
-    let hash = model::plan_hash(plan);
-    if fid != plan.meta.id || fhash != hash {
-        crate::warn_user!(
-            "plan-feedback.json targets plan '{fid}' ({fhash}); current plan is '{}' ({hash}) — feedback may be stale",
-            plan.meta.id
-        );
-    }
-}
-
-fn status(prep: &Prepared, rt: &Runtime) -> crate::Result<()> {
-    let json = plan_json_path(&prep.repo_base);
-    if !json.exists() {
-        println!(
-            "no plan.json at {} — an agent with the loadout-plan-preview skill writes one",
-            json.display()
-        );
-        return Ok(());
-    }
-    match load_checked(prep, &rt.cwd, None, false, true) {
-        Ok((plan, _)) => {
-            let hash = model::plan_hash(&plan);
-            println!(
-                "plan '{}' — {} tasks, hash {}",
-                plan.meta.id,
-                plan.phases.iter().map(|p| p.tasks.len()).sum::<usize>(),
-                crate::hash::short(&hash)
-            );
-            let html = plan_html_path(&prep.repo_base);
-            match std::fs::read_to_string(&html)
-                .ok()
-                .and_then(|c| crate::render::header::extract_context_hash(&c))
-            {
-                Some(h) if h == hash => println!("render: fresh ({})", html.display()),
-                Some(_) => println!("render: STALE — run `load plan render`"),
-                None => println!("render: none — run `load plan render`"),
-            }
-            warn_stale_feedback(prep, &plan);
-        }
-        Err(e) => println!("plan.json present but invalid: {e:#} — run `load plan check`"),
-    }
-    Ok(())
-}
-
-fn render(
-    prep: &Prepared,
-    rt: &Runtime,
-    file: Option<&Path>,
-    out: Option<&Path>,
-    no_open: bool,
-) -> crate::Result<()> {
-    let (plan, warnings) = load_checked(prep, &rt.cwd, file, false, false)?;
-    for w in &warnings {
-        println!("warning[{}] {}: {}", w.code, w.path, w.message);
-    }
-    warn_stale_feedback(prep, &plan);
-    let html = crate::plan::render::render(&plan);
-    let path = out
-        .map(|o| resolve_relative(&rt.cwd, o))
-        .unwrap_or_else(|| plan_html_path(&prep.repo_base));
-    let written = AtomicWriter::new(rt.dry_run).write(&path, &html)?;
-    println!(
-        "rendered {} ({}) → {}",
-        plan.meta.id,
-        written.action.label(),
-        path.display()
-    );
-    if !no_open && !rt.dry_run {
-        crate::studio::server::open_browser(&file_url(&path));
-        println!("opened in your browser (pass --no-open to skip)");
-    }
-    // Record in the per-machine recents registry — canonical renders only
-    // (default input AND default output): a --out/FILE render pairs a
-    // non-canonical plan or scratch path with no clean verb or staleness
-    // story, and would sit as a permanent dead row (no-prune rule).
-    if !rt.dry_run && file.is_none() && out.is_none() {
-        record_render(&prep.repo_base, &plan, &path);
-    }
-    Ok(())
-}
-
-/// Best-effort recents recording. A registry failure must never fail the
-/// render; messaging keys off the outcome so we never advertise an entry
-/// that wasn't written.
-fn record_render(repo_base: &Path, plan: &model::Plan, html_path: &Path) {
+/// Best-effort recents recording from artefacto's render result. A registry
+/// failure must never fail the render; messaging keys off the outcome so we
+/// never advertise an entry that wasn't written, and says nothing at all
+/// when the caller asked for JSON.
+fn record_render(repo_base: &Path, result: &serde_json::Value, html_path: &Path, quiet: bool) {
     use crate::recents::{clamp_title, Entry, RecentsStore, RecordOutcome};
     let mut detail = std::collections::BTreeMap::new();
-    detail.insert(
-        "plan_id".to_string(),
-        serde_json::Value::from(plan.meta.id.clone()),
-    );
-    detail.insert(
-        "phases".to_string(),
-        serde_json::Value::from(plan.phases.len()),
-    );
-    detail.insert(
-        "tasks".to_string(),
-        serde_json::Value::from(plan.phases.iter().map(|p| p.tasks.len()).sum::<usize>()),
-    );
+    detail.insert("phases".to_string(), result["phases"].clone());
+    detail.insert("tasks".to_string(), result["tasks"].clone());
     let entry = Entry {
         kind: "plan".to_string(),
         path: html_path.to_path_buf(), // record() absolutizes
         repo: std::path::absolute(repo_base).unwrap_or_else(|_| repo_base.to_path_buf()),
-        title: clamp_title(&plan.meta.title),
-        hash: model::plan_hash(plan),
+        title: clamp_title(result["title"].as_str().unwrap_or_default()),
+        hash: result["plan_hash"].as_str().unwrap_or_default().to_string(),
         rendered_at: super::now_rfc3339(),
         detail,
         extra: std::collections::BTreeMap::new(),
@@ -362,7 +450,9 @@ fn record_render(repo_base: &Path, plan: &model::Plan, html_path: &Path) {
     let mut store = RecentsStore::load_default();
     match store.record(entry) {
         RecordOutcome::Recorded => {
-            println!("(also available under Recents in `load studio`)");
+            if !quiet {
+                println!("(also available under Recents in `load studio`)");
+            }
         }
         RecordOutcome::ReadOnlyNewer => crate::warn_user!(
             "recents state was written by a newer loadout — this render won't appear in studio Recents until you upgrade"

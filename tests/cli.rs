@@ -3048,157 +3048,548 @@ fn hook_remove_honors_dry_run() {
     assert_eq!(before, fx.read_home(".cursor/hooks.json"));
 }
 
+// ---------------------------------------------------------------------------
+// `load plan`: a dispatcher over `artefacto plan`. A stand-in artefacto,
+// written per test, records every argv it was called with and answers the
+// way the real one does, so these prove what loadout passes and reads, not
+// what artefacto does with it. One test drives the real binary when
+// `LOADOUT_ARTEFACTO_REAL` names it.
+// ---------------------------------------------------------------------------
+
+/// A stand-in `artefacto` that answers `--version` with `version` and
+/// refuses everything else, for the commands that only need to know it is
+/// there.
+fn fake_artefacto(f: &Fixture, version: &str) -> std::path::PathBuf {
+    let bin = f.global.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let path = bin.join("artefacto");
+    fs::write(
+        &path,
+        format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"artefacto {version}\"; exit 0; fi\necho \"fake artefacto: $*\" >&2\nexit 2\n"),
+    )
+    .unwrap();
+    make_executable(&path);
+    path
+}
+
+fn make_executable(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+const FAKE_DISPATCH_TARGET: &str = r#"#!/bin/sh
+LOG="__LOG__"
+echo "$*" >> "$LOG"
+if [ "$1" = "--version" ]; then echo "artefacto 0.1.0"; exit 0; fi
+verb="$2"; file="$3"
+out=""; prev=""
+for a in "$@"; do if [ "$prev" = "--out" ]; then out="$a"; fi; prev="$a"; done
+case "$verb" in
+  check)
+    if grep -q '"broken"' "$file" 2>/dev/null; then
+      echo '{"ok":false,"files":[{"path":"'"$file"'","ok":false,"errors":[{"code":"unknown_ref","path":"/phases/0","message":"nope"}],"warnings":[]}]}'
+      echo "error[unknown_ref] /phases/0: nope" >&2
+      exit 1
+    fi
+    echo '{"ok":true,"files":[{"path":"'"$file"'","ok":true,"plan_hash":"sha256:fake","title":"Demo plan","phases":1,"tasks":1,"errors":[],"warnings":[]}]}'
+    ;;
+  render)
+    if grep -q '"broken"' "$file" 2>/dev/null; then
+      echo '{"ok":false,"path":"'"$file"'","errors":[{"code":"invalid_json","path":"","message":"bad"}]}'
+      exit 1
+    fi
+    mkdir -p "$(dirname "$out")"
+    printf '<!-- artefacto:generated context=sha256:fake -->\n<!doctype html><html><body data-plan-ref="task:t-a">fake page</body></html>\n' > "$out"
+    echo '{"ok":true,"path":"'"$file"'","out":"'"$out"'","plan_hash":"sha256:fake","title":"Demo plan","phases":1,"tasks":1,"warnings":[{"code":"long_summary","path":"/meta/summary_md","message":"long"}],"index":{"recorded":true,"poster":"/tmp/poster.svg"}}'
+    ;;
+  status)
+    state=none; if [ -f "$out" ]; then state=fresh; fi
+    echo '{"ok":true,"state":"'"$state"'","path":"'"$file"'","out":"'"$out"'","plan_hash":"sha256:fake","rendered_hash":null,"title":"Demo plan","phases":1,"tasks":1}'
+    ;;
+  push) echo "pushed: $*"; exit "${FAKE_PUSH_EXIT:-0}" ;;
+  schema) echo "artefacto.plan/1 schema reference" ;;
+  *) echo "fake artefacto: unknown $*" >&2; exit 2 ;;
+esac
+"#;
+
+struct FakeDispatchTarget {
+    bin: std::path::PathBuf,
+    log: std::path::PathBuf,
+}
+
+impl FakeDispatchTarget {
+    fn new(f: &Fixture) -> Self {
+        let bin_dir = f.global.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("artefacto");
+        let log = f.global.path().join("artefacto-calls.log");
+        fs::write(
+            &bin,
+            FAKE_DISPATCH_TARGET.replace("__LOG__", &log.display().to_string()),
+        )
+        .unwrap();
+        make_executable(&bin);
+        FakeDispatchTarget { bin, log }
+    }
+
+    /// Every `plan …` argv line the stand-in saw, in order.
+    fn calls(&self) -> Vec<String> {
+        fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.starts_with("plan "))
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+fn plan_cmd(f: &Fixture, fake: &FakeDispatchTarget) -> Command {
+    let mut c = f.cmd();
+    c.env("LOADOUT_ARTEFACTO_BIN", &fake.bin);
+    // The probe's three-second deadline is for a wedged CLI; under a full
+    // parallel run a shell script's start can be slower than that.
+    c.env("LOADOUT_PROBE_TIMEOUT_MS", "30000");
+    c
+}
+
+const RECENTS_PLAN: &str = r#"{ "format": "artefacto.plan/1",
+     "meta": { "id": "demo", "title": "Demo plan" },
+     "phases": [ { "id": "p1", "title": "P", "tasks": [
+       { "id": "t-a", "title": "A" } ] } ] }"#;
+
+/// The repo as loadout sees it: `--cwd` is canonicalized, and on macOS the
+/// temp directory sits behind a `/var` symlink.
+fn real_repo(f: &Fixture) -> std::path::PathBuf {
+    f.repo_path().canonicalize().unwrap()
+}
+
+fn default_plan(f: &Fixture) -> String {
+    real_repo(f)
+        .join(".loadout/workflow/artifacts/plan.json")
+        .display()
+        .to_string()
+}
+
+fn default_html(f: &Fixture) -> String {
+    real_repo(f)
+        .join(".loadout/generated/plan.html")
+        .display()
+        .to_string()
+}
+
 #[test]
 fn plan_status_ensures_gitignore_before_any_artifact_exists() {
+    // No plan.json means nothing to ask artefacto about: the status needs
+    // no binary, and the gitignore entries are written all the same.
     let f = Fixture::new();
     f.git_init();
-    f.cmd().args(["plan"]).assert().success();
+    f.cmd()
+        .env(
+            "LOADOUT_ARTEFACTO_BIN",
+            f.global.path().join("nowhere/artefacto"),
+        )
+        .args(["plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no plan.json"))
+        .stdout(predicate::str::contains("artefacto-plan skill"));
     let ignore = f.read(".gitignore");
     assert!(ignore.contains(".loadout/workflow/artifacts/plan.json"));
     assert!(ignore.contains(".loadout/workflow/artifacts/plan-feedback.json"));
     assert!(ignore.contains(".loadout/generated/"));
-    // Status reports the missing input rather than failing.
-    f.cmd()
-        .args(["plan"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("no plan.json"));
 }
 
 #[test]
-fn plan_check_reports_pointer_errors_as_json() {
+fn plan_without_artefacto_says_how_to_install_and_runs_nothing() {
     let f = Fixture::new();
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    for verb in [
+        &["plan", "check"][..],
+        &["plan", "render", "--no-open"][..],
+        &["plan", "push"][..],
+        &["plan", "schema"][..],
+        &["plan"][..],
+    ] {
+        f.cmd()
+            .env(
+                "LOADOUT_ARTEFACTO_BIN",
+                f.global.path().join("nowhere/artefacto"),
+            )
+            .args(verb)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("artefacto is not installed"))
+            .stderr(predicate::str::contains("artefacto-installer.sh | sh"));
+    }
+    assert!(!f.exists(".loadout/generated/plan.html"));
+}
+
+#[test]
+fn plan_check_forwards_loadouts_default_file_and_the_flags() {
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
+        .args(["plan", "check", "--json", "--lenient"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"plan_hash\":\"sha256:fake\""));
+    assert_eq!(
+        fake.calls(),
+        [format!("plan check {} --json --lenient", default_plan(&f))]
+    );
+
+    // A file of the user's own anchors to the invocation directory.
+    f.write("alt.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
+        .args(["plan", "check", "alt.json"])
+        .assert()
+        .success();
+    assert_eq!(
+        fake.calls().last().unwrap(),
+        &format!("plan check {}", real_repo(&f).join("alt.json").display())
+    );
+}
+
+#[test]
+fn plan_check_keeps_artefactos_exit_code_and_output() {
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
     f.write(
         ".loadout/workflow/artifacts/plan.json",
-        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
-             "phases": [ { "id": "p1", "title": "P", "tasks": [
-               { "id": "t-a", "title": "A", "depends_on": ["t-ghost"] } ] } ] }"#,
+        r#"{ "format": "artefacto.plan/1", "broken": true }"#,
     );
     f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &fake.bin)
         .args(["plan", "check", "--json"])
         .assert()
-        .failure()
+        .code(1)
         .stdout(predicate::str::contains("\"code\":\"unknown_ref\""))
-        .stdout(predicate::str::contains("/phases/0/tasks/0/depends_on/0"));
+        .stderr(predicate::str::contains("error[unknown_ref]"));
 }
 
 #[test]
-fn plan_check_passes_valid_input_and_warns_on_stale_feedback() {
+fn plan_check_warns_on_stale_feedback_through_one_quiet_extra_call() {
     let f = Fixture::new();
-    f.write(
-        ".loadout/workflow/artifacts/plan.json",
-        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
-             "phases": [ { "id": "p1", "title": "P", "tasks": [
-               { "id": "t-a", "title": "A" } ] } ] }"#,
-    );
-    f.cmd()
+    let fake = FakeDispatchTarget::new(&f);
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
         .args(["plan", "check"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("plan.json is valid"))
-        .stdout(predicate::str::contains("1 phases: P 1"));
+        .stderr(predicate::str::contains("feedback").not());
+    assert_eq!(fake.calls().len(), 1, "no feedback file, no extra call");
+
     f.write(
         ".loadout/workflow/artifacts/plan-feedback.json",
-        r#"{ "format": "loadout.plan-feedback/1", "plan_id": "other",
-             "plan_hash": "sha256:dead", "comments": [] }"#,
+        r#"{ "format": "artefacto.feedback/1", "plan_id": "demo",
+             "plan_hash": "sha256:dead", "verdict": "comment", "comments": [] }"#,
     );
-    f.cmd()
+    plan_cmd(&f, &fake)
         .args(["plan", "check"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("feedback"));
+        .stderr(predicate::str::contains("feedback may be stale"));
+    let calls = fake.calls();
+    assert_eq!(
+        calls.len(),
+        3,
+        "the quiet JSON call, then the forwarded one: {calls:?}"
+    );
+    assert!(calls[1].ends_with("--json"), "{calls:?}");
+    assert_eq!(calls[2], format!("plan check {}", default_plan(&f)));
 }
 
 #[test]
-fn plan_check_advises_on_overlong_summary() {
+fn plan_render_forwards_writes_the_page_records_recents_and_opens_nothing() {
     let f = Fixture::new();
-    let long = "x".repeat(1600);
-    f.write(
-        ".loadout/workflow/artifacts/plan.json",
-        &format!(
-            r#"{{ "format": "loadout.plan/1",
-                 "meta": {{ "id": "demo", "title": "D", "summary_md": "{long}" }} }}"#
-        ),
-    );
-    f.cmd()
-        .args(["plan", "check"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("warning[long_summary]"))
-        .stdout(predicate::str::contains("warning[wall_of_text]"))
-        .stdout(predicate::str::contains("plan.json is valid"));
-
-    // Paragraph breaks clear the wall-of-text advisory even when the text
-    // stays long enough to trip the single-paragraph check on its own.
-    let paragraphs = format!("{}\\n\\n{}", "x".repeat(400), "y".repeat(400));
-    f.write(
-        ".loadout/workflow/artifacts/plan.json",
-        &format!(
-            r#"{{ "format": "loadout.plan/1",
-                 "meta": {{ "id": "demo", "title": "D", "summary_md": "{paragraphs}" }} }}"#
-        ),
-    );
-    f.cmd()
-        .args(["plan", "check"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("warning[wall_of_text]").not());
-}
-
-#[test]
-fn plan_render_writes_marked_html_and_respects_no_open() {
-    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
     f.git_init();
-    f.write(
-        ".loadout/workflow/artifacts/plan.json",
-        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
-             "phases": [ { "id": "p1", "title": "P", "tasks": [
-               { "id": "t-a", "title": "A" } ] } ] }"#,
-    );
-    f.cmd()
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
         .args(["plan", "render", "--no-open"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(".loadout/generated/plan.html"));
+        .stdout(predicate::str::contains("warning[long_summary]"))
+        .stdout(predicate::str::contains("rendered Demo plan →"))
+        .stdout(predicate::str::contains(".loadout/generated/plan.html"))
+        .stdout(predicate::str::contains("opened in your browser").not())
+        .stdout(predicate::str::contains(
+            "(also available under Recents in `load studio`)",
+        ));
+    assert_eq!(
+        fake.calls(),
+        [format!(
+            "plan render {} --out {} --json",
+            default_plan(&f),
+            default_html(&f)
+        )],
+        "artefacto renders to loadout's path, and --json keeps its browser shut"
+    );
     let html = f.read(".loadout/generated/plan.html");
-    assert!(html.starts_with("<!-- loadout:generated context=sha256:"));
-    assert!(html.contains("data-plan-ref=\"task:t-a\""));
+    assert!(html.starts_with("<!-- artefacto:generated context=sha256:"));
     assert!(f.read(".gitignore").contains(".loadout/generated/"));
+    let raw = f.read_state("recents.json");
+    assert!(raw.contains("\"kind\": \"plan\""), "{raw}");
+    assert!(raw.contains("Demo plan"), "{raw}");
+    assert!(raw.contains("plan.html"), "{raw}");
+    assert!(
+        raw.contains("sha256:fake"),
+        "the row carries artefacto's hash: {raw}"
+    );
+    // Render again: still exactly one entry (upsert by path), still first.
+    plan_cmd(&f, &fake)
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+    let raw = f.read_state("recents.json");
+    assert_eq!(raw.matches("\"kind\": \"plan\"").count(), 1, "{raw}");
+}
+
+#[test]
+fn plan_render_json_prints_artefactos_result_verbatim_and_still_records() {
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    let out = plan_cmd(&f, &fake)
+        .args(["plan", "render", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).expect("stdout is the JSON alone");
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["out"], default_html(&f));
+    assert!(f.read_state("recents.json").contains("Demo plan"));
+}
+
+#[test]
+fn plan_render_dry_run_out_and_file_variants_record_nothing() {
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    f.write("alt-plan.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
+        .args(["--dry-run", "plan", "render", "--no-open"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would run:"));
+    assert!(fake.calls().is_empty(), "dry-run runs nothing that writes");
+    assert!(!f.state_exists("recents.json"), "dry-run must not record");
+    plan_cmd(&f, &fake)
+        .args(["plan", "render", "--no-open", "--out", "scratch.html"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recents").not());
+    assert!(!f.state_exists("recents.json"), "--out must not record");
+    // A relative --out resolves against --cwd (the fixture repo), not the
+    // test binary's real process cwd.
+    assert!(
+        f.exists("scratch.html"),
+        "relative --out must land inside the --cwd repo, not the process cwd"
+    );
+    plan_cmd(&f, &fake)
+        .args(["plan", "render", "--no-open", "alt-plan.json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Recents").not());
+    assert!(
+        !f.state_exists("recents.json"),
+        "FILE input must not record"
+    );
+    assert!(fake.calls().last().unwrap().starts_with(&format!(
+        "plan render {}",
+        real_repo(&f).join("alt-plan.json").display()
+    )));
+}
+
+/// A relative `--out` must anchor to the directory loadout was invoked
+/// from, not the detected repo root — the universal CLI convention. This
+/// drives the binary with no `--cwd` at all, from `docs/` inside a git
+/// repo, so the default plan.json is found at the root while the output
+/// lands where the user stood.
+#[test]
+fn plan_render_relative_out_anchors_to_invocation_dir_not_repo_root() {
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
+    f.git_init();
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    let docs_dir = f.repo_path().join("docs");
+    fs::create_dir_all(&docs_dir).unwrap();
+
+    let mut c = Command::cargo_bin("load").unwrap();
+    c.env("LOADOUT_CONFIG_DIR", f.global.path().join("empty"));
+    c.env("HOME", f.global.path().join("home"));
+    c.env("LOADOUT_STATE_DIR", f.global.path().join("state"));
+    c.env("LOADOUT_ARTEFACTO_BIN", &fake.bin);
+    c.env("LOADOUT_PROBE_TIMEOUT_MS", "30000");
+    c.current_dir(&docs_dir);
+    c.args(["plan", "render", "--no-open", "--out", "preview.html"]);
+    c.assert().success();
+
+    assert!(
+        docs_dir.join("preview.html").exists(),
+        "relative --out must land in the invocation dir (docs/), not the repo root"
+    );
+    assert!(
+        !f.exists("preview.html"),
+        "relative --out must not land at the repo root"
+    );
+    let call = fake.calls().pop().unwrap();
+    assert!(
+        call.contains(&format!("plan render {}", default_plan(&f))),
+        "the default input is still the repo's: {call}"
+    );
 }
 
 #[test]
 fn plan_render_fails_cleanly_on_invalid_input() {
     let f = Fixture::new();
-    f.write(".loadout/workflow/artifacts/plan.json", "{ not json");
-    f.cmd()
+    let fake = FakeDispatchTarget::new(&f);
+    f.write(
+        ".loadout/workflow/artifacts/plan.json",
+        r#"{ "broken": true "#,
+    );
+    plan_cmd(&f, &fake)
         .args(["plan", "render", "--no-open"])
         .assert()
-        .failure()
+        .code(1)
         .stdout(predicate::str::contains("invalid_json"));
     assert!(!f.exists(".loadout/generated/plan.html"));
+    assert!(!f.state_exists("recents.json"));
 }
 
 #[test]
-fn plan_schema_prints_the_reference() {
+fn plan_push_forwards_the_default_file_and_every_flag_verbatim() {
     let f = Fixture::new();
-    f.cmd()
+    let fake = FakeDispatchTarget::new(&f);
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
+        .args([
+            "plan",
+            "push",
+            "--session",
+            "tok",
+            "--base-revision",
+            "2",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pushed:"));
+    assert_eq!(
+        fake.calls(),
+        [format!(
+            "plan push {} --session tok --base-revision 2 --json",
+            default_plan(&f)
+        )]
+    );
+
+    // A file first, then flags; the file anchors to the invocation dir.
+    f.write("alt.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
+        .args(["plan", "push", "alt.json", "--force", "--no-open"])
+        .assert()
+        .success();
+    assert_eq!(
+        fake.calls().last().unwrap(),
+        &format!(
+            "plan push {} --force --no-open",
+            real_repo(&f).join("alt.json").display()
+        )
+    );
+
+    // Dry run: nothing runs.
+    let before = fake.calls().len();
+    plan_cmd(&f, &fake)
+        .args(["--dry-run", "plan", "push", "--force"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would run:"));
+    assert_eq!(fake.calls().len(), before);
+}
+
+#[test]
+fn plan_push_keeps_artefactos_exit_code() {
+    // 7 is "the server is ahead of your --base-revision", which an agent
+    // branches on; a dispatcher that flattened it to 1 would break the loop.
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
+        .env("FAKE_PUSH_EXIT", "7")
+        .args(["plan", "push", "--base-revision", "1"])
+        .assert()
+        .code(7);
+}
+
+#[test]
+fn plan_schema_forwards_to_artefacto() {
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
+    plan_cmd(&f, &fake)
         .args(["plan", "schema"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("loadout.plan/1"));
+        .stdout(predicate::str::contains(
+            "artefacto.plan/1 schema reference",
+        ));
+    assert_eq!(fake.calls(), ["plan schema".to_string()]);
+}
+
+#[test]
+fn plan_status_forwards_and_reports_the_render_state() {
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
+        .args(["plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("plan 'Demo plan' — 1 tasks"))
+        .stdout(predicate::str::contains("render: none"));
+    assert_eq!(
+        fake.calls(),
+        [format!(
+            "plan status {} --out {} --json",
+            default_plan(&f),
+            default_html(&f)
+        )]
+    );
+    plan_cmd(&f, &fake)
+        .args(["plan", "render", "--no-open"])
+        .assert()
+        .success();
+    plan_cmd(&f, &fake)
+        .args(["plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("render: fresh"));
+
+    // Stale feedback is said here too.
+    f.write(
+        ".loadout/workflow/artifacts/plan-feedback.json",
+        r#"{ "format": "artefacto.feedback/1", "plan_id": "demo",
+             "plan_hash": "sha256:dead", "verdict": "comment", "comments": [] }"#,
+    );
+    plan_cmd(&f, &fake)
+        .args(["plan"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("feedback may be stale"));
 }
 
 #[test]
 fn plan_clean_removes_only_marked_html() {
     let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
     f.git_init();
-    f.write(
-        ".loadout/workflow/artifacts/plan.json",
-        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
-             "phases": [ { "id": "p1", "title": "P", "tasks": [
-               { "id": "t-a", "title": "A" } ] } ] }"#,
-    );
-    f.cmd()
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    plan_cmd(&f, &fake)
         .args(["plan", "render", "--no-open"])
         .assert()
         .success();
@@ -3217,87 +3608,6 @@ fn plan_clean_removes_only_marked_html() {
         .success()
         .stdout(predicate::str::contains("not a generated plan page"));
     assert!(f.exists(".loadout/generated/plan.html"));
-}
-
-/// A stand-in `artefacto` that answers `--version` with `version`, for the
-/// commands that only need to know it is there.
-fn fake_artefacto(f: &Fixture, version: &str) -> std::path::PathBuf {
-    let bin = f.global.path().join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    let path = bin.join("artefacto");
-    fs::write(
-        &path,
-        format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"artefacto {version}\"; exit 0; fi\necho \"fake artefacto: $*\" >&2\nexit 2\n"),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    path
-}
-
-#[test]
-fn doctor_reports_artefacto_present_absent_or_mismatched() {
-    let f = Fixture::new();
-    let bin = fake_artefacto(&f, "0.1.4");
-    f.cmd()
-        .env("LOADOUT_ARTEFACTO_BIN", &bin)
-        .arg("doctor")
-        .assert()
-        .stdout(predicate::str::contains("artefacto: 0.1.4"))
-        .stdout(predicate::str::contains("tested with").not());
-
-    let newer = fake_artefacto(&f, "0.2.0");
-    f.cmd()
-        .env("LOADOUT_ARTEFACTO_BIN", &newer)
-        .arg("doctor")
-        .assert()
-        .stdout(predicate::str::contains("artefacto: 0.2.0"))
-        .stdout(predicate::str::contains(
-            "this loadout was tested with 0.1.0",
-        ));
-
-    f.cmd()
-        .env(
-            "LOADOUT_ARTEFACTO_BIN",
-            f.global.path().join("nowhere/artefacto"),
-        )
-        .arg("doctor")
-        .assert()
-        .stdout(predicate::str::contains("artefacto not on PATH"))
-        .stdout(predicate::str::contains("artefacto-installer.sh | sh"));
-}
-
-#[test]
-fn update_check_reports_an_artefacto_it_did_not_install() {
-    // No receipt for either binary in the isolated config, so neither is
-    // managed and no release host is asked: the report is offline.
-    let f = Fixture::new();
-    let bin = fake_artefacto(&f, "0.1.0");
-    f.cmd()
-        .env("LOADOUT_ARTEFACTO_BIN", &bin)
-        .env("XDG_CONFIG_HOME", f.global.path().join("xdg"))
-        .args(["update", "--check"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "artefacto 0.1.0 wasn't installed via its installer",
-        ))
-        .stdout(predicate::str::contains("artefacto-installer.sh | sh"));
-
-    // With no artefacto at all there is nothing to say about it.
-    f.cmd()
-        .env(
-            "LOADOUT_ARTEFACTO_BIN",
-            f.global.path().join("nowhere/artefacto"),
-        )
-        .env("XDG_CONFIG_HOME", f.global.path().join("xdg"))
-        .args(["update", "--check"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("artefacto").not());
 }
 
 #[test]
@@ -3323,110 +3633,12 @@ fn plan_clean_removes_a_page_artefacto_rendered() {
     assert!(!f.exists(".loadout/generated/plan.html"));
 }
 
-const RECENTS_PLAN: &str = r#"{ "format": "loadout.plan/1",
-     "meta": { "id": "demo", "title": "Demo plan" },
-     "phases": [ { "id": "p1", "title": "P", "tasks": [
-       { "id": "t-a", "title": "A" } ] } ] }"#;
-
-#[test]
-fn plan_render_records_a_recents_entry_and_advertises_it() {
-    let f = Fixture::new();
-    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
-    f.cmd()
-        .args(["plan", "render", "--no-open"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "(also available under Recents in `load studio`)",
-        ));
-    let raw = f.read_state("recents.json");
-    assert!(raw.contains("\"kind\": \"plan\""), "{raw}");
-    assert!(raw.contains("Demo plan"), "{raw}");
-    assert!(raw.contains("plan.html"), "{raw}");
-    // Render again: still exactly one entry (upsert by path), still first.
-    f.cmd()
-        .args(["plan", "render", "--no-open"])
-        .assert()
-        .success();
-    let raw = f.read_state("recents.json");
-    assert_eq!(raw.matches("\"kind\": \"plan\"").count(), 1, "{raw}");
-}
-
-#[test]
-fn plan_render_dry_run_out_and_file_variants_record_nothing() {
-    let f = Fixture::new();
-    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
-    f.write("alt-plan.json", RECENTS_PLAN);
-    f.cmd()
-        .args(["--dry-run", "plan", "render", "--no-open"])
-        .assert()
-        .success();
-    assert!(!f.state_exists("recents.json"), "dry-run must not record");
-    f.cmd()
-        .args(["plan", "render", "--no-open", "--out", "scratch.html"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Recents").not());
-    assert!(!f.state_exists("recents.json"), "--out must not record");
-    // A relative --out resolves against --cwd (the fixture repo), not the
-    // test binary's real process cwd — regression coverage for the
-    // repo-base-anchoring fix in resolve_relative().
-    assert!(
-        f.exists("scratch.html"),
-        "relative --out must land inside the --cwd repo, not the process cwd"
-    );
-    f.cmd()
-        .args(["plan", "render", "--no-open", "alt-plan.json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Recents").not());
-    assert!(
-        !f.state_exists("recents.json"),
-        "FILE input must not record"
-    );
-}
-
-/// A relative `--out` must anchor to the directory loadout was invoked
-/// from, not the detected repo root — the universal CLI convention (from
-/// `repo/docs/`, `--out preview.html` lands in `docs/`, not the repo root).
-/// This drives the real binary with no `--cwd` flag at all, so the
-/// invocation directory is the process's real OS working directory,
-/// exercised via `Command::current_dir`. The fixture is `git_init`-ed so
-/// repo-root detection climbs from `docs/` back up to the fixture root,
-/// where the default `plan.json` input lives — proving the repo-base
-/// anchor still finds the input while the output anchor tracks `--cwd`
-/// instead.
-#[test]
-fn plan_render_relative_out_anchors_to_invocation_dir_not_repo_root() {
-    let f = Fixture::new();
-    f.git_init();
-    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
-    let docs_dir = f.repo_path().join("docs");
-    fs::create_dir_all(&docs_dir).unwrap();
-
-    let mut c = Command::cargo_bin("load").unwrap();
-    c.env("LOADOUT_CONFIG_DIR", f.global.path().join("empty"));
-    c.env("HOME", f.global.path().join("home"));
-    c.env("LOADOUT_STATE_DIR", f.global.path().join("state"));
-    c.current_dir(&docs_dir);
-    c.args(["plan", "render", "--no-open", "--out", "preview.html"]);
-    c.assert().success();
-
-    assert!(
-        docs_dir.join("preview.html").exists(),
-        "relative --out must land in the invocation dir (docs/), not the repo root"
-    );
-    assert!(
-        !f.exists("preview.html"),
-        "relative --out must not land at the repo root"
-    );
-}
-
 #[test]
 fn plan_clean_removes_the_recents_entry() {
     let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
     f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
-    f.cmd()
+    plan_cmd(&f, &fake)
         .args(["plan", "render", "--no-open"])
         .assert()
         .success();
@@ -3439,11 +3651,12 @@ fn plan_clean_removes_the_recents_entry() {
 #[test]
 fn plan_render_warns_on_newer_recents_store_and_does_not_advertise() {
     let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
     f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
     fs::create_dir_all(f.global.path().join("state")).unwrap();
     let newer = r#"{"version":999,"entries":[]}"#;
     fs::write(f.global.path().join("state/recents.json"), newer).unwrap();
-    f.cmd()
+    plan_cmd(&f, &fake)
         .args(["plan", "render", "--no-open"])
         .assert()
         .success()
@@ -3469,16 +3682,9 @@ fn plan_clean_errors_on_unreadable_html_instead_of_skipping() {
     let f = Fixture::new();
     f.git_init();
     f.write(
-        ".loadout/workflow/artifacts/plan.json",
-        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
-             "phases": [ { "id": "p1", "title": "P", "tasks": [
-               { "id": "t-a", "title": "A" } ] } ] }"#,
+        ".loadout/generated/plan.html",
+        "<!-- artefacto:generated context=sha256:x -->\n<html></html>",
     );
-    f.cmd()
-        .args(["plan", "render", "--no-open"])
-        .assert()
-        .success();
-
     let html = f.repo_path().join(".loadout/generated/plan.html");
     let mut perms = fs::metadata(&html).unwrap().permissions();
     perms.set_mode(0o000);
@@ -3507,17 +3713,130 @@ fn load_clean_sweeps_plan_html_without_agent_overlays() {
     let f = Fixture::new();
     f.git_init();
     f.write(
-        ".loadout/workflow/artifacts/plan.json",
-        r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
-             "phases": [ { "id": "p1", "title": "P", "tasks": [
-               { "id": "t-a", "title": "A" } ] } ] }"#,
+        ".loadout/generated/plan.html",
+        "<!-- artefacto:generated context=sha256:x -->\n<html></html>",
     );
     f.cmd()
+        .args(["clean"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("plan"))
+        .stdout(predicate::str::contains("removed"));
+    assert!(!f.exists(".loadout/generated/plan.html"));
+}
+
+/// The real artefacto, when `LOADOUT_ARTEFACTO_REAL` names it: the dispatch
+/// above proves what loadout passes; this proves the two binaries agree on
+/// the arguments. Skipped, with a line, when the binary is not named.
+#[test]
+fn plan_render_and_check_with_the_real_artefacto() {
+    let Ok(real) = std::env::var("LOADOUT_ARTEFACTO_REAL") else {
+        eprintln!("LOADOUT_ARTEFACTO_REAL not set; skipping the real-binary test");
+        return;
+    };
+    let f = Fixture::new();
+    f.git_init();
+    f.write(".loadout/workflow/artifacts/plan.json", RECENTS_PLAN);
+    f.cmd()
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "30000")
+        .env("LOADOUT_ARTEFACTO_BIN", &real)
+        .args(["plan", "check", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"ok\":true"));
+    f.cmd()
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "30000")
+        .env("LOADOUT_ARTEFACTO_BIN", &real)
         .args(["plan", "render", "--no-open"])
         .assert()
-        .success();
-    f.cmd().args(["clean"]).assert().success();
+        .success()
+        .stdout(predicate::str::contains("rendered Demo plan"));
+    let html = f.read(".loadout/generated/plan.html");
+    let line = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/artefacto-marker-first-line.txt"
+    ))
+    .unwrap();
+    let prefix = line.split("context=").next().unwrap();
+    assert!(
+        html.starts_with(prefix),
+        "the page carries artefacto's marker"
+    );
+    assert!(f.read_state("recents.json").contains("Demo plan"));
+    f.cmd()
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "30000")
+        .env("LOADOUT_ARTEFACTO_BIN", &real)
+        .args(["plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("render: fresh"));
+    f.cmd().args(["plan", "clean"]).assert().success();
     assert!(!f.exists(".loadout/generated/plan.html"));
+}
+
+#[test]
+fn doctor_reports_artefacto_present_absent_or_mismatched() {
+    let f = Fixture::new();
+    let bin = fake_artefacto(&f, "0.1.4");
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &bin)
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "30000")
+        .arg("doctor")
+        .assert()
+        .stdout(predicate::str::contains("artefacto: 0.1.4"))
+        .stdout(predicate::str::contains("tested with").not());
+
+    let newer = fake_artefacto(&f, "0.2.0");
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &newer)
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "30000")
+        .arg("doctor")
+        .assert()
+        .stdout(predicate::str::contains("artefacto: 0.2.0"))
+        .stdout(predicate::str::contains(
+            "this loadout was tested with 0.1.0",
+        ));
+
+    f.cmd()
+        .env(
+            "LOADOUT_ARTEFACTO_BIN",
+            f.global.path().join("nowhere/artefacto"),
+        )
+        .arg("doctor")
+        .assert()
+        .stdout(predicate::str::contains("artefacto not on PATH"))
+        .stdout(predicate::str::contains("artefacto-installer.sh | sh"));
+}
+
+#[test]
+fn update_check_reports_an_artefacto_it_did_not_install() {
+    // No receipt for either binary in the isolated config, so neither is
+    // managed and no release host is asked: the report is offline.
+    let f = Fixture::new();
+    let bin = fake_artefacto(&f, "0.1.0");
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &bin)
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "30000")
+        .env("XDG_CONFIG_HOME", f.global.path().join("xdg"))
+        .args(["update", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "artefacto 0.1.0 wasn't installed via its installer",
+        ))
+        .stdout(predicate::str::contains("artefacto-installer.sh | sh"));
+
+    // With no artefacto at all there is nothing to say about it.
+    f.cmd()
+        .env(
+            "LOADOUT_ARTEFACTO_BIN",
+            f.global.path().join("nowhere/artefacto"),
+        )
+        .env("XDG_CONFIG_HOME", f.global.path().join("xdg"))
+        .args(["update", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("artefacto").not());
 }
 
 #[test]

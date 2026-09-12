@@ -151,10 +151,11 @@ pub enum SkillAction {
     Status,
 }
 
-/// `plan` options. Bare `load plan` shows status.
+/// `plan` options. Bare `load plan` shows status. Every verb runs
+/// `artefacto plan <verb>` with loadout's paths; `clean` is loadout's own.
 #[derive(Debug, Args)]
 pub struct PlanArgs {
-    /// `check`, `render`, `schema`, `clean`, or status (the default).
+    /// `check`, `render`, `push`, `schema`, `clean`, or status (the default).
     #[command(subcommand)]
     pub action: Option<PlanAction>,
 }
@@ -162,7 +163,7 @@ pub struct PlanArgs {
 /// `plan` subcommands.
 #[derive(Debug, Subcommand)]
 pub enum PlanAction {
-    /// Validate plan.json; machine-readable diagnostics with --json.
+    /// Validate plan.json (runs `artefacto plan check`).
     Check {
         /// Input file (default .loadout/workflow/artifacts/plan.json).
         file: Option<PathBuf>,
@@ -173,7 +174,8 @@ pub enum PlanAction {
         #[arg(long)]
         lenient: bool,
     },
-    /// Render plan.json to a self-contained plan.html and open it.
+    /// Render plan.json to a static, self-contained plan.html and open it
+    /// (runs `artefacto plan render`). For a live review, use `push`.
     Render {
         /// Input file (default .loadout/workflow/artifacts/plan.json).
         file: Option<PathBuf>,
@@ -183,8 +185,19 @@ pub enum PlanAction {
         /// Don't open the browser after rendering.
         #[arg(long)]
         no_open: bool,
+        /// Print artefacto's JSON result instead of a line; implies --no-open.
+        #[arg(long)]
+        json: bool,
     },
-    /// Print the plan.json schema reference.
+    /// Publish plan.json to artefacto's live review page (runs `artefacto
+    /// plan push`). An optional plan file may come first; everything else is
+    /// passed to artefacto as it is: --json, --session, --agent,
+    /// --base-revision, --force, --resolutions, --takeover, --no-open.
+    Push {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Print the plan schema reference (runs `artefacto plan schema`).
     Schema,
     /// Remove the rendered plan.html (and plan-feedback.json if present).
     Clean,
