@@ -4804,10 +4804,10 @@ mod tests {
         let body = body_of(skill_action_at(
             home.path(),
             &store,
-            "/skills/loadout-plan-preview/install",
+            "/skills/artefacto-plan/install",
             "POST",
         ));
-        assert!(body.contains("loadout-plan-preview"));
+        assert!(body.contains("artefacto-plan"));
         assert!(
             body.contains("Remove"),
             "installed row offers Remove: {body}"
@@ -4816,7 +4816,7 @@ mod tests {
         let body = body_of(skill_action_at(
             home.path(),
             &store,
-            "/skills/loadout-plan-preview/remove",
+            "/skills/artefacto-plan/remove",
             "POST",
         ));
         assert!(

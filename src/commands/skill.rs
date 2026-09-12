@@ -47,6 +47,16 @@ fn home() -> crate::Result<std::path::PathBuf> {
 
 /// `load skill install [id]`.
 fn install(rt: &Runtime, id: Option<&str>) -> crate::Result<()> {
+    if !rt.dry_run {
+        let p = Painter::auto();
+        for path in skills::remove_retired(&home()?) {
+            println!(
+                "  {} removed the retired skill at {}",
+                p.dim("·"),
+                path.display()
+            );
+        }
+    }
     let p = Painter::auto();
     let home = home()?;
     for skill in targets(id)? {

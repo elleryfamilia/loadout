@@ -14,7 +14,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context};
 
-use crate::providers::{parse_version, probe_cli, CliProbe};
+use crate::providers::parse_version;
 use crate::style::Painter;
 
 /// The artefacto version this loadout was tested against. A different major
@@ -49,14 +49,35 @@ pub enum Presence {
     TimedOut,
 }
 
-/// Run `artefacto --version` under the probe deadline.
+/// Run `artefacto --version` under doctor's probe deadline (three seconds,
+/// or `LOADOUT_PROBE_TIMEOUT_MS`).
 pub fn probe() -> Presence {
-    match probe_cli(&program()) {
-        CliProbe::Found(raw) => Presence::Found {
-            version: parse_version(&raw),
+    probe_within(crate::providers::probe_timeout())
+}
+
+/// How long a `load plan` verb waits for `artefacto --version` before
+/// deciding the binary is wedged. Longer than doctor's deadline on purpose:
+/// doctor reports, a verb is about to do work, and a slow first start on a
+/// loaded machine must not fail a push. `LOADOUT_PROBE_TIMEOUT_MS` still
+/// overrides it.
+pub const VERB_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// [`probe`] under a deadline of the caller's choosing.
+pub fn probe_within(timeout: std::time::Duration) -> Presence {
+    let timeout = std::env::var("LOADOUT_PROBE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(std::time::Duration::from_millis)
+        .unwrap_or(timeout);
+    let mut cmd = command();
+    cmd.arg("--version");
+    match crate::providers::output_with_timeout(&mut cmd, timeout) {
+        Ok(Some(o)) if o.status.success() || !o.stdout.is_empty() => Presence::Found {
+            version: parse_version(&String::from_utf8_lossy(&o.stdout)),
         },
-        CliProbe::Missing => Presence::Missing,
-        CliProbe::TimedOut => Presence::TimedOut,
+        Ok(Some(_)) => Presence::Missing,
+        Ok(None) => Presence::TimedOut,
+        Err(_) => Presence::Missing,
     }
 }
 
@@ -81,6 +102,48 @@ fn major_minor(version: &str) -> (u64, u64) {
             .unwrap_or(0)
     });
     (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+}
+
+/// The plan skill artefacto ships, as `(relative path, contents)` pairs
+/// from `artefacto skill --print`, with the skill's own directory stripped
+/// from each path. `None` when the binary is missing, does not answer within
+/// the probe deadline, or prints something that is not the manifest.
+pub fn skill_manifest() -> Option<Vec<(String, String)>> {
+    let mut cmd = command();
+    cmd.args(["skill", "--print"]);
+    let out = crate::providers::output_with_timeout(&mut cmd, crate::providers::probe_timeout())
+        .ok()
+        .flatten()?;
+    if !out.status.success() {
+        return None;
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    if manifest["format"].as_str() != Some("artefacto.skill/1") {
+        return None;
+    }
+    let skill = manifest["skills"]
+        .as_array()?
+        .iter()
+        .find(|s| s["name"].as_str() == Some(crate::skills::ARTEFACTO_PLAN_ID))?;
+    let prefix = format!("{}/", crate::skills::ARTEFACTO_PLAN_ID);
+    let files: Vec<(String, String)> = skill["files"]
+        .as_array()?
+        .iter()
+        .filter_map(|f| {
+            let path = f["path"].as_str()?;
+            let contents = f["contents"].as_str()?;
+            let relpath = path.strip_prefix(&prefix).unwrap_or(path);
+            Some((relpath.to_string(), contents.to_string()))
+        })
+        .collect();
+    // SKILL.md first: the skill lifecycle reads the marker from files[0].
+    let mut ordered: Vec<(String, String)> = files
+        .iter()
+        .filter(|(p, _)| p == "SKILL.md")
+        .cloned()
+        .collect();
+    ordered.extend(files.into_iter().filter(|(p, _)| p != "SKILL.md"));
+    (!ordered.is_empty() && ordered[0].0 == "SKILL.md").then_some(ordered)
 }
 
 /// A command for the binary, arguments to be added by the caller.

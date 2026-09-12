@@ -99,25 +99,74 @@ pub const IMPORT_WORKFLOW: Skill = Skill {
     ],
 };
 
-/// The `loadout-plan-preview` skill: teaches an agent to emit a structured
-/// plan.json and drive `load plan check`/`render`, closing the review loop.
-pub const PLAN_PREVIEW: Skill = Skill {
-    id: "loadout-plan-preview",
-    files: &[
-        SkillFile {
-            relpath: "SKILL.md",
-            content: include_str!("../skills/loadout-plan-preview/SKILL.md"),
-        },
-        SkillFile {
-            relpath: "reference.md",
-            content: include_str!("../skills/loadout-plan-preview/reference.md"),
-        },
-    ],
-};
+/// The id of the plan skill: artefacto's own name for it, so what an agent
+/// sees in its skills directory is the skill artefacto documents.
+pub const ARTEFACTO_PLAN_ID: &str = "artefacto-plan";
 
-/// Every skill shipped in this binary.
+/// Skills earlier loadouts shipped under other ids. A managed install of one
+/// is removed by `load skill install` and `load run`; a user's own copy is
+/// left alone, as always.
+pub const RETIRED: &[&str] = &["loadout-plan-preview"];
+
+/// What the plan skill says when artefacto is not on this machine: enough
+/// to get it, and nothing that would be wrong once it is.
+const POINTER_SKILL_MD: &str = "---\n\
+name: artefacto-plan\n\
+description: Review a development plan on a live page with artefacto. artefacto is not installed on this machine; run `load plan` to install it, then `load skill install artefacto-plan` for the full skill.\n\
+---\n\
+\n\
+artefacto is not installed. Run `load plan` (it offers the install), then `load skill install artefacto-plan` to replace this pointer with the real skill.\n";
+
+/// The plan skill: artefacto's, read once per process from
+/// `artefacto skill --print`, or the pointer when the binary does not
+/// answer. Read once because [`Skill`] holds `'static` text, which the
+/// embedded skills get from `include_str!`; the manifest's text is leaked
+/// once instead, a bounded cost. A studio that outlives an install of
+/// artefacto shows the pointer until it restarts.
+fn artefacto_plan_skill() -> Skill {
+    let files: &'static [SkillFile] = match crate::artefacto::skill_manifest() {
+        Some(files) => Box::leak(
+            files
+                .into_iter()
+                .map(|(relpath, content)| SkillFile {
+                    relpath: Box::leak(relpath.into_boxed_str()),
+                    content: Box::leak(content.into_boxed_str()),
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        None => &[SkillFile {
+            relpath: "SKILL.md",
+            content: POINTER_SKILL_MD,
+        }],
+    };
+    Skill {
+        id: ARTEFACTO_PLAN_ID,
+        files,
+    }
+}
+
+/// Every skill this binary manages: the embedded ones, and artefacto's plan
+/// skill.
 pub fn all() -> &'static [Skill] {
-    &[MIGRATE, REMEMBER, IMPORT_WORKFLOW, PLAN_PREVIEW]
+    static ALL: std::sync::OnceLock<Vec<Skill>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| vec![MIGRATE, REMEMBER, IMPORT_WORKFLOW, artefacto_plan_skill()])
+}
+
+/// Remove every retired skill still installed under loadout's marker, and
+/// return what was removed. A copy without the marker is the user's and
+/// stays.
+pub fn remove_retired(home: &Path) -> Vec<PathBuf> {
+    let mut removed = Vec::new();
+    for id in RETIRED {
+        let stale = Skill { id, files: &[] };
+        if matches!(status(home, &stale).state, SkillState::Managed { .. }) {
+            if let Ok(paths) = remove(home, &stale) {
+                removed.extend(paths);
+            }
+        }
+    }
+    removed
 }
 
 /// Look up an embedded skill by id.

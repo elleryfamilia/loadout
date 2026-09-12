@@ -527,7 +527,7 @@ const EXEC_TIMEOUT: Duration = Duration::from_secs(10);
 /// post-exit wait is deadline-bounded, and on expiry the process group is
 /// killed (reaping the pipe-holder) and whatever was read so far is returned.
 /// Never-joined reader threads expire with the killed group.
-fn output_with_timeout(
+pub(crate) fn output_with_timeout(
     cmd: &mut Command,
     timeout: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {
@@ -654,7 +654,7 @@ pub(crate) fn run_ok(program: &str, args: &[&str]) -> Option<String> {
 /// it (tests use this; it's also an escape hatch for a legitimately slow CLI).
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
-fn probe_timeout() -> Duration {
+pub(crate) fn probe_timeout() -> Duration {
     std::env::var("LOADOUT_PROBE_TIMEOUT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())

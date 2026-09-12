@@ -390,6 +390,9 @@ fn skill_preflight(prep: &super::Prepared, p: &Painter, hud: &EquipHud) {
     let Some(home) = crate::config::home_dir() else {
         return;
     };
+    for path in skills::remove_retired(&home) {
+        vlog!("removed the retired skill install at {}", path.display());
+    }
     let mut offerable: Vec<&skills::Skill> = Vec::new();
     for skill in skills::all() {
         let outcome = match crate::binding::read_skill_decision(skill.id) {
@@ -564,9 +567,7 @@ fn skill_blurb(id: &str) -> &'static str {
         "loadout-migrate" => "imports an existing CLAUDE.md/AGENTS.md into loadout",
         "loadout-remember" => "saves durable preferences you state mid-session as loadout guidance",
         "loadout-import-workflow" => "imports another repo's command suite as a loadout workflow",
-        "loadout-plan-preview" => {
-            "turns an agent-written plan.json into a reviewable plan.html preview"
-        }
+        "artefacto-plan" => "reviews a development plan on a live page, through artefacto",
         _ => "an agent skill shipped with loadout",
     }
 }

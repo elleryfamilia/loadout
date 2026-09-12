@@ -3080,10 +3080,14 @@ fn make_executable(path: &std::path::Path) {
     }
 }
 
-const FAKE_DISPATCH_TARGET: &str = r#"#!/bin/sh
+const FAKE_DISPATCH_TARGET: &str = r##"#!/bin/sh
 LOG="__LOG__"
 echo "$*" >> "$LOG"
 if [ "$1" = "--version" ]; then echo "artefacto 0.1.0"; exit 0; fi
+if [ "$1" = "skill" ]; then
+  printf '%s\n' '{"format":"artefacto.skill/1","artefacto":"0.1.0","skills":[{"name":"artefacto-plan","files":[{"path":"artefacto-plan/reference.md","contents":"# Fake reference\n"},{"path":"artefacto-plan/SKILL.md","contents":"---\nname: artefacto-plan\ndescription: fake plan skill\n---\n# Fake plan skill\n\nRun artefacto plan push.\n"}]}]}'
+  exit 0
+fi
 verb="$2"; file="$3"
 out=""; prev=""
 for a in "$@"; do if [ "$prev" = "--out" ]; then out="$a"; fi; prev="$a"; done
@@ -3113,7 +3117,7 @@ case "$verb" in
   schema) echo "artefacto.plan/1 schema reference" ;;
   *) echo "fake artefacto: unknown $*" >&2; exit 2 ;;
 esac
-"#;
+"##;
 
 struct FakeDispatchTarget {
     bin: std::path::PathBuf,
@@ -3262,8 +3266,7 @@ fn plan_check_keeps_artefactos_exit_code_and_output() {
         ".loadout/workflow/artifacts/plan.json",
         r#"{ "format": "artefacto.plan/1", "broken": true }"#,
     );
-    f.cmd()
-        .env("LOADOUT_ARTEFACTO_BIN", &fake.bin)
+    plan_cmd(&f, &fake)
         .args(["plan", "check", "--json"])
         .assert()
         .code(1)
@@ -3772,6 +3775,110 @@ fn plan_render_and_check_with_the_real_artefacto() {
         .stdout(predicate::str::contains("render: fresh"));
     f.cmd().args(["plan", "clean"]).assert().success();
     assert!(!f.exists(".loadout/generated/plan.html"));
+}
+
+#[test]
+fn skill_status_and_install_use_the_pointer_when_artefacto_is_missing() {
+    let f = Fixture::new();
+    let nowhere = f.global.path().join("nowhere/artefacto");
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &nowhere)
+        .args(["skill", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("artefacto-plan"))
+        .stdout(predicate::str::contains("loadout-plan-preview").not());
+    f.cmd()
+        .env("LOADOUT_ARTEFACTO_BIN", &nowhere)
+        .args(["skill", "install", "artefacto-plan"])
+        .assert()
+        .success();
+    let md = fs::read_to_string(
+        f.global
+            .path()
+            .join("home/.agents/skills/artefacto-plan/SKILL.md"),
+    )
+    .unwrap();
+    assert!(md.starts_with("---\n"), "frontmatter first: {md}");
+    assert!(md.contains("artefacto is not installed"), "{md}");
+    assert!(md.contains("load plan"), "{md}");
+    assert!(
+        md.contains("<!-- loadout:skill"),
+        "managed, so a later install replaces it: {md}"
+    );
+}
+
+#[test]
+fn skill_install_takes_the_plan_skill_from_artefactos_manifest_and_retires_the_old_one() {
+    let f = Fixture::new();
+    let fake = FakeDispatchTarget::new(&f);
+    let skills = f.global.path().join("home/.agents/skills");
+    // A previous loadout's install, under its marker, and a copy of the
+    // user's own beside it.
+    fs::create_dir_all(skills.join("loadout-plan-preview")).unwrap();
+    fs::write(
+        skills.join("loadout-plan-preview/SKILL.md"),
+        "---\nname: loadout-plan-preview\n---\n<!-- loadout:skill content=sha256:old — installed by loadout -->\nold\n",
+    )
+    .unwrap();
+    fs::create_dir_all(skills.join("mine")).unwrap();
+    fs::write(skills.join("mine/SKILL.md"), "---\nname: mine\n---\nmine\n").unwrap();
+
+    plan_cmd(&f, &fake)
+        .args(["skill", "install", "artefacto-plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("artefacto-plan"))
+        .stdout(predicate::str::contains("removed the retired skill"));
+    let md = fs::read_to_string(skills.join("artefacto-plan/SKILL.md")).unwrap();
+    assert!(md.contains("# Fake plan skill"), "artefacto's text: {md}");
+    assert!(
+        md.contains("<!-- loadout:skill"),
+        "managed by loadout: {md}"
+    );
+    assert_eq!(
+        fs::read_to_string(skills.join("artefacto-plan/reference.md")).unwrap(),
+        "# Fake reference\n",
+        "every file of the manifest, at its relative path"
+    );
+    assert!(
+        !skills.join("loadout-plan-preview").exists(),
+        "the retired install is gone"
+    );
+    assert!(skills.join("mine").exists(), "the user's own copy stays");
+    assert!(
+        fs::read_to_string(&fake.log)
+            .unwrap()
+            .contains("skill --print"),
+        "read from the manifest"
+    );
+}
+
+#[test]
+fn skill_install_with_the_real_artefacto_installs_its_plan_skill() {
+    let Ok(real) = std::env::var("LOADOUT_ARTEFACTO_REAL") else {
+        eprintln!("LOADOUT_ARTEFACTO_REAL not set; skipping the real-binary test");
+        return;
+    };
+    let f = Fixture::new();
+    f.cmd()
+        .env("LOADOUT_PROBE_TIMEOUT_MS", "30000")
+        .env("LOADOUT_ARTEFACTO_BIN", &real)
+        .args(["skill", "install", "artefacto-plan"])
+        .assert()
+        .success();
+    let md = fs::read_to_string(
+        f.global
+            .path()
+            .join("home/.agents/skills/artefacto-plan/SKILL.md"),
+    )
+    .unwrap();
+    assert!(md.contains("artefacto plan push"), "{md}");
+    assert!(f
+        .global
+        .path()
+        .join("home/.agents/skills/artefacto-plan/reference.md")
+        .exists());
 }
 
 #[test]

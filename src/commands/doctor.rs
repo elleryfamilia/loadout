@@ -199,6 +199,18 @@ fn check_skills(c: &mut Checks) {
         c.line(Status::Warn, "cannot resolve $HOME — skill checks skipped");
         return;
     };
+    for id in crate::skills::RETIRED {
+        let stale = crate::skills::Skill { id, files: &[] };
+        if matches!(
+            crate::skills::status(&home, &stale).state,
+            crate::skills::SkillState::Managed { .. }
+        ) {
+            c.line(
+                Status::Warn,
+                format!("{id}: retired (the plan skill is now `artefacto-plan`) — `load skill install` removes it"),
+            );
+        }
+    }
     for skill in crate::skills::all() {
         let st = crate::skills::status(&home, skill);
         let decision = crate::binding::read_skill_decision(skill.id);

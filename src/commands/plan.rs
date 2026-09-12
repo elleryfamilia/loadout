@@ -113,7 +113,7 @@ pub fn run(rt: &Runtime, args: &PlanArgs) -> crate::Result<()> {
 /// artefacto must answer before a verb runs. Missing, it is offered on a
 /// terminal and named off one; either way the verb does not run without it.
 fn require_artefacto() -> crate::Result<()> {
-    match artefacto::probe() {
+    match artefacto::probe_within(artefacto::VERB_PROBE_TIMEOUT) {
         Presence::Found { .. } => Ok(()),
         Presence::TimedOut => bail!(
             "artefacto is installed but `{} --version` did not answer within the probe deadline",
