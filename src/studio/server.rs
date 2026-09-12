@@ -2847,7 +2847,11 @@ for f in "$@"; do
   h=$(sed -n 's/.*"hash": *"\([^"]*\)".*/\1/p' "$f")
   [ $first = 1 ] || printf ','
   first=0
-  printf '{"path":"%s","ok":true,"plan_hash":"%s"}' "$f" "$h"
+  if grep -q '"broken"' "$f"; then
+    printf '{"path":"%s","ok":false,"errors":[{"code":"bad","path":"","message":"bad"}]}' "$f"
+  else
+    printf '{"path":"%s","ok":true,"plan_hash":"%s"}' "$f" "$h"
+  fi
 done
 printf ']}\n'
 "##,
@@ -2862,12 +2866,12 @@ printf ']}\n'
     }
 
     fn seed_plan_json(repo: &std::path::Path, hash: &str) {
+        seed_plan_json_with(repo, &format!(r#"{{ "hash": "{hash}" }}"#));
+    }
+
+    fn seed_plan_json_with(repo: &std::path::Path, text: &str) {
         std::fs::create_dir_all(repo.join(".loadout/workflow/artifacts")).unwrap();
-        std::fs::write(
-            repo.join(".loadout/workflow/artifacts/plan.json"),
-            format!(r#"{{ "hash": "{hash}" }}"#),
-        )
-        .unwrap();
+        std::fs::write(repo.join(".loadout/workflow/artifacts/plan.json"), text).unwrap();
     }
 
     #[test]
@@ -2876,17 +2880,21 @@ printf ']}\n'
         let fresh_repo = d.path().join("fresh");
         let stale_repo = d.path().join("stale");
         let bare_repo = d.path().join("bare");
-        for r in [&fresh_repo, &stale_repo, &bare_repo] {
+        let broken_repo = d.path().join("broken");
+        for r in [&fresh_repo, &stale_repo, &bare_repo, &broken_repo] {
             std::fs::create_dir_all(r).unwrap();
         }
         seed_plan_json(&fresh_repo, "sha256:abc");
         seed_plan_json(&stale_repo, "sha256:zzz");
+        // A plan.json that no longer checks: its hash means nothing, so no badge.
+        seed_plan_json_with(&broken_repo, r#"{ "hash": "sha256:abc", "broken": true }"#);
         let store_path = d.path().join("state").join("recents.json");
         let mut store = crate::recents::RecentsStore::load_from(&store_path);
         for (repo, title, hash, kind) in [
             (&fresh_repo, "Fresh", "sha256:abc", "plan"),
             (&stale_repo, "Stale", "sha256:old", "plan"),
             (&bare_repo, "Bare", "sha256:abc", "plan"),
+            (&broken_repo, "Broken", "sha256:abc", "plan"),
             (&fresh_repo, "Other", "sha256:abc", "recap"),
         ] {
             let artifact = repo.join(format!("{title}.html"));
@@ -2925,6 +2933,11 @@ printf ']}\n'
         assert_eq!(badge("Fresh"), "Fresh");
         assert_eq!(badge("Stale"), "Stale");
         assert_eq!(badge("Bare"), "None", "no plan.json, no badge");
+        assert_eq!(
+            badge("Broken"),
+            "None",
+            "a file that fails the check has no badge"
+        );
         assert_eq!(badge("Other"), "None", "not a plan");
 
         let log = std::fs::read_to_string(format!("{program}.log")).unwrap();
