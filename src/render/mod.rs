@@ -449,7 +449,8 @@ pub fn render_workflow_section(wf: &Workflow) -> String {
         s,
         "\nWhenever you produce an implementation plan — via these stages or not — \
          offer the user a visual plan preview: emit plan.json per `load plan schema`, \
-         validate with `load plan check`, then open it with `load plan render`."
+         validate with `load plan check`, then open it with `load plan push` (a live \
+         review page) or `load plan render` (a static page)."
     );
     s.trim_end().to_string()
 }

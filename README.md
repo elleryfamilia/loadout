@@ -150,14 +150,14 @@ Workflows are global-only and never enforced — guidance rendered into each age
 
 ## Plan previews
 
-`load plan` turns an agent-written development plan into a reviewable page instead of a wall of chat text. The loop: the agent (with the embedded `loadout-plan-preview` skill) writes a structured `plan.json`; `load plan check` validates it; `load plan render` renders a self-contained `plan.html` and opens it in your browser; you leave comments on individual tasks, phases, risks, and open questions right on the page; a **Copy feedback** button assembles them into a structured document you paste back to the agent, which revises the plan and re-renders.
+`load plan` turns an agent-written development plan into a reviewable page instead of a wall of chat text. The rendering and the review loop are [artefacto](https://github.com/elleryfamilia/artefacto)'s; loadout dispatches to it with loadout's paths and installs it on first use if it is missing. The loop: the agent (with the `artefacto-plan` skill) writes a structured `plan.json`; `load plan check` validates it; `load plan push` publishes it to a live page in your browser, where you comment on tasks, phases, risks, and open questions, answer the agent's questions, and send the review — and every comment reaches the agent as data while the page is open. `load plan render` still writes a static, self-contained `plan.html` with a **Copy feedback** button for the paste-back flow.
 
 <p align="center">
   <img src="docs/screenshots/plan-preview.png" alt="load plan render — a rendered development plan: a review banner, a stat strip counting tasks, phases, risks and open questions, the executive summary with key points and out-of-scope, the per-phase ledger with the blocking-question line, and the Copy feedback bar" width="900">
 </p>
 <p align="center"><sub><i><code>load plan render</code> — an agent's plan, rendered for review with element-anchored comments.</i></sub></p>
 
-Rendering is deterministic (the same `plan.json` and loadout version always produce byte-identical HTML) and self-contained — no CDN, no external fetches, everything inlined into one file. Full detail, including the schema and the feedback contract, in [docs/concepts.md](docs/concepts.md#plan-previews-implemented).
+Rendering is deterministic and self-contained — no CDN, no external fetches, everything inlined into one file. loadout keeps the well-known paths (`.loadout/workflow/artifacts/plan.json`, `.loadout/generated/plan.html`), the gitignore entries, the Recents entry, and `load plan clean`; the schema, the page, and the live review are documented in the artefacto repository. More in [docs/concepts.md](docs/concepts.md#plan-previews-implemented).
 
 ---
 
@@ -223,7 +223,7 @@ load skill install
 
 Then, in an agent session, run `/loadout-migrate` or just ask *"Import my CLAUDE.md into Loadout."*
 
-Three more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session (instead of leaving it stranded in one agent's memory), [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows), and [`loadout-plan-preview`](skills/loadout-plan-preview/SKILL.md) drives the [plan preview](#plan-previews) loop above. The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, opencode, and Cursor.
+Two more ship: [`loadout-remember`](skills/loadout-remember/SKILL.md) saves a durable cross-project preference as a fragment when you mention one mid-session (instead of leaving it stranded in one agent's memory), and [`loadout-import-workflow`](skills/loadout-import-workflow/SKILL.md) turns another repo's command/skill suite into a loadout [workflow](#workflows). A fourth, `artefacto-plan`, drives the [plan preview](#plan-previews) loop above; it is artefacto's own skill, read from the installed binary and installed by the same `load skill` lifecycle (a two-line pointer stands in until artefacto is installed). The skills follow the cross-agent `SKILL.md` format, so the same install works in Claude Code, Codex, opencode, and Cursor.
 
 ---
 
@@ -255,7 +255,7 @@ A read-only **palette** of starter fragments also ships inside the binary; dupli
 | `load clean [--agent <id>\|all]`             | Remove generated overlays and managed blocks                        |
 | `load detect [--probes]`                     | Print detected context and optional provider data                   |
 | `load doctor`                                | Diagnose config, agents, overlays, and safety issues                |
-| `load plan [check\|render\|schema\|clean]`   | Validate, render, and review an agent-written development plan       |
+| `load plan [check\|render\|push\|schema\|clean]` | Validate, render, or publish an agent-written plan for review (via artefacto) |
 | `load trust [--rebuild]`                     | Show the per-machine script-trust store (`--rebuild` re-approves all) |
 | `load fragments trust <id>`                  | Re-approve a fragment's script after an out-of-band change          |
 | `load targets trust <id>`                    | Re-approve a target's script after an out-of-band change            |

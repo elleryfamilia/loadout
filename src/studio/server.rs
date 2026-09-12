@@ -2802,7 +2802,7 @@ mod tests {
         std::fs::create_dir_all(d.path().join(".loadout/workflow/artifacts")).unwrap();
         std::fs::write(
             d.path().join(".loadout/workflow/artifacts/plan.json"),
-            r#"{ "format": "loadout.plan/1", "meta": { "id": "demo", "title": "D" },
+            r#"{ "format": "artefacto.plan/1", "meta": { "id": "demo", "title": "D" },
                  "phases": [ { "id": "p1", "title": "P", "tasks": [
                    { "id": "t-a", "title": "A" } ] } ] }"#,
         )

@@ -163,61 +163,56 @@ imports another repo's command/skill suite into a workflow. Schema in
 
 ## Plan previews **(implemented)**
 
-`load plan` turns an agent-authored development plan into a reviewable,
-self-contained HTML page — a separate loop from the fragment/loadout/workflow
-model above, but built the same way: the agent writes a structured document,
-loadout deterministically renders it, nothing is invented by the renderer.
+`load plan` turns an agent-authored development plan into a reviewable page —
+a separate loop from the fragment/loadout/workflow model above, built the same
+way: the agent writes a structured document, a renderer turns it into a page,
+nothing is invented by the renderer. Since loadout 0.29 the renderer, the page,
+and the review loop are [artefacto](https://github.com/elleryfamilia/artefacto)'s,
+a separate binary; `load plan` is a dispatcher over `artefacto plan` that
+fills in loadout's paths.
 
-**The model.** An agent (equipped with the embedded
-[`loadout-plan-preview`](../skills/loadout-plan-preview/SKILL.md) skill)
-writes a JSON document under the `loadout.plan/1` format: a `meta` block
-(id, title, goal), a list of `phases`, each holding `tasks` (with `status`,
-`risk`, `estimate`, file touches, acceptance criteria, and `depends_on`
-edges to other tasks), plus top-level `risks` and `open_questions`. The
-schema lives in `src/plan/model.rs`; the full field reference is
-[`skills/loadout-plan-preview/reference.md`](../skills/loadout-plan-preview/reference.md).
-`load plan schema` prints it on demand.
+**The model.** An agent (equipped with the `artefacto-plan` skill, which
+loadout installs from the artefacto binary) writes a JSON document under the
+`artefacto.plan/1` format: a `meta` block (id, title, goal), a list of
+`phases`, each holding `tasks` (with `status`, `risk`, `estimate`, file
+touches, acceptance criteria, and `depends_on` edges), plus top-level `risks`
+and `open_questions`. `load plan schema` prints the full reference; the schema
+is defined in the artefacto repository. Documents in the older
+`loadout.plan/1` format are still read.
 
 **Two well-known paths.** The agent writes its plan to
 `.loadout/workflow/artifacts/plan.json` — the input. `load plan render`
-validates and renders it to `.loadout/generated/plan.html` — the output, a
-single file with inlined CSS/JS, no CDN, no external fetches, and a
-deterministic dependency graph. Same `plan.json` and the same loadout version
-always produce byte-identical HTML. (`plan.json` is deliberately not a
+validates and renders it to `.loadout/generated/plan.html` — a single static
+file with inlined CSS/JS, no CDN, no external fetches. `load plan push`
+publishes the same file to artefacto's local review server, which serves a
+live page and starts itself when needed. (`plan.json` is deliberately not a
 declared *workflow* artifact — its filename stem would collide with a
 workflow's own `plan.md` handoff file.)
 
-**The loop.** `load plan check --json` validates before rendering
-(machine-readable paths on every error, so an agent can fix precisely —
-JSON-pointer for structural/validation issues, dot-notation for type
-mismatches from the typed deserializer); `load plan render` opens the page in
-your browser. You comment inline on any task, phase, risk, or open
-question; a "Copy feedback" button assembles every comment into one
-`loadout.plan-feedback/1` document (fenced JSON, with a readable markdown
-mirror underneath) that you paste back to the agent, or that the agent reads
-directly from `.loadout/workflow/artifacts/plan-feedback.json` if you saved it
-there. Ids are stable across revisions — the agent reuses an element's id when
-revising it and mints a new one only for something genuinely new — which is
-what lets a comment's `ref` and a dependency edge keep pointing at the right
-thing after a re-render.
+**The loop.** `load plan check --json` validates before anything else
+(machine-readable paths on every error, so an agent can fix precisely).
+`load plan push --json` opens the live page and prints the session token and
+revision the agent uses for the rest of the review: the reviewer comments on
+any task, phase, risk, or open question, answers the agent's questions, asks
+its own, and sends the review; each of those reaches the agent as data while
+the page is open (`artefacto await`, `events`, `reply`, `resolve`, described
+in the skill). The static `load plan render` page keeps the paste-back flow:
+a **Copy feedback** button assembles every comment into one
+`artefacto.feedback/1` document you paste back, or that the agent reads from
+`.loadout/workflow/artifacts/plan-feedback.json`, which is also where a sent
+live review is written.
 
-**The feedback contract.** Each comment carries a `ref` (`"task:t-foo"`,
-`"phase:p-core"`, `"risk:r-locking"`, `"question:q-ttl"`, or `"meta:<plan
-id>"`), the free-form `text`, a `quote` of the commented-on element for
-context, and a `blocking` boolean — there is no comment-type taxonomy, just a
-single "Blocks approval" checkbox on the comment box. The feedback document
-also carries the `plan_hash` of the plan it was written against and an
-overall `verdict` (`request_changes` if any comment is `blocking`, `comment`
-otherwise); `load plan check` warns loudly if `plan-feedback.json` targets a
-plan that no longer matches (stale feedback).
-
-`load plan` (no subcommand) prints status — whether a plan exists, whether the
-render is fresh, whether feedback is pending — and `load plan clean` (also
-swept by a plain `load clean`) removes the rendered `plan.html` and any
-`plan-feedback.json`, never the plan itself. `plan` is a named subcommand, so
-it takes precedence over the `load <agent>` shorthand — an agent binary
-literally named `plan` can't be launched as `load plan` and needs `load run
-plan` instead.
+**What stays loadout's.** The paths above, the three gitignore entries every
+`load plan` verb ensures, the Recents entry a canonical render records (the
+studio badge asks artefacto, in one batched `plan check`, whether each row is
+still fresh), and `load plan clean` (also swept by a plain `load clean`), which
+removes the rendered `plan.html` — loadout's own or artefacto's, by its first
+line — and any `plan-feedback.json`, never the plan itself. `load plan` (no
+subcommand) prints status; `load doctor` reports artefacto's version or
+absence; `load update` updates artefacto after loadout. `plan` is a named
+subcommand, so it takes precedence over the `load <agent>` shorthand — an
+agent binary literally named `plan` can't be launched as `load plan` and needs
+`load run plan` instead.
 
 ## Providers (native environment discovery) **(implemented)**
 

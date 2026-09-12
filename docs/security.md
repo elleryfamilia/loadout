@@ -51,79 +51,29 @@ specific content, or (for `AGENTS.override.md`, which Codex *prefers* over
 gitignore management is skipped entirely outside a git repo (no stray
 `.gitignore` in `$HOME`).
 
-## Untrusted plan.json **(implemented)**
+## Untrusted plan.json **(moved to artefacto)**
 
-`load plan render` turns an agent-authored `.loadout/workflow/artifacts/plan.json`
-into `plan.html`. The agent's model output is treated as **untrusted input**,
-same as any other generated text an agent might produce, so the renderer
-defends on several layers:
+`load plan` hands an agent-authored `.loadout/workflow/artifacts/plan.json` to
+[artefacto](https://github.com/elleryfamilia/artefacto), which treats the
+agent's model output as **untrusted input**: markdown fields go through a
+sanitizer, ids are constrained, the page carries a content security policy,
+and input limits bound a runaway or hostile document. That work, and its
+tests, live with the renderer. What loadout still does:
 
-- **Markdown is sanitized, not trusted.** Every markdown field (`goal_md`,
-  `summary_md`, `mitigation_md`, `question_md`) goes through a shared
-  sanitizer (`src/markdown.rs`): raw HTML is neutralized to plain text; link
-  destinations are limited to `http://`, `https://`, `mailto:`, an
-  in-page `#fragment`, or a scheme-less relative path — anything else
-  (`javascript:`, `data:`, `vbscript:`, …) is checked case-insensitively
-  after stripping control/whitespace characters (so `java\tscript:` can't
-  sneak through) and de-linked to plain text. Images never fetch: a safe
-  destination renders as a link instead of `<img>`; an unsafe one renders as
-  plain emphasis. **This is a security fix, not just a plan-viewer feature:**
-  this same sanitizer now backs `load studio`'s markdown previews too
-  (fragment guidance, loadout overlays). Before this change, studio escaped
-  raw HTML but did not check link URL schemes — a `[text](javascript:…)` link
-  in guidance markdown rendered as a real, clickable `<a href="javascript:…">`.
-  Guidance text can come from a cloned repo's fragments, so that was a
-  latent XSS. It's closed now, in both surfaces.
-- **`icon` is a closed vocabulary, not free text.** A phase's or task's
-  `icon` field must be one of 16 fixed names (`unknown_icon` rejects anything
-  else), never `plan.json`-supplied SVG content. The renderer used to look
-  each name up in a vendored Lucide set and inline the matching SVG, which
-  was only safe *because* the vocabulary was closed. The redesigned viewer
-  draws no icons at all, so the vendored SVGs are gone and the value now
-  reaches nothing but the validator. The vocabulary check stays regardless:
-  it is what keeps the field from becoming an injection point if drawing
-  ever returns.
-- **The embedded JSON data island is escaped, not just serialized.** The
-  rendered page includes a `<script type="application/json">` copy of the
-  plan for the client-side comment tooling. Before embedding, `<`, `>`, `&`,
-  U+2028, and U+2029 are replaced with `\uXXXX` JSON escapes, so the island
-  can never contain a literal `</script>` or `<!--` — breaking out of the
-  script tag is not possible, full stop. `\uXXXX` is an ordinary JSON string
-  escape, so `JSON.parse` decodes it back to the original character; the
-  island still parses to the same data.
-- **The island is a display-sanitized copy, not the canonical model.**
-  Its markdown fields are pre-rendered through the same sanitizer as the
-  visible page, so the artifact never contains a raw `javascript:` payload
-  anywhere — not even inertly, sitting unused in the JSON. Because of that,
-  the island is *not* byte-identical to the original `plan.json`; the
-  `data-plan-fingerprint` attribute on `<body>` is a hash of the original
-  canonical model, not the island. Anything that needs the canonical plan
-  (e.g. an agent re-reading its own output) reads `plan.json` from disk, not
-  the island.
-- **Strict CSP.** The document ships its own
-  `Content-Security-Policy`: `default-src 'none'; style-src 'unsafe-inline';
-  script-src 'unsafe-inline'; img-src data:; font-src data:`. Nothing on the
-  page can fetch an external resource — no images, no scripts, no
-  stylesheets, no fonts — which is also why the renderer never uses a CDN:
-  the page is self-contained by construction, and the CSP would block a CDN
-  reference even if one were added by mistake. `font-src data:` allows the
-  embedded typefaces — Newsreader and JetBrains Mono, base64-encoded
-  directly into `plan.css`'s `@font-face` rules by
-  `tools/build-plan-fonts.py`, not fetched — and nothing else; a
-  `url(https://…)` reference would still be blocked. A test asserts every
-  `url()` in the stylesheet is a `data:` URI, so the contract cannot lapse
-  quietly.
-- **Input limits bound the blast radius of a runaway or hostile plan.json**
-  before any rendering happens: 2 MiB input size; 500 tasks; 50 phases; 100
-  risks; 100 open questions; 2000 dependency edges; 10,000 characters per
-  string field. Exceeding a collection limit or a string limit is a hard
-  validation error (`load plan check` reports it), not a truncation.
+- **Runs artefacto as a subprocess, never bundles it.** `load plan` finds the
+  binary on `PATH` (or at `LOADOUT_ARTEFACTO_BIN`), offers to install it from
+  artefacto's own release installer on a terminal, and prints the one-liner off
+  one. It never downloads anything without asking.
 - **Gitignore-before-write.** Every `load plan` verb ensures three exact
   gitignore entries — `.loadout/workflow/artifacts/plan.json`,
   `.loadout/workflow/artifacts/plan-feedback.json`, `.loadout/generated/` —
   before doing anything else, and only inside a git repo. A plan (which may
-  contain draft, half-finished, or sensitive task detail) or its rendered
-  HTML can't end up committed by accident.
+  quote code and secrets) must never be committable by accident.
+- **Marker-gated removal and serving.** `load plan clean`, `load clean`, and
+  studio's Recents serve or remove a `plan.html` only when its first line is
+  the generated marker — loadout's own or artefacto's, whose exact bytes are
+  pinned by `tests/fixtures/artefacto-marker-first-line.txt`. A file that is
+  neither is left alone and never served.
 
 ## Command execution **(implemented)**
 

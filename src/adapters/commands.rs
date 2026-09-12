@@ -43,17 +43,18 @@ const SECURITY_CHECKLIST: &str = include_str!("../../vendored/security-review/se
 /// Appended to every plan-slot command body (channel 2), whatever the stage is
 /// named — so each workflow's plan step also produces the visual plan preview.
 /// Depends only on the `load` binary, deliberately NOT on the
-/// `loadout-plan-preview` skill being surfaced: the observed failure mode is a
+/// `artefacto-plan` skill being surfaced: the observed failure mode is a
 /// session where the skill never enters the agent's context, and this line is
 /// what keeps the flow alive there.
 pub(crate) const PLAN_PREVIEW_EPILOGUE: &str = "\
 Also produce the visual plan preview: emit `.loadout/workflow/artifacts/plan.json` \
 (the format is printed by `load plan schema`), run `load plan check --json` and fix \
-errors until clean, then `load plan render` to open the review page in the user's \
-browser. If plan.json already holds a different pending plan, don't overwrite it — \
-write a sibling `plan-<topic>.json` instead and render it with `load plan render \
-.loadout/workflow/artifacts/plan-<topic>.json --out .loadout/generated/plan-<topic>.html`. \
-The `loadout-plan-preview` skill carries the full authoring guidance when available.";
+errors until clean, then `load plan push --json` to open the live review page in the \
+user's browser and keep the session token it prints (or `load plan render` for a \
+static page). If plan.json already holds a different pending plan, don't overwrite \
+it — write a sibling `plan-<topic>.json` instead and push or render that file. The \
+`artefacto-plan` skill carries the full authoring and review-loop guidance when \
+available; `load plan` installs artefacto on first use if it is missing.";
 
 /// On-disk format for an agent's command files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

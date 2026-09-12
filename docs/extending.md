@@ -83,14 +83,15 @@ register it in the provider registry, and it becomes usable as
 for reference: `host`, `toolchain`, `ai-tools`, `tailnet`, `docker`. Probes must
 degrade gracefully (missing tool → empty), redact output, and be cacheable.
 
-## Change the plan schema **(implemented — code)**
+## Change the plan schema **(moved to artefacto)**
 
-The `loadout.plan/1` schema (`load plan`'s `plan.json`) is defined in
-`src/plan/model.rs`. Additive optional fields don't bump the format id — only
-a breaking change (removing/renaming a field, tightening a constraint an
-existing plan could violate) does. See
-[`skills/loadout-plan-preview/reference.md`](../skills/loadout-plan-preview/reference.md)
-for the full field reference.
+The plan schema (`artefacto.plan/1`, `load plan`'s `plan.json`) is defined in
+the [artefacto](https://github.com/elleryfamilia/artefacto) repository, which
+owns the renderer, the page, and the `artefacto-plan` skill; `load plan`
+dispatches to the installed binary. Change it there. `src/artefacto.rs`
+records the artefacto version this loadout was tested against
+(`TESTED_VERSION`); bump it when a new artefacto is verified, and `load
+doctor` will stop noting the mismatch.
 
 ## Testing conventions
 

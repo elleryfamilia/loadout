@@ -2951,7 +2951,7 @@ mod tests {
                 state: SkillState::NotInstalled,
             },
             SkillRow {
-                id: "loadout-plan-preview",
+                id: "artefacto-plan",
                 state: SkillState::Managed {
                     marker_hash: "sha256:abc".into(),
                     user_modified: false,
@@ -2960,14 +2960,14 @@ mod tests {
             },
         ];
         let html = skill_card(
-            &["loadout-migrate", "loadout-plan-preview"],
+            &["loadout-migrate", "artefacto-plan"],
             &rows,
             &SkillCardState::HandsOff,
         );
         assert!(html.contains("loadout-migrate"));
-        assert!(html.contains("loadout-plan-preview"));
+        assert!(html.contains("artefacto-plan"));
         assert!(html.contains(r#"hx-post="/skills/loadout-migrate/install""#));
-        assert!(html.contains(r#"hx-post="/skills/loadout-plan-preview/remove""#));
+        assert!(html.contains(r#"hx-post="/skills/artefacto-plan/remove""#));
         // Every row swaps the card itself, matching the bundle button's target.
         assert!(html.contains("hx-target=\"#skill-card\""));
     }
@@ -2992,7 +2992,7 @@ mod tests {
                 },
             },
             SkillRow {
-                id: "loadout-plan-preview",
+                id: "artefacto-plan",
                 state: SkillState::Unmanaged,
             },
         ];
@@ -3003,7 +3003,7 @@ mod tests {
         // A user-modified or unmanaged row is still offered Remove/Install per
         // its own state, not folded into the aggregate hands-off message.
         assert!(html.contains(r#"hx-post="/skills/loadout-remember/remove""#));
-        assert!(html.contains(r#"hx-post="/skills/loadout-plan-preview/install""#));
+        assert!(html.contains(r#"hx-post="/skills/artefacto-plan/install""#));
     }
 
     #[test]

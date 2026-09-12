@@ -8,6 +8,39 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Changed
+
+- **`load plan` now dispatches to artefacto.** The plan renderer, the page,
+  and the review loop moved to [artefacto](https://github.com/elleryfamilia/artefacto),
+  a separate binary; `load plan check|render|schema` run `artefacto plan …`
+  with loadout's paths, and a new `load plan push` publishes the plan to
+  artefacto's live review page, where comments, answers, and the sent review
+  reach the agent as data while the page is open. Every argument after the
+  file goes to artefacto as it is, and artefacto's exit codes come back
+  unchanged. If artefacto is missing, `load plan` offers to install it (a
+  terminal prompt; off a terminal it prints the one-liner). `load doctor`
+  reports artefacto's version or absence, and `load update` updates it after
+  loadout. The plan format is now `artefacto.plan/1`; `loadout.plan/1`
+  documents are still read.
+- **The plan skill is `artefacto-plan`.** It is artefacto's own, read from the
+  installed binary by `load skill install`, `load run`, and studio; a two-line
+  pointer stands in until artefacto is installed. The retired
+  `loadout-plan-preview` install is removed by `load skill install` and
+  `load run` when it carries loadout's marker.
+- **Studio's Recents badge asks artefacto.** Fresh or stale comes from one
+  batched `artefacto plan check` over every plan row, cached for a few
+  seconds; without artefacto there is no badge, and rows list and serve as
+  before. `load plan clean`, `load clean`, and Recents accept a page artefacto
+  rendered, by its first line.
+
+### Removed
+
+- loadout's own plan module (`src/plan/`), its fixtures, the plan page's
+  browser smoke, the font-building tool, and the shipped
+  `loadout-plan-preview` skill files.
+
 ## 0.28.0 — 2026-08-17
 
 ### Added

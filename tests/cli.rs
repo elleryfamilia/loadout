@@ -3846,6 +3846,24 @@ fn skill_install_takes_the_plan_skill_from_artefactos_manifest_and_retires_the_o
         "the retired install is gone"
     );
     assert!(skills.join("mine").exists(), "the user's own copy stays");
+
+    // A copy under the retired id WITHOUT loadout's marker is the user's
+    // own, and stays.
+    fs::create_dir_all(skills.join("loadout-plan-preview")).unwrap();
+    fs::write(
+        skills.join("loadout-plan-preview/SKILL.md"),
+        "---\nname: loadout-plan-preview\n---\nhand-written\n",
+    )
+    .unwrap();
+    plan_cmd(&f, &fake)
+        .args(["skill", "install", "artefacto-plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed the retired skill").not());
+    assert!(
+        skills.join("loadout-plan-preview/SKILL.md").exists(),
+        "an unmarked copy is never removed"
+    );
     assert!(
         fs::read_to_string(&fake.log)
             .unwrap()

@@ -231,22 +231,11 @@ Because the global library was isolated under `LOADOUT_CONFIG_DIR`, nothing
 touched your real `~/.config/loadout`, and the only repo affected was the
 throwaway one.
 
-## Level 3 — Browser smoke test for the plan viewer
+## Level 3 — Browser smoke test for studio
 
-`load plan render`'s output page (`plan.html`) carries its own client-side JS
-(`src/plan/assets/plan.js`) for the dependency graph, comment anchoring, and
-the "Copy feedback" button. `tests/browser_smoke.rs` checks that JS actually
-runs correctly in a real browser, not just that the HTML is well-formed.
-
-The page's JS has a `#selftest` mode: opening `plan.html#selftest` (instead of
-the plain path) runs a small self-check of the pure-core logic (comment
-anchoring, feedback-document assembly) inside the page itself, then appends a
-result marker to the DOM: `<pre id="selftest-result">LOADOUT_SELFTEST_PASS…</pre>`
-on success. The test drives headless Chrome with `--dump-dom` against a
-rendered fixture plan and asserts that exact marker element is present — it
-anchors on the DOM element, not the bare string `LOADOUT_SELFTEST_PASS` (that
-literal also appears in `plan.js`'s own source, which `--dump-dom` serializes
-into the page regardless of whether the selftest ran).
+`tests/browser_smoke.rs` checks studio's topbar layout in a real browser, at
+widths from 1400px down to 380px. (The plan page's own browser suite lives
+with the page, in the artefacto repository.)
 
 The test is `#[ignore]`d by default (it needs a real Chrome/Chromium binary,
 which isn't guaranteed to be present). **CI** runs it explicitly on
@@ -266,6 +255,14 @@ order: the `CHROME_BIN` env var, then `google-chrome` / `chromium` /
 of those resolve, the test panics with "no Chrome found; set CHROME_BIN" —
 set `CHROME_BIN` to your browser's binary path and re-run.
 
+**The dispatcher against the real artefacto.** `tests/cli.rs` drives `load
+plan` against a stand-in artefacto that logs its arguments; two tests also
+drive the real binary when `LOADOUT_ARTEFACTO_REAL` names it:
+
+```bash
+LOADOUT_ARTEFACTO_REAL=/path/to/artefacto cargo test --test cli real_artefacto
+```
+
 ## What "passing" looks like
 
 - **Level 1:** green tests / clippy / fmt.
@@ -273,6 +270,5 @@ set `CHROME_BIN` to your browser's binary path and re-run.
   gated in only under `infra/`; the dynamic `host-info` output rendered into the
   overlay; a repo-declared fragment flagged as **ignored** (global-only); and
   `clean` removing only the generated artifacts.
-- **Level 3:** the plan viewer's `#selftest` marker
-  (`LOADOUT_SELFTEST_PASS…`) present in the DOM after headless Chrome loads a
-  rendered `plan.html#selftest`.
+- **Level 3:** studio's topbar laid out without overlap or overflow at every
+  width headless Chrome is driven through.
