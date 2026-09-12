@@ -8,6 +8,26 @@
 /// Prefix of the machine-readable first line of every generated file.
 pub const GENERATED_MARKER: &str = "<!-- loadout:generated";
 
+/// Prefix of the first line artefacto writes on the plan pages it renders.
+/// Loadout accepts it wherever it decides whether a plan page is one it may
+/// remove or serve: `load plan clean`, `load clean`, and studio's Recents
+/// availability and serving gates. The agent-overlay pipeline keeps gating
+/// on [`GENERATED_MARKER`] alone: an artefacto page is never an overlay.
+/// The exact bytes are pinned by `tests/fixtures/artefacto-marker-first-line.txt`,
+/// the same file artefacto pins on its side, so neither can drift alone.
+pub const ARTEFACTO_MARKER: &str = "<!-- artefacto:generated";
+
+/// Whether `head` — the start of a file, leading whitespace already skipped —
+/// begins with the marker of a plan page one of the two tools wrote.
+pub fn is_plan_page_marker(head: &str) -> bool {
+    head.starts_with(GENERATED_MARKER) || head.starts_with(ARTEFACTO_MARKER)
+}
+
+/// [`is_plan_page_marker`] over bytes, for a gate that reads a file as bytes.
+pub fn is_plan_page_marker_bytes(head: &[u8]) -> bool {
+    head.starts_with(GENERATED_MARKER.as_bytes()) || head.starts_with(ARTEFACTO_MARKER.as_bytes())
+}
+
 /// Metadata rendered into the header.
 pub struct HeaderMeta<'a> {
     /// RFC3339 generation timestamp.
@@ -98,6 +118,29 @@ pub fn extract_context_hash(content: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_frozen_artefacto_line_is_accepted_as_a_plan_page() {
+        let line = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/artefacto-marker-first-line.txt"
+        ))
+        .unwrap();
+        assert!(
+            line.starts_with("<!-- artefacto:generated context=sha256:"),
+            "the fixture is artefacto's own first line: {line}"
+        );
+        assert!(super::is_plan_page_marker(&line));
+        assert!(super::is_plan_page_marker_bytes(line.as_bytes()));
+        assert!(super::is_plan_page_marker(
+            "<!-- loadout:generated context=sha256:x -->"
+        ));
+        assert!(!super::is_plan_page_marker("<!doctype html>"));
+        assert!(
+            super::extract_context_hash(&line).is_none(),
+            "the overlay hash reader stays loadout-only"
+        );
+    }
+
     use super::*;
 
     fn sample() -> String {

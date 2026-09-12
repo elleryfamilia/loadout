@@ -1391,9 +1391,7 @@ fn artifact_available(path: &std::path::Path) -> bool {
     std::io::BufReader::new(f.take(AVAILABILITY_PROBE_CAP))
         .read_line(&mut line)
         .is_ok()
-        && line
-            .trim_start()
-            .starts_with(crate::render::header::GENERATED_MARKER)
+        && crate::render::header::is_plan_page_marker(line.trim_start())
 }
 
 /// Plan-kind staleness: compare the recorded hash to the repo's CURRENT
@@ -1545,13 +1543,11 @@ fn handle_artifact(state: &Arc<Mutex<StudioState>>, id: &str) -> Resp {
         }
         ArtifactRead::Ok(b) => b,
     };
-    if !skip_ascii_whitespace(&bytes)
-        .starts_with(crate::render::header::GENERATED_MARKER.as_bytes())
-    {
+    if !crate::render::header::is_plan_page_marker_bytes(skip_ascii_whitespace(&bytes)) {
         return artifact_page(
             404,
             "not a loadout artifact",
-            "the file at this entry's path is not loadout-generated — refusing to serve it",
+            "the file at this entry's path is not a generated plan page — refusing to serve it",
         );
     }
     Resp {
@@ -2952,7 +2948,7 @@ mod tests {
         assert_eq!(r.status, 404);
         assert!(String::from_utf8(r.body)
             .unwrap()
-            .contains("not loadout-generated"));
+            .contains("not a generated plan page"));
     }
 
     #[test]

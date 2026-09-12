@@ -482,6 +482,61 @@ fn recents_artifact_is_served_with_sandbox_csp_over_tcp() {
     let _ = child.kill();
 }
 
+#[test]
+fn recents_serves_a_page_artefacto_rendered() {
+    let (mut child, dir, port, token) = spawn_studio();
+    let line = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/artefacto-marker-first-line.txt"
+    ))
+    .unwrap();
+    let artifact = dir.path().join("artefacto-plan.html");
+    std::fs::write(
+        &artifact,
+        format!("{line}<!doctype html><html><body>artefacto-demo</body></html>"),
+    )
+    .unwrap();
+    let mut store =
+        loadout::recents::RecentsStore::load_from(&dir.path().join("state/recents.json"));
+    let entry = loadout::recents::Entry {
+        kind: "plan".into(),
+        path: artifact.clone(),
+        repo: dir.path().to_path_buf(),
+        title: "Artefacto demo".into(),
+        hash: "sha256:demo".into(),
+        rendered_at: "2026-09-12T00:00:00Z".into(),
+        detail: std::collections::BTreeMap::new(),
+        extra: std::collections::BTreeMap::new(),
+    };
+    let id = entry.id();
+    assert!(matches!(
+        store.record(entry),
+        loadout::recents::RecordOutcome::Recorded
+    ));
+
+    let resp = http(
+        port,
+        &format!(
+            "GET /artifacts/{id} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    assert!(resp.starts_with("HTTP/1.1 200"), "{resp}");
+    assert!(resp.contains("artefacto-demo"));
+    let recents = http(
+        port,
+        &format!(
+            "GET /drawer/recents HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: loadout_studio={token}\r\nConnection: close\r\n\r\n"
+        ),
+    );
+    assert!(
+        recents.contains("Artefacto demo"),
+        "the row is listed as available: {}",
+        head(&recents)
+    );
+
+    let _ = child.kill();
+}
+
 fn head(resp: &str) -> String {
     resp.lines().take(3).collect::<Vec<_>>().join("\n")
 }

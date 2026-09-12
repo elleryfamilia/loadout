@@ -3215,8 +3215,31 @@ fn plan_clean_removes_only_marked_html() {
         .args(["plan", "clean"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("not loadout-generated"));
+        .stdout(predicate::str::contains("not a generated plan page"));
     assert!(f.exists(".loadout/generated/plan.html"));
+}
+
+#[test]
+fn plan_clean_removes_a_page_artefacto_rendered() {
+    // The frozen first line artefacto writes, pinned on both sides so the
+    // two tools cannot drift apart while each suite stays green.
+    let line = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/artefacto-marker-first-line.txt"
+    ))
+    .unwrap();
+    let f = Fixture::new();
+    f.git_init();
+    f.write(
+        ".loadout/generated/plan.html",
+        &format!("{line}<!doctype html><html><body>artefacto</body></html>"),
+    );
+    f.cmd()
+        .args(["plan", "clean"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed"));
+    assert!(!f.exists(".loadout/generated/plan.html"));
 }
 
 const RECENTS_PLAN: &str = r#"{ "format": "loadout.plan/1",
