@@ -245,10 +245,54 @@ fn insert_marker(content: &str, content_hash: &str) -> String {
 
 // --- hashes -------------------------------------------------------------------
 
-/// `sha256:…` over the skill's embedded files (relpath + content).
+/// `sha256:…` over the skill's files, by relative path in sorted order —
+/// the same order [`on_disk_hash`] reads a directory in, so the two agree
+/// whatever order a manifest lists its files in.
 pub fn embedded_hash(skill: &Skill) -> String {
-    let pairs: Vec<(&str, &str)> = skill.files.iter().map(|f| (f.relpath, f.content)).collect();
+    let mut pairs: Vec<(&str, &str)> = skill.files.iter().map(|f| (f.relpath, f.content)).collect();
+    pairs.sort();
     hash::context_hash(&pairs)
+}
+
+/// Every regular file under `dir`, as `(relative path, contents)` in sorted
+/// path order, nested directories walked, hidden entries (a `.DS_Store`,
+/// a `.gitkeep`, a temp file of ours) and symlinks skipped: they are not
+/// skill content and must not make a pristine install read as edited.
+/// Contents are read lossily, so a file that is not UTF-8 still counts as
+/// a difference rather than as an unreadable directory.
+fn walk_files(dir: &Path) -> Option<Vec<(String, String)>> {
+    fn go(base: &Path, dir: &Path, out: &mut Vec<(String, String)>) -> Option<()> {
+        for entry in std::fs::read_dir(dir).ok()? {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let kind = entry.file_type().ok()?;
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                go(base, &entry.path(), out)?;
+            } else if kind.is_file() {
+                let rel = entry
+                    .path()
+                    .strip_prefix(base)
+                    .ok()?
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let bytes = std::fs::read(entry.path()).ok()?;
+                out.push((rel, String::from_utf8_lossy(&bytes).to_string()));
+            }
+        }
+        Some(())
+    }
+    let mut out = Vec::new();
+    go(dir, dir, &mut out)?;
+    out.sort();
+    Some(out)
 }
 
 /// Recompute the content hash from an installed directory: every regular
@@ -259,22 +303,19 @@ pub fn embedded_hash(skill: &Skill) -> String {
 /// marker is pristine whatever this binary would write today. `None` if the
 /// directory cannot be read.
 fn on_disk_hash(dir: &Path, _skill: &Skill) -> Option<String> {
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    for entry in std::fs::read_dir(dir).ok()? {
-        let entry = entry.ok()?;
-        if !entry.file_type().ok()?.is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        let text = std::fs::read_to_string(entry.path()).ok()?;
-        pairs.push((name, strip_marker(&text)));
-    }
-    pairs.sort();
-    let borrowed: Vec<(&str, &str)> = pairs
+    let files = walk_files(dir)?;
+    let pairs: Vec<(&str, String)> = files
         .iter()
-        .map(|(n, t)| (n.as_str(), t.as_str()))
+        .map(|(rel, text)| {
+            let text = if rel == "SKILL.md" {
+                strip_marker(text)
+            } else {
+                text.clone()
+            };
+            (rel.as_str(), text)
+        })
         .collect();
-    Some(hash::context_hash(&borrowed))
+    Some(hash::context_hash(&pairs))
 }
 
 // --- layout -------------------------------------------------------------------
@@ -558,15 +599,26 @@ fn write_skill_files(dir: &Path, skill: &Skill) -> Result<()> {
         } else {
             f.content.to_string()
         };
-        atomic_write(&dir.join(f.relpath), &body)?;
+        let target = dir.join(f.relpath);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        atomic_write(&target, &body)?;
     }
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let is_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
-            let name = entry.file_name().to_string_lossy().to_string();
-            if is_file && !skill.files.iter().any(|f| f.relpath == name) {
-                std::fs::remove_file(entry.path())
-                    .with_context(|| format!("removing {}", entry.path().display()))?;
+    // A file of a previous version that this one does not ship goes, at
+    // any depth; hidden entries are not ours to judge and stay.
+    for (rel, _) in walk_files(dir).unwrap_or_default() {
+        if !skill.files.iter().any(|f| f.relpath == rel) {
+            let path = dir.join(&rel);
+            std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+            // An emptied directory goes with its last file, best effort.
+            let mut parent = path.parent();
+            while let Some(p) = parent {
+                if p == dir || std::fs::remove_dir(p).is_err() {
+                    break;
+                }
+                parent = p.parent();
             }
         }
     }
@@ -620,6 +672,51 @@ mod tests {
                 skill.id
             );
         }
+    }
+
+    #[test]
+    fn a_fresh_install_reads_pristine_whatever_order_and_depth_its_files_come_in() {
+        let h = home();
+        let files: &'static [SkillFile] = Box::leak(Box::new([
+            SkillFile {
+                relpath: "SKILL.md",
+                content: "---\nname: t\n---\nbody\n",
+            },
+            SkillFile {
+                relpath: "AGENTS.md",
+                content: "sorts first\n",
+            },
+            SkillFile {
+                relpath: "examples/deep/one.md",
+                content: "nested\n",
+            },
+        ]));
+        let skill = Skill { id: "t", files };
+        install(h.path(), &skill).unwrap();
+        let dir = canonical_dir(h.path(), "t");
+        std::fs::write(dir.join(".DS_Store"), [0u8, 0xff]).unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".git/HEAD"), "ref\n").unwrap();
+        let st = status(h.path(), &skill).state;
+        assert!(
+            matches!(
+                st,
+                SkillState::Managed {
+                    user_modified: false,
+                    upgrade_available: false,
+                    ..
+                }
+            ),
+            "{st:?}"
+        );
+        std::fs::write(dir.join("examples/deep/one.md"), "changed\n").unwrap();
+        assert!(matches!(
+            status(h.path(), &skill).state,
+            SkillState::Managed {
+                user_modified: true,
+                ..
+            }
+        ));
     }
 
     #[test]

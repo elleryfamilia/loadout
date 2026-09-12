@@ -209,7 +209,9 @@ still fresh), and `load plan clean` (also swept by a plain `load clean`), which
 removes the rendered `plan.html` — loadout's own or artefacto's, by its first
 line — and any `plan-feedback.json`, never the plan itself. `load plan` (no
 subcommand) prints status; `load doctor` reports artefacto's version or
-absence; `load update` updates artefacto after loadout. `plan` is a named
+absence; `load update` reinstalls the latest artefacto through artefacto's own
+installer when that installer put it there (`--check` says so instead of
+guessing). `plan` is a named
 subcommand, so it takes precedence over the `load <agent>` shorthand — an
 agent binary literally named `plan` can't be launched as `load plan` and needs
 `load run plan` instead.

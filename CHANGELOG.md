@@ -29,9 +29,10 @@ version and date (see [RELEASING.md](RELEASING.md)).
   documents are still read.
 - **The plan skill is `artefacto-plan`.** It is artefacto's own, read from the
   installed binary by `load skill install`, `load run`, and studio; a two-line
-  pointer stands in until artefacto is installed. The retired
+  pointer stands in until artefacto is installed. A retired
   `loadout-plan-preview` install is removed by `load skill install` and
-  `load run` when it carries loadout's marker.
+  `load run` when it carries loadout's marker and was never edited; an
+  edited one is left alone and `load doctor` names it.
 - **Studio's Recents badge asks artefacto.** Fresh or stale comes from one
   batched `artefacto plan check` over every plan row, cached for a few
   seconds; without artefacto there is no badge, and rows list and serve as

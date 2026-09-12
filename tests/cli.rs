@@ -3091,7 +3091,7 @@ LOG="__LOG__"
 echo "$*" >> "$LOG"
 if [ "$1" = "--version" ]; then echo "artefacto 0.1.0"; exit 0; fi
 if [ "$1" = "skill" ]; then
-  printf '%s\n' '{"format":"artefacto.skill/1","artefacto":"0.1.0","skills":[{"name":"artefacto-plan","files":[{"path":"artefacto-plan/reference.md","contents":"# Fake reference\n"},{"path":"artefacto-plan/SKILL.md","contents":"---\nname: artefacto-plan\ndescription: fake plan skill\n---\n# Fake plan skill\n\nRun artefacto plan push.\n"}]}]}'
+  printf '%s\n' '{"format":"artefacto.skill/1","artefacto":"0.1.0","skills":[{"name":"artefacto-plan","files":[{"path":"artefacto-plan/reference.md","contents":"# Fake reference\n"},{"path":"artefacto-plan/SKILL.md","contents":"---\nname: artefacto-plan\ndescription: fake plan skill\n---\n# Fake plan skill\n\nRun artefacto plan push.\n"},{"path":"artefacto-plan/AGENTS.md","contents":"sorts before SKILL.md\n"},{"path":"artefacto-plan/examples/one.md","contents":"nested\n"}]}]}'
   exit 0
 fi
 verb="$2"; file="$3"
@@ -3965,6 +3965,16 @@ fn the_pointer_skill_becomes_the_real_one_and_back_again() {
         "the real skill replaced the pointer: {md}"
     );
     assert!(dir.join("reference.md").exists());
+    assert!(
+        dir.join("AGENTS.md").exists(),
+        "a file that sorts before SKILL.md"
+    );
+    assert!(dir.join("examples/one.md").exists(), "a nested file");
+    // Hidden entries are not skill content: a Finder file that is not
+    // UTF-8, an empty .gitkeep, a temp file of ours.
+    fs::write(dir.join(".DS_Store"), [0u8, 0xff, 0xfe, 1]).unwrap();
+    fs::write(dir.join(".gitkeep"), "").unwrap();
+    fs::write(dir.join(".loadout-tmp-abc"), "half").unwrap();
     plan_cmd(&f, &fake)
         .args(["skill", "status"])
         .assert()
@@ -3986,11 +3996,30 @@ fn the_pointer_skill_becomes_the_real_one_and_back_again() {
         !dir.join("reference.md").exists(),
         "a file the pointer does not ship is not left behind"
     );
+    assert!(!dir.join("AGENTS.md").exists());
+    assert!(
+        !dir.join("examples").exists(),
+        "a nested file goes, and its emptied directory with it"
+    );
+    assert!(
+        dir.join(".gitkeep").exists(),
+        "hidden entries are left as they are"
+    );
     f.cmd()
         .args(["skill", "status"])
         .assert()
         .success()
         .stdout(predicate::str::contains("installed, current"));
+
+    // A file the user added is a real edit too, and is never deleted.
+    fs::write(dir.join("notes.md"), "mine\n").unwrap();
+    plan_cmd(&f, &fake)
+        .args(["skill", "install", "artefacto-plan"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("local edits"));
+    assert!(dir.join("notes.md").exists());
+    fs::remove_file(dir.join("notes.md")).unwrap();
 
     // A real edit is still a real edit.
     fs::write(
@@ -4046,15 +4075,20 @@ fn update_reinstalls_artefacto_through_its_installer_when_it_has_a_receipt() {
     fs::create_dir_all(xdg.join("artefacto")).unwrap();
     fs::write(
         xdg.join("artefacto/artefacto-receipt.json"),
-        r#"{"binaries":["artefacto"],"install_prefix":"/somewhere","version":"0.0.1"}"#,
+        r#"{"binaries":["artefacto"],"install_prefix":"/somewhere/bin","modify_path":false,"version":"0.0.1"}"#,
     )
     .unwrap();
     // A local installer standing in for the download; it records that it ran.
     let ran = f.global.path().join("installer-ran");
     let installer = f.global.path().join("installer.sh");
+    // It records that it ran, and what it was told about where to install
+    // and PATH.
     fs::write(
         &installer,
-        format!("#!/bin/sh\ntouch '{}'\n", ran.display()),
+        format!(
+            "#!/bin/sh\necho \"dir=$ARTEFACTO_INSTALL_DIR path=$ARTEFACTO_NO_MODIFY_PATH\" > '{}'\n",
+            ran.display()
+        ),
     )
     .unwrap();
     make_executable(&installer);
@@ -4082,7 +4116,11 @@ fn update_reinstalls_artefacto_through_its_installer_when_it_has_a_receipt() {
         .stdout(predicate::str::contains(
             "artefacto 0.1.0 is the latest release",
         ));
-    assert!(ran.exists(), "the installer ran");
+    assert_eq!(
+        fs::read_to_string(&ran).unwrap().trim(),
+        "dir=/somewhere/bin path=1",
+        "the installer is told the receipt's directory and PATH choice"
+    );
 }
 
 #[test]

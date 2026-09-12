@@ -6,8 +6,9 @@
 //! Loadout never bundles artefacto. It looks for it on PATH (or at
 //! [`BIN_ENV`]), offers to install it through artefacto's own cargo-dist
 //! installer when a command needs it and the terminal can ask, reports it in
-//! `load doctor`, and updates it in `load update` through the same updater
-//! loadout uses for itself, off artefacto's own install receipt.
+//! `load doctor`, and in `load update` reruns that installer — into the
+//! directory artefacto's install receipt names — when the receipt shows the
+//! installer put it there.
 
 use std::io::{IsTerminal, Write};
 use std::process::Command;
@@ -151,17 +152,32 @@ pub fn command() -> Command {
     Command::new(program())
 }
 
-/// Whether artefacto's own installer put it here: cargo-dist writes a
-/// receipt under the config directory, `artefacto/artefacto-receipt.json`.
-/// `load update` reinstalls through the same installer only when it did;
-/// a build or a package manager's copy is not loadout's to replace.
-pub fn has_receipt() -> bool {
+/// Where cargo-dist's installer leaves its receipt: `artefacto/artefacto-receipt.json`
+/// under `$XDG_CONFIG_HOME`, else under `~/.config`.
+fn receipt_path() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| crate::config::home_dir().map(|h| h.join(".config")));
-    base.map(|b| b.join("artefacto").join("artefacto-receipt.json").is_file())
-        .unwrap_or(false)
+        .or_else(|| crate::config::home_dir().map(|h| h.join(".config")))?;
+    Some(base.join("artefacto").join("artefacto-receipt.json"))
+}
+
+/// Whether artefacto's own installer put it here. `load update` reinstalls
+/// through the same installer only when it did; a build or a package
+/// manager's copy is not loadout's to replace.
+pub fn has_receipt() -> bool {
+    receipt_path().is_some_and(|p| p.is_file())
+}
+
+/// What the receipt says about where the binary went and whether PATH was
+/// touched, so a reinstall lands in the same place and does the same thing.
+/// `None` for no receipt or one this binary cannot read.
+fn receipt_install(path: &std::path::Path) -> Option<(Option<String>, Option<bool>)> {
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    Some((
+        v["install_prefix"].as_str().map(str::to_string),
+        v["modify_path"].as_bool(),
+    ))
 }
 
 /// How to install artefacto by hand.
@@ -170,16 +186,26 @@ pub fn install_hint() -> String {
 }
 
 /// Run artefacto's installer through `sh`. Consent is the caller's business.
+/// When a receipt names an install directory, the installer is told to use
+/// it again (`ARTEFACTO_INSTALL_DIR`, which cargo-dist installers honour),
+/// and told to leave PATH alone if the first install did; otherwise a second
+/// copy could land in `~/.cargo/bin` beside the one the user chose.
 pub fn install() -> crate::Result<()> {
     let line = match std::env::var(INSTALLER_ENV) {
         Ok(path) if !path.is_empty() => format!("sh '{}'", path.replace('\'', "'\\''")),
         _ => install_hint(),
     };
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(&line)
-        .status()
-        .context("running the artefacto installer")?;
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(&line);
+    if let Some((prefix, modify_path)) = receipt_path().as_deref().and_then(receipt_install) {
+        if let Some(prefix) = prefix {
+            cmd.env("ARTEFACTO_INSTALL_DIR", prefix);
+        }
+        if modify_path == Some(false) {
+            cmd.env("ARTEFACTO_NO_MODIFY_PATH", "1");
+        }
+    }
+    let status = cmd.status().context("running the artefacto installer")?;
     if !status.success() {
         bail!("the artefacto installer exited with {status}");
     }
