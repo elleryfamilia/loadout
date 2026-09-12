@@ -232,8 +232,9 @@ fn check_skills(c: &mut Checks) {
             (SkillState::NotInstalled, None) => c.line(
                 Status::Ok,
                 format!(
-                    "{}: not installed — `load skill install` imports your CLAUDE.md/AGENTS.md into loadout",
-                    skill.id
+                    "{}: not installed — `load skill install` adds it ({})",
+                    skill.id,
+                    crate::skills::blurb(skill.id)
                 ),
             ),
             (SkillState::Unmanaged, _) => c.line(

@@ -3928,7 +3928,10 @@ fn doctor_reports_artefacto_present_absent_or_mismatched() {
         .arg("doctor")
         .assert()
         .stdout(predicate::str::contains("artefacto: 0.1.4"))
-        .stdout(predicate::str::contains("tested with").not());
+        .stdout(predicate::str::contains("tested with").not())
+        .stdout(predicate::str::contains(
+            "artefacto-plan: not installed — `load skill install` adds it (reviews a development plan",
+        ));
 
     let newer = fake_artefacto(&f, "0.2.0");
     f.cmd()

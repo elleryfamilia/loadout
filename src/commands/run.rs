@@ -511,7 +511,7 @@ fn offer_skills(
         p.dim("(work in Claude Code, Codex, opencode, Cursor)")
     );
     for skill in offerable {
-        println!("    {} — {}", p.bold(skill.id), skill_blurb(skill.id));
+        println!("    {} — {}", p.bold(skill.id), skills::blurb(skill.id));
     }
     println!("  install to {}?", p.bold("~/.agents/skills"));
     println!(
@@ -558,17 +558,6 @@ fn offer_skills(
             }
             _ => println!("  please enter 1 or 2."),
         }
-    }
-}
-
-/// One-line pitch per shipped skill for the bundled offer.
-fn skill_blurb(id: &str) -> &'static str {
-    match id {
-        "loadout-migrate" => "imports an existing CLAUDE.md/AGENTS.md into loadout",
-        "loadout-remember" => "saves durable preferences you state mid-session as loadout guidance",
-        "loadout-import-workflow" => "imports another repo's command suite as a loadout workflow",
-        "artefacto-plan" => "reviews a development plan on a live page, through artefacto",
-        _ => "an agent skill shipped with loadout",
     }
 }
 

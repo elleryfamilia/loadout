@@ -169,6 +169,17 @@ pub fn remove_retired(home: &Path) -> Vec<PathBuf> {
     removed
 }
 
+/// One line per skill, for the offer in `load run` and doctor's report.
+pub fn blurb(id: &str) -> &'static str {
+    match id {
+        "loadout-migrate" => "imports an existing CLAUDE.md/AGENTS.md into loadout",
+        "loadout-remember" => "saves durable preferences you state mid-session as loadout guidance",
+        "loadout-import-workflow" => "imports another repo's command suite as a loadout workflow",
+        ARTEFACTO_PLAN_ID => "reviews a development plan on a live page, through artefacto",
+        _ => "an agent skill shipped with loadout",
+    }
+}
+
 /// Look up an embedded skill by id.
 pub fn by_id(id: &str) -> Option<&'static Skill> {
     all().iter().find(|s| s.id == id)
