@@ -8,6 +8,17 @@ All notable changes to loadout are documented here. The format follows
 keep entries user-facing. When cutting a release, rename **Unreleased** to the
 version and date (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+### Fixed
+
+- **The `load run` startup animation is readable on light terminals again.** The
+  equipping grid drew its text in a near-white color that vanished against a
+  light background. Box content now uses your terminal's default text color, and
+  the amber frame (plus the dim pending/skipped states) picks a light or dark
+  palette automatically. Set `LOADOUT_THEME=light|dark` when a terminal doesn't
+  advertise its background.
+
 ## 0.28.0 — 2026-08-17
 
 ### Added
