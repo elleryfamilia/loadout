@@ -2,8 +2,9 @@
 //! command output. Each startup phase is a box in a 2×3 grid; while its phase
 //! runs the box rapidly cycles that phase's real sub-steps (`pulling refs ⋯`,
 //! `folding fragments ⋯`), then **lands** on the phase's outcome. Amber frames
-//! (matching the release's dungeon-crawl palette) with near-white content, so
-//! the text stays readable on dark or translucent backgrounds.
+//! (matching the release's dungeon-crawl palette) with default-foreground
+//! content, so the text stays readable on dark, light, or translucent
+//! backgrounds; the frame/dim colors adapt to the terminal's theme.
 //!
 //! ## Why a background thread
 //!
@@ -40,17 +41,46 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::style::Painter;
+use crate::style::{Painter, Theme};
 
-/// The box frame color (border + label) — the amber the fill bar used.
-const AMBER: (u8, u8, u8) = (255, 176, 0);
-/// Box *content* color: near-white, so the cycling and settled text stays
-/// readable on dark or translucent backgrounds (amber text was too low-contrast).
-const TEXT: (u8, u8, u8) = (240, 240, 245);
-/// A dim amber for a settled-but-muted box (a skipped phase, e.g. no workflow).
-const MUTED: (u8, u8, u8) = (150, 110, 40);
-/// The unlit color for a box whose phase hasn't started.
-const PENDING: (u8, u8, u8) = (78, 74, 66);
+/// The HUD's theme-dependent colors. Box *content* is deliberately absent:
+/// [`render_box`] leaves it in the terminal's default foreground, so the reel
+/// words and outcomes adapt to a light or dark theme on their own. Only the
+/// frame (border + label) and the two dim states need a background-aware pick.
+struct Palette {
+    /// Box frame (border + label) — the amber the fill bar used.
+    frame: (u8, u8, u8),
+    /// A dim amber for a settled-but-muted box (a skipped phase, e.g. no
+    /// workflow).
+    muted: (u8, u8, u8),
+    /// The unlit color for a box whose phase hasn't started.
+    pending: (u8, u8, u8),
+}
+
+/// The original look, tuned for dark terminals: bright amber on near-black.
+const DARK_PALETTE: Palette = Palette {
+    frame: (255, 176, 0),
+    muted: (150, 110, 40),
+    pending: (78, 74, 66),
+};
+
+/// For light terminals, where bright amber washes out against white: a deeper
+/// amber frame, a light-gray pending dot, and a muted amber for a skipped box —
+/// each picked to read on a light background rather than reused from the dark
+/// palette.
+const LIGHT_PALETTE: Palette = Palette {
+    frame: (176, 92, 0),
+    muted: (150, 120, 70),
+    pending: (185, 180, 172),
+};
+
+/// Pick the palette for the terminal's detected background theme.
+fn palette(theme: Theme) -> &'static Palette {
+    match theme {
+        Theme::Dark => &DARK_PALETTE,
+        Theme::Light => &LIGHT_PALETTE,
+    }
+}
 
 /// Inner width of each box — the columns between the left and right borders,
 /// identical on all three lines (top border, content, bottom border). Each box
@@ -129,9 +159,10 @@ impl Phase {
     }
 }
 
-/// The glyph a settled grid box shows before its detail. Every glyph renders
-/// amber in the grid; the choice is purely which mark reads right for the
-/// outcome (the classic HUD-off line carries its own glyph, built by the caller).
+/// The glyph a settled grid box shows before its detail. In the grid it renders
+/// in the terminal's default foreground (it's part of the unpainted content); the
+/// choice is purely which mark reads right for the outcome (the classic HUD-off
+/// line carries its own glyph, built by the caller).
 #[derive(Debug, Clone, Copy)]
 pub enum Glyph {
     /// `✓` — success.
@@ -421,12 +452,15 @@ fn term_cols() -> Option<u16> {
 /// abandoned. Always leaves the cursor below the grid.
 fn spawn_render_thread(state: Arc<Mutex<HudState>>, p: Painter) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        // Detect once: the background can't change mid-run, and this keeps env
+        // reads out of the per-frame loop.
+        let pal = palette(Theme::detect());
         let mut first = true;
         loop {
             let (lines, done, abandoned) = {
                 let mut st = state.lock().unwrap();
                 land_due_boxes(&mut st);
-                let lines = render_grid(&st, &p);
+                let lines = render_grid(&st, &p, pal);
                 let done = st.boxes.iter().all(BoxPhase::is_settled);
                 (lines, done, st.abandoned)
             };
@@ -462,12 +496,12 @@ fn land_due_boxes(st: &mut HudState) {
 }
 
 /// Build the 6 grid lines (2 rows × 3 boxes, 3 lines each) from the state.
-fn render_grid(st: &HudState, p: &Painter) -> Vec<String> {
+fn render_grid(st: &HudState, p: &Painter, pal: &Palette) -> Vec<String> {
     let now = Instant::now();
     let cells: Vec<[String; 3]> = Phase::ALL
         .iter()
         .enumerate()
-        .map(|(i, phase)| render_box(*phase, &st.boxes[i], now, p))
+        .map(|(i, phase)| render_box(*phase, &st.boxes[i], now, p, pal))
         .collect();
     let mut lines = Vec::with_capacity(6);
     for row in cells.chunks(3) {
@@ -483,25 +517,32 @@ fn render_grid(st: &HudState, p: &Painter) -> Vec<String> {
 }
 
 /// One box → its 3 lines (top border w/ label, content, bottom border).
-fn render_box(phase: Phase, state: &BoxPhase, now: Instant, p: &Painter) -> [String; 3] {
-    // `color` frames the box (border + label); `content` carries its own color.
-    // Active/settled boxes get an AMBER frame with near-white TEXT content, so
-    // the reel words and outcomes stay readable; pending/skipped stay dim.
+fn render_box(
+    phase: Phase,
+    state: &BoxPhase,
+    now: Instant,
+    p: &Painter,
+    pal: &Palette,
+) -> [String; 3] {
+    // `color` frames the box (border + label); `content` is left in the
+    // terminal's default foreground so it adapts to the background theme (a
+    // hardcoded near-white vanished on light terminals). Active/settled boxes
+    // get the amber frame; pending/skipped stay dim.
     let (color, label_bold, content) = match state {
-        BoxPhase::Pending => (PENDING, false, p.rgb(&center("·", BOX_W), PENDING)),
+        BoxPhase::Pending => (pal.pending, false, p.rgb(&center("·", BOX_W), pal.pending)),
         BoxPhase::Active { since, .. } => {
             let reel = phase.reel();
             let idx = (now.duration_since(*since).as_millis() / WORD_EVERY.as_millis()) as usize
                 % reel.len();
             let word = format!("{} ⋯", reel[idx]);
-            (AMBER, true, p.rgb(&pad(&word, BOX_W), TEXT))
+            (pal.frame, true, pad(&word, BOX_W))
         }
         BoxPhase::Settled(s) => match &s.detail {
             Some(d) => {
                 let text = format!("{} {d}", s.glyph.ch());
-                (AMBER, true, p.rgb(&pad(&text, BOX_W), TEXT))
+                (pal.frame, true, pad(&text, BOX_W))
             }
-            None => (MUTED, false, p.rgb(&pad("· —", BOX_W), MUTED)),
+            None => (pal.muted, false, p.rgb(&pad("· —", BOX_W), pal.muted)),
         },
     };
 
@@ -645,7 +686,7 @@ mod tests {
     fn a_pending_box_renders_dim_and_settled_lands_the_outcome() {
         let p = Painter::new(false); // plain: assert on text, not escapes
         let now = Instant::now();
-        let pending = render_box(Phase::Render, &BoxPhase::Pending, now, &p);
+        let pending = render_box(Phase::Render, &BoxPhase::Pending, now, &p, &DARK_PALETTE);
         assert!(pending[0].contains("RENDER"), "title: {pending:?}");
         assert!(pending[1].contains('·'), "pending placeholder: {pending:?}");
 
@@ -657,6 +698,7 @@ mod tests {
             }),
             now,
             &p,
+            &DARK_PALETTE,
         );
         assert!(
             settled[1].contains("✓ rust → claude"),
@@ -676,6 +718,7 @@ mod tests {
             },
             Instant::now(),
             &p,
+            &DARK_PALETTE,
         );
         // ~2 words elapsed → the 3rd reel entry ("fast-forward"), + the cycle mark.
         assert!(
@@ -723,7 +766,7 @@ mod tests {
             }),
         ] {
             // LOADOUT is the widest label — the tightest fill case.
-            let lines = render_box(Phase::Loadout, &state, Instant::now(), &p);
+            let lines = render_box(Phase::Loadout, &state, Instant::now(), &p, &DARK_PALETTE);
             let widths: Vec<usize> = lines.iter().map(|l| visible_width(l)).collect();
             assert_eq!(
                 widths[0], widths[1],
@@ -740,7 +783,7 @@ mod tests {
     #[test]
     fn a_grid_is_six_lines_two_rows_of_three_boxes() {
         let st = HudState::new();
-        let lines = render_grid(&st, &Painter::new(false));
+        let lines = render_grid(&st, &Painter::new(false), &DARK_PALETTE);
         assert_eq!(lines.len(), 6, "2 rows × 3 box-lines");
         // Row 1 top-borders carry the first three labels.
         assert!(

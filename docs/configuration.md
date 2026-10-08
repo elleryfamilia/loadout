@@ -322,3 +322,19 @@ See [security](security.md) for how `command` execution is handled
 
 `--cwd <DIR>` (operate as if there), `--verbose`/`-v`, `--dry-run` (write
 nothing, not even the audit log).
+
+## Environment variables (implemented)
+
+These override config or tune behavior for a single run; each is optional.
+
+| variable | effect |
+| --- | --- |
+| `LOADOUT_CONFIG_DIR` | global config dir (default `$XDG_CONFIG_HOME/loadout` → `~/.config/loadout`); used to isolate a run |
+| `LOADOUT_STATE_DIR` | per-machine state dir, e.g. script trust hashes (default `$XDG_STATE_HOME/loadout` → `~/.local/state/loadout`) |
+| `LOADOUT_NO_UPDATE_CHECK` | any value disables the update nudge entirely, winning over `[update] check` |
+| `LOADOUT_THEME` | `light` or `dark`, for the `load run` startup HUD; overrides background detection when a terminal doesn't advertise its theme |
+| `LOADOUT_PROBE_TIMEOUT_MS` | hard cap on an agent-CLI `--version` probe (default 3000) |
+
+`load run` also *sets* variables for the launched agent — `LOADOUT_RUN`,
+`LOADOUT_RENDERED_AT`, and one `LOADOUT_<NAME>_PATH` per workflow handoff
+artifact. See [concepts](concepts.md).
