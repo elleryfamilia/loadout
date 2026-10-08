@@ -65,7 +65,9 @@ const DARK_PALETTE: Palette = Palette {
 };
 
 /// For light terminals, where bright amber washes out against white: a deeper
-/// amber frame, and dim states darkened rather than lightened.
+/// amber frame, a light-gray pending dot, and a muted amber for a skipped box —
+/// each picked to read on a light background rather than reused from the dark
+/// palette.
 const LIGHT_PALETTE: Palette = Palette {
     frame: (176, 92, 0),
     muted: (150, 120, 70),
@@ -157,9 +159,10 @@ impl Phase {
     }
 }
 
-/// The glyph a settled grid box shows before its detail. Every glyph renders
-/// amber in the grid; the choice is purely which mark reads right for the
-/// outcome (the classic HUD-off line carries its own glyph, built by the caller).
+/// The glyph a settled grid box shows before its detail. In the grid it renders
+/// in the terminal's default foreground (it's part of the unpainted content); the
+/// choice is purely which mark reads right for the outcome (the classic HUD-off
+/// line carries its own glyph, built by the caller).
 #[derive(Debug, Clone, Copy)]
 pub enum Glyph {
     /// `✓` — success.
