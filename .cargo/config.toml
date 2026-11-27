@@ -1,0 +1,5 @@
+# Keep `cargo update` on versions that satisfy the MSRV declared in Cargo.toml
+# (`rust-version = "1.85"`). Without this, the resolver can pick newer crates
+# whose own rust-version is above ours, and the `msrv` CI job fails.
+[resolver]
+incompatible-rust-versions = "fallback"
