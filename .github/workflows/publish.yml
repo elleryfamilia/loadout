@@ -1,0 +1,69 @@
+# Stages the @ellery/loadout npx bootstrapper when npm/ changes on main.
+# The package is version-independent of the CLI (it always installs the latest
+# release via the shell installer), so it only needs republishing when the
+# bootstrapper itself changes — bump npm/package.json's version to trigger it.
+#
+# Auth is npm trusted publishing (OIDC), not a token: the npmjs.com trusted
+# publisher for this package must name this workflow file (publish.yml),
+# and it is stage-only. CI therefore runs `npm stage publish`, which queues the
+# version for a maintainer to review and approve with 2FA (`npm stage approve
+# <stage-id>` or the Staged Packages tab on npmjs.com). Re-running the job for
+# a version that is already staged is a no-op.
+name: npm-publish
+
+on:
+  push:
+    branches: [main]
+    paths: ["npm/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC token for npm trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Trusted publishing needs npm >= 11.5.1; `npm stage publish` needs
+      # npm >= 11.15.0, which the runner's bundled npm may be older than.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Install an npm that supports staged publishing
+        run: |
+          npm install --global npm@^11.15.0
+          npm --version
+      - name: Smoke-test the bootstrapper
+        working-directory: npm
+        run: |
+          node --check bin/loadout.js
+          # Non-interactive + not installed must refuse politely (exit 1) and
+          # point at the manual curl command — never attempt a silent install.
+          if HOME="$(mktemp -d)" CARGO_HOME="$(mktemp -d)" node bin/loadout.js studio </dev/null; then
+            echo "expected a refusal in non-interactive mode" && exit 1
+          fi
+      - name: Stage the package unless this version is already live
+        working-directory: npm
+        run: |
+          PKG="$(node -p "require('./package.json').name")"
+          VER="$(node -p "require('./package.json').version")"
+
+          # `npm view` only sees approved versions; staged versions stay hidden
+          # until approved, so a repeat run is caught from the 409 below.
+          if npm view "$PKG@$VER" version >/dev/null 2>&1; then
+            echo "$PKG@$VER is already published — skipping."
+            exit 0
+          fi
+
+          rc=0
+          OUTPUT="$(npm stage publish 2>&1)" || rc=$?
+          printf '%s\n' "$OUTPUT"
+          if [ "$rc" -eq 0 ]; then
+            echo "::notice::$PKG@$VER is staged — approve it on npmjs.com or with 'npm stage approve <stage-id>'."
+          elif printf '%s' "$OUTPUT" | grep -qE 'E409|409 Conflict|previously (published|staged) version'; then
+            echo "::notice::$PKG@$VER is already staged or published — skipping."
+          else
+            exit "$rc"
+          fi
